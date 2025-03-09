@@ -3,6 +3,20 @@ torch>=2.0.0
 torchvision>=0.15.0
 lightning>=2.0.0
 torchmetrics>=0.11.4
+lightning-bolts
+
+# --------- others -------- #
+matplotlib
+numpy
+scipy
+scikit-learn
+scprep
+scanpy
+torchdyn>=1.0.6   # 1.0.4 is broken on pypi
+pot
+torchdiffeq
+absl-py
+clean-fid
 
 # --------- hydra --------- #
 hydra-core==1.3.2

@@ -2,6 +2,19 @@
 
 from setuptools import find_packages, setup
 
+install_requires = [
+    "torch>=1.11.0",
+    "matplotlib",
+    "numpy",  # Due to pandas incompatibility
+    "scipy",
+    "scikit-learn",
+    "torchdyn>=1.0.6",
+    "pot",
+    "torchdiffeq",
+    "absl-py",
+    "pandas>=2.2.2",
+]
+
 setup(
     name="src",
     version="0.0.1",
