@@ -6,12 +6,11 @@ import pandas as pd
 import anndata as ad
 from torch.utils.data import DataLoader, random_split
 
-from .components import sc_data as util
+from .components import sc_dataset as util
 
 T = 5
-dataset = "dyn-TF"
 
-class MyLightningDataModule(pl.LightningDataModule):
+class TrajectoryStructureDataModule(pl.LightningDataModule):
     """
     A LightningDataModule that loads your custom dataset from disk
     and returns DataLoaders for train/val/test.
@@ -19,7 +18,8 @@ class MyLightningDataModule(pl.LightningDataModule):
 
     def __init__(
         self,
-        data_path: str,
+        data_path: str = "data/",
+        dataset: str = "dyn-TF",
         dataset_type: str = "Synthetic",
         batch_size: int = 64,
         num_workers: int = 4,
@@ -36,6 +36,7 @@ class MyLightningDataModule(pl.LightningDataModule):
         super().__init__()
         self.data_path = os.path.join(data_path, dataset_type)
         self.dataset_type = dataset_type
+        self.dataset = dataset
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.train_val_test_split = train_val_test_split
@@ -70,8 +71,8 @@ class MyLightningDataModule(pl.LightningDataModule):
             paths = []
             if self.dataset_type == "Synthetic":
                 paths = glob.glob(
-                    os.path.join(self.data_path, f"{dataset}/{dataset}*-1")
-                ) + glob.glob(os.path.join(self.data_path, f"{dataset}_ko*/{dataset}*-1"))
+                    os.path.join(self.data_path, f"{self.dataset}/{self.dataset}*-1")
+                ) + glob.glob(os.path.join(self.data_path, f"{self.dataset}_ko*/{self.dataset}*-1"))
             elif self.dataset_type == "Curated":
                 paths = glob.glob(os.path.join(self.data_path, f"HSC*/HSC*-1"))
             else:
@@ -137,6 +138,7 @@ class MyLightningDataModule(pl.LightningDataModule):
             self.dataset_train, self.dataset_val, self.dataset_test = random_split(
                 self._full_dataset, [train_len, val_len, test_len]
             )
+            print(len(self.dataset_train))
 
         # if stage == "test" or something, we could do different logic
         # but often we do all in one go
@@ -165,3 +167,6 @@ class MyLightningDataModule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
         )
+
+if __name__ == "__main__":
+    _ = TrajectoryStructureDataModule()

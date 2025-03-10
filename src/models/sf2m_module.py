@@ -20,6 +20,7 @@ from .components.plotting import (
     plot_samples,
     plot_trajectory,
     store_trajectories,
+    plot_comparison_heatmaps
 )
 
 
@@ -41,6 +42,8 @@ class SF2MLitModule(LightningModule):
         sigma_min: float = 0.1,
         alpha: float = 0.1,
         corr_strength: float = 1e-3,
+        reg: float = 1e-4,
+        batch_size: int = 64,
         avg_size: int = -1,
         leaveout_timepoint: int = -1,
         test_nfe: int = 100,
@@ -81,16 +84,27 @@ class SF2MLitModule(LightningModule):
         self.ot_sampler = ot_sampler
         self.alpha = alpha
         self.corr_strength = corr_strength
+        self.reg = reg
+        self.batch_size = batch_size
         self.sigma = sigma
         if sigma is None:
             self.sigma = ConstantNoiseScheduler(sigma_min)
         self.criterion = torch.nn.MSELoss()
+        self.otfms = []
+        self.cond_matrix = []
 
     def build_ko_mask(self, dim: int, ko_idx: int):
-        pass
+        mask = torch.ones((dim, dim), dtype=np.float32)
+        if ko_idx is not None:
+            mask[:, ko_idx] = 0.0
+            mask[ko_idx, ko_idx] = 1.0
+        return mask
 
     def build_cond_matrix(self, batch_size, ko, dim):
-        pass
+        cond_matrix = torch.zeros(batch_size, dim)
+        if ko is not None:
+            cond_matrix[:, ko] = 1
+        return cond_matrix
 
     def forward(self, x, t, cond=None):
         """
@@ -199,7 +213,7 @@ class SF2MLitModule(LightningModule):
         Return your optimizer (and optional LR scheduler).
         """
         # For example, AdamW over all parameters
-        params = list(self.func_v.parameters()) + list(self.func_s.parameters()) + list(self.v_correction.parameters())
+        params = list(self.net.parameters()) + list(self.score_net.parameters()) + list(self.corr_net.parameters())
         optimizer = torch.optim.AdamW(params, lr=self.lr)
         return optimizer
        
