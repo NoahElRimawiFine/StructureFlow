@@ -30,7 +30,7 @@ class BridgeMatcher:
         s = (-1 / vars.clamp_min(1e-10)) * (x - means)
         u = (1 - 2 * ts) / (2 * ts * (1 - ts)) * (x - means) + x1 - x0
         return means, vars, x, s, u
-    
+
 
 class EntropicOTFM:
     def __init__(self, x, t_idx, dt, sigma, T, dim, device):
@@ -93,7 +93,6 @@ class EntropicOTFM:
             torch.vstack(_t),
             torch.vstack(_t_orig),
         )
-
 
 
 class OTPlanSampler:

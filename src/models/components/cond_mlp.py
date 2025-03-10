@@ -1,6 +1,8 @@
+import copy
+
 import torch
 import torch.nn as nn
-import copy
+
 
 class MLP(nn.Module):
     def __init__(
@@ -14,7 +16,7 @@ class MLP(nn.Module):
         conditional=False,
         conditional_dim=0,  # dimension of the knockout or condition
     ):
-        super(MLP, self).__init__()
+        super().__init__()
         self.time_varying = time_varying
         self.conditional = conditional
 
@@ -54,16 +56,12 @@ class MLP(nn.Module):
 
         if self.conditional:
             if cond is None:
-                raise ValueError(
-                    "Conditional flag = True, but no 'cond' input provided."
-                )
+                raise ValueError("Conditional flag = True, but no 'cond' input provided.")
             Bx = x.shape[0]
             if cond.dim() == 1:
                 cond = cond.unsqueeze(0).expand(Bx, -1)
             elif cond.shape[0] != Bx:
-                raise ValueError(
-                    f"cond batch size ({cond.shape[0]}) != x batch size ({Bx}). "
-                )
+                raise ValueError(f"cond batch size ({cond.shape[0]}) != x batch size ({Bx}). ")
             inputs.append(cond)
 
         # cat along dim=1 => shape [batch_size, (d + time + cond_dim)]

@@ -3,10 +3,10 @@ from typing import Union
 
 import matplotlib.pyplot as plt
 import numpy as np
-import scprep
-import torch
-import seaborn as sb
 import pandas as pd
+import scprep
+import seaborn as sb
+import torch
 
 
 def plot_scatter(obs, model, title="fig", wandb_logger=None):
@@ -186,6 +186,7 @@ def plot_samples(trajs, title="samples", wandb_logger=None):
         except PIL.UnidentifiedImageError:
             print(f"ERROR logging {title}")
 
+
 def plot_comparison_heatmaps(
     matrices_and_titles,
     gene_names=None,
@@ -197,38 +198,37 @@ def plot_comparison_heatmaps(
     figsize_per_plot=(3.5, 3.5),
     invert_yaxis=True,
 ):
-    """
-    Plots a row of heatmaps, one for each (title, matrix) pair in `matrices_and_titles`.
+    """Plots a row of heatmaps, one for each (title, matrix) pair in `matrices_and_titles`.
 
     Args:
-        matrices_and_titles (list of (str, 2D array-like)): 
+        matrices_and_titles (list of (str, 2D array-like)):
             A list of tuples: (title, matrix). The matrix can be a numpy array or something convertible to DataFrame.
 
-        gene_names (list of str, optional): 
-            If provided, used for row/col labels in the DataFrame. 
+        gene_names (list of str, optional):
+            If provided, used for row/col labels in the DataFrame.
             If None, numeric indices will be used.
 
-        main_title (str): 
+        main_title (str):
             A main title displayed above all subplots.
 
-        default_vrange (tuple): 
+        default_vrange (tuple):
             The default (vmin, vmax) for the heatmap's color scale.
 
-        special_titles_for_range (set or list, optional): 
-            Some titles might need a different color scale. 
-            For example, if you want "SF2M" or "True" to have a smaller range. 
+        special_titles_for_range (set or list, optional):
+            Some titles might need a different color scale.
+            For example, if you want "SF2M" or "True" to have a smaller range.
             If so, you can supply titles here, and they will use `special_vrange`.
 
-        special_vrange (tuple): 
+        special_vrange (tuple):
             (vmin, vmax) for special titles. By default, e.g. (-1, 1).
 
-        cmap (str): 
+        cmap (str):
             Name of the matplotlib/seaborn colormap.
 
-        figsize_per_plot (tuple): 
+        figsize_per_plot (tuple):
             Each subplot's (width, height) in inches. The overall figure will be len(matrices_and_titles) * width.
 
-        invert_yaxis (bool): 
+        invert_yaxis (bool):
             If True, calls `plt.gca().invert_yaxis()` for each subplot.
 
     Example:

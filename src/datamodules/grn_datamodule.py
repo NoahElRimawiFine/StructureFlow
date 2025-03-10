@@ -1,20 +1,20 @@
-import pytorch_lightning as pl
-import os
 import glob
+import os
+
+import anndata as ad
 import numpy as np
 import pandas as pd
-import anndata as ad
+import pytorch_lightning as pl
 from torch.utils.data import DataLoader, random_split
 
 from .components import sc_dataset as util
 
 T = 5
 
+
 class TrajectoryStructureDataModule(pl.LightningDataModule):
-    """
-    A LightningDataModule that loads your custom dataset from disk
-    and returns DataLoaders for train/val/test.
-    """
+    """A LightningDataModule that loads your custom dataset from disk and returns DataLoaders for
+    train/val/test."""
 
     def __init__(
         self,
@@ -63,7 +63,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         """
         - Called on every GPU/CPU in a distributed environment.
-        - This is where we typically load data from disk, 
+        - This is where we typically load data from disk,
           build/transform Datasets, and split them.
         """
         if stage == "fit" or stage is None:
@@ -72,9 +72,11 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             if self.dataset_type == "Synthetic":
                 paths = glob.glob(
                     os.path.join(self.data_path, f"{self.dataset}/{self.dataset}*-1")
-                ) + glob.glob(os.path.join(self.data_path, f"{self.dataset}_ko*/{self.dataset}*-1"))
+                ) + glob.glob(
+                    os.path.join(self.data_path, f"{self.dataset}_ko*/{self.dataset}*-1")
+                )
             elif self.dataset_type == "Curated":
-                paths = glob.glob(os.path.join(self.data_path, f"HSC*/HSC*-1"))
+                paths = glob.glob(os.path.join(self.data_path, "HSC*/HSC*-1"))
             else:
                 raise ValueError(f"Unknown dataset type: {self.dataset_type}")
 
@@ -104,13 +106,11 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             for p in paths:
                 try:
                     self.kos.append(os.path.basename(p).split("_ko_")[1].split("-")[0])
-                except:
+                except IndexError:
                     self.kos.append(None)
 
             # gene_to_index for knockouts
-            self.gene_to_index = {
-                gene: idx for idx, gene in enumerate(self.adatas[0].var.index)
-            }
+            self.gene_to_index = {gene: idx for idx, gene in enumerate(self.adatas[0].var.index)}
             self.ko_indices = []
             for ko in self.kos:
                 if ko is None:
@@ -119,7 +119,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                     self.ko_indices.append(self.gene_to_index[ko])
 
             # Now build a single "full" dataset from all adatas,
-            # or keep them separate. 
+            # or keep them separate.
             # For a minimal example, let's merge them into one dataset.
             all_datasets = []
             for adata in self.adatas:
@@ -128,6 +128,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
 
             # Merge them by just concatenating in a single ConcatDataset
             from torch.utils.data import ConcatDataset
+
             self._full_dataset = ConcatDataset(all_datasets)
 
             # Next, we do train/val/test split:
@@ -167,6 +168,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
         )
+
 
 if __name__ == "__main__":
     _ = TrajectoryStructureDataModule()

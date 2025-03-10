@@ -10,6 +10,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.nn.parameter import Parameter
 
+
 class LocallyConnected(nn.Module):
     """Local linear layer, i.e. Conv1dLocal() with filter size 1.
 
@@ -29,7 +30,7 @@ class LocallyConnected(nn.Module):
     """
 
     def __init__(self, num_linear, input_features, output_features, bias=True):
-        super(LocallyConnected, self).__init__()
+        super().__init__()
         self.num_linear = num_linear
         self.input_features = input_features
         self.output_features = output_features
@@ -67,10 +68,11 @@ class LocallyConnected(nn.Module):
         return "num_linear={}, in_features={}, out_features={}, bias={}".format(
             self.num_linear, self.in_features, self.out_features, self.bias is not None
         )
-    
+
+
 class NNODEF(nn.Module):
     def __init__(self, in_dim, hid_dim, time_invariant=True):
-        super(NNODEF, self).__init__()
+        super().__init__()
         self.time_invariant = time_invariant
 
         if time_invariant:
@@ -95,7 +97,7 @@ class NNODEF(nn.Module):
 class MLPODEF(nn.Module):
     def __init__(self, dims, GL_reg=0.01, bias=True, time_invariant=True):
         # dims: [number of variables, dimension hidden layers, output dim=1]
-        super(MLPODEF, self).__init__()
+        super().__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
 
@@ -110,10 +112,8 @@ class MLPODEF(nn.Module):
 
         # fc2: local linear layers
         layers = []
-        for l in range(len(dims) - 2):
-            layers.append(
-                LocallyConnected(dims[0], dims[l + 1], dims[l + 2], bias=bias)
-            )
+        for layer in range(len(dims) - 2):
+            layers.append(LocallyConnected(dims[0], dims[layer + 1], dims[layer + 2], bias=bias))
         self.fc2 = nn.ModuleList(layers)
         self.elu = nn.ELU(inplace=True)
 
@@ -137,7 +137,7 @@ class MLPODEF(nn.Module):
         return x
 
     def l2_reg(self):
-        """L2 regularization on all parameters"""
+        """L2 regularization on all parameters."""
         reg = 0.0
         fc1_weight = self.fc1.weight  # [j * m1, i], m1 = number of hidden nodes
         reg += torch.sum(fc1_weight**2)
@@ -146,19 +146,19 @@ class MLPODEF(nn.Module):
         return reg
 
     def fc1_reg(self):
-        """L1 regularization on input layer parameters"""
+        """L1 regularization on input layer parameters."""
         return torch.sum(torch.abs(self.fc1.weight))
 
     def group_weights(self, gamma=0.5):
-        """Group lasso weights"""
+        """Group lasso weights."""
         fc1_weight = self.fc1.weight.view(self.dims[0], -1, self.dims[0])  # [j, m1, i]
         weights = torch.sum(fc1_weight**2, dim=1).pow(gamma).data  # [i, j]
         return weights
 
     def causal_graph(self, w_threshold=0.3):  # [j * m1, i] -> [i, j]
-        """Get W from fc1 weights, take 2-norm over m1 dim"""
+        """Get W from fc1 weights, take 2-norm over m1 dim."""
         d = self.dims[0]
-        fc1_weight = self.fc1.weight  # [j * m1, i] or [j * m1, i+1] if time-varying
+        fc1_weight = self.fc1.weight  # [j * m1, i] or [j * m1, i+1] if time-vary
 
         if not self.time_invariant:
             # Remove the time dimension (last column) before reshaping
@@ -177,11 +177,9 @@ class MLPODEF(nn.Module):
 
 
 class MLPODEFKO(nn.Module):
-    def __init__(
-        self, dims, GL_reg=0.01, bias=True, time_invariant=True, knockout_masks=None
-    ):
+    def __init__(self, dims, GL_reg=0.01, bias=True, time_invariant=True, knockout_masks=None):
         # dims: [number of variables, dimension hidden layers, output dim=1]
-        super(MLPODEFKO, self).__init__()
+        super().__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
         self.dims = dims
@@ -193,17 +191,13 @@ class MLPODEFKO(nn.Module):
             self.fc1 = nn.Linear(dims[0] + 1, dims[0] * dims[1], bias=bias)
         # fc2: local linear layers
         layers = []
-        for l in range(len(dims) - 2):
-            layers.append(
-                LocallyConnected(dims[0], dims[l + 1], dims[l + 2], bias=bias)
-            )
+        for layer in range(len(dims) - 2):
+            layers.append(LocallyConnected(dims[0], dims[layer + 1], dims[layer + 2], bias=bias))
         self.fc2 = nn.ModuleList(layers)
         self.elu = nn.ELU(inplace=True)
         self.knockout_masks = None
         if knockout_masks is not None:
-            self.knockout_masks = [
-                torch.tensor(m, dtype=torch.float32) for m in knockout_masks
-            ]
+            self.knockout_masks = [torch.tensor(m, dtype=torch.float32) for m in knockout_masks]
 
     def forward(self, t, x, dataset_idx=None):  # [n, 1, d] -> [n, 1, d]
         if not self.time_invariant:
@@ -227,9 +221,7 @@ class MLPODEFKO(nn.Module):
                 masked_w_vars = w_vars_reshaped * mask.unsqueeze(1)  # [d, m, d]
                 x_vars = x[:, :d]  # [n, d]
                 x_time = x[:, d:]  # [n, 1]
-                out_vars = torch.einsum(
-                    "rhd,nd->nrh", masked_w_vars, x_vars
-                )  # [n, d, m]
+                out_vars = torch.einsum("rhd,nd->nrh", masked_w_vars, x_vars)  # [n, d, m]
                 w_time_reshaped = w_time.view(d, m, 1)  # [d, m, 1]
                 out_time = w_time_reshaped * x_time.unsqueeze(1)  # [n, d, m]
                 x_out = out_vars + out_time
@@ -246,7 +238,7 @@ class MLPODEFKO(nn.Module):
         return x_out
 
     def l2_reg(self):
-        """L2 regularization on all parameters"""
+        """L2 regularization on all parameters."""
         reg = 0.0
         fc1_weight = self.fc1.weight  # [j * m1, i], m1 = number of hidden nodes
         reg += torch.sum(fc1_weight**2)
@@ -255,17 +247,17 @@ class MLPODEFKO(nn.Module):
         return reg
 
     def fc1_reg(self):
-        """L1 regularization on input layer parameters"""
+        """L1 regularization on input layer parameters."""
         return torch.sum(torch.abs(self.fc1.weight))
 
     def group_weights(self, gamma=0.5):
-        """Group lasso weights"""
+        """Group lasso weights."""
         fc1_weight = self.fc1.weight.view(self.dims[0], -1, self.dims[0])  # [j, m1, i]
         weights = torch.sum(fc1_weight**2, dim=1).pow(gamma).data  # [i, j]
         return weights
 
     def causal_graph(self, w_threshold=0.3):  # [j * m1, i] -> [i, j]
-        """Get W from fc1 weights, take 2-norm over m1 dim"""
+        """Get W from fc1 weights, take 2-norm over m1 dim."""
         d = self.dims[0]
         fc1_weight = self.fc1.weight  # [j * m1, i]
         fc1_weight = fc1_weight.view(d, -1, d)  # [j, m1, i]

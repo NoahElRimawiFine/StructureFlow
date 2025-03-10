@@ -13,19 +13,19 @@ from torchvision import transforms
 
 from .components.distribution_distances import compute_distribution_distances
 from .components.optimal_transport import EntropicOTFM
-from .components.schedule import NoiseScheduler, ConstantNoiseScheduler
-from .components.solver import FlowSolver
 from .components.plotting import (
+    plot_comparison_heatmaps,
     plot_paths,
     plot_samples,
     plot_trajectory,
     store_trajectories,
-    plot_comparison_heatmaps
 )
+from .components.schedule import ConstantNoiseScheduler, NoiseScheduler
+from .components.solver import FlowSolver
 
 
 class SF2MLitModule(LightningModule):
-    """SF2M Module for training generative models and learning structure"""
+    """SF2M Module for training generative models and learning structure."""
 
     def __init__(
         self,
@@ -48,19 +48,19 @@ class SF2MLitModule(LightningModule):
         leaveout_timepoint: int = -1,
         test_nfe: int = 100,
         plot: bool = False,
-        nice_name: Optional[str] = "SF2M"
+        nice_name: Optional[str] = "SF2M",
     ) -> None:
         super().__init__()
         self.save_hyperparameters(
-            ignore = [
+            ignore=[
                 "net",
                 "score_net",
-                "corr_net", 
+                "corr_net",
                 "optimizer",
                 "scheduler",
                 "datamodule",
-                "partial_solver"
-            ], 
+                "partial_solver",
+            ],
             logger=False,
         )
 
@@ -107,20 +107,16 @@ class SF2MLitModule(LightningModule):
         return cond_matrix
 
     def forward(self, x, t, cond=None):
-        """
-        forward pass for the flow model + correction and score
-        """
+        """Forward pass for the flow model + correction and score."""
         v = self.net(t, x) + self.corr_net(t, x)
         s = self.score_net(t, x, cond)
         return v, s
 
     def training_step(self, batch, batch_idx):
-        """
-        Given a batch from your DataModule or custom dataset, do:
-         1) sample bridging (X, s_true, u_true, t, t_orig)
-         2) run the flow + score networks
-         3) compute losses
-         4) log them
+        """Given a batch from your DataModule or custom dataset, do:
+
+        1) sample bridging (X, s_true, u_true, t, t_orig) 2) run the flow + score networks 3)
+        compute losses 4) log them
         """
         # 1. Randomly select which dataset we are using in this iteration
         ds_idx = np.random.randint(0, len(self.otfms))
@@ -148,7 +144,7 @@ class SF2MLitModule(LightningModule):
         #    or adopt the logic you have in your snippet:
         if self.current_epoch <= 0 and self.global_step < 500:
             # example
-            v_fit = self.net(_t, _x) - model.sigma**2/2 * self.score_net(_t, _x, cond_expanded)
+            v_fit = self.net(_t, _x) - model.sigma**2 / 2 * self.score_net(_t, _x, cond_expanded)
         else:
             v_fit = (
                 self.net(_t, _x)
@@ -184,10 +180,8 @@ class SF2MLitModule(LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        """
-        If you want a simple bridging check during validation,
-        do something akin to training_step but without gradient.
-        """
+        """If you want a simple bridging check during validation, do something akin to
+        training_step but without gradient."""
         # e.g. pick a dataset, sample bridging, measure the same losses
         # For brevity, let's do a no-op or a small example
         ds_idx = 0
@@ -202,18 +196,19 @@ class SF2MLitModule(LightningModule):
         return {}
 
     def test_step(self, batch, batch_idx):
-        """
-        Evaluate on test data (e.g. held-out time, etc.).
+        """Evaluate on test data (e.g. held-out time, etc.).
+
         Could do the same bridging logic or call your trajectory simulation code.
         """
         return {}
-    
+
     def configure_optimizers(self):
-        """
-        Return your optimizer (and optional LR scheduler).
-        """
+        """Return your optimizer (and optional LR scheduler)."""
         # For example, AdamW over all parameters
-        params = list(self.net.parameters()) + list(self.score_net.parameters()) + list(self.corr_net.parameters())
+        params = (
+            list(self.net.parameters())
+            + list(self.score_net.parameters())
+            + list(self.corr_net.parameters())
+        )
         optimizer = torch.optim.AdamW(params, lr=self.lr)
         return optimizer
-       

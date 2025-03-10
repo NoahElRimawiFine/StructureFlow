@@ -1,9 +1,10 @@
+import copy
+import math
+import sys
+
+import numpy as np
 import torch
 from torch import nn, optim
-import copy
-import numpy as np
-import sys
-import math
 
 
 class NoiseScaledMLP(nn.Module):
@@ -16,7 +17,7 @@ class NoiseScaledMLP(nn.Module):
         activation=nn.ReLU,
         time_varying=True,
     ):
-        super(NoiseScaledMLP, self).__init__()
+        super().__init__()
         self.net = nn.Sequential()
         self.time_varying = time_varying
         assert len(hidden_sizes) > 0
@@ -61,7 +62,7 @@ class ScalarConditionalMLP(nn.Module):
         activation=nn.ReLU,
         time_varying=True,
     ):
-        super(ScalarConditionalMLP, self).__init__()
+        super().__init__()
         self.net = nn.Sequential()
         self.time_varying = time_varying
         assert len(hidden_sizes) > 0
@@ -85,9 +86,7 @@ class ScalarConditionalMLP(nn.Module):
     def forward(self, t, x, s):
         if self.time_varying:
             return self.net(
-                torch.hstack(
-                    [x, t.expand(*x.shape[:-1], 1), s.expand(*x.shape[:-1], 1)]
-                )
+                torch.hstack([x, t.expand(*x.shape[:-1], 1), s.expand(*x.shape[:-1], 1)])
             )
         else:
             return self.net(x)
@@ -103,7 +102,7 @@ class MLP(nn.Module):
         activation=nn.ReLU,
         time_varying=True,
     ):
-        super(MLP, self).__init__()
+        super().__init__()
         self.net = nn.Sequential()
         self.time_varying = time_varying
         assert len(hidden_sizes) > 0

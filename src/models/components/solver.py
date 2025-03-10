@@ -109,7 +109,9 @@ class FlowSolver(torch.nn.Module):
     def forward_flow_and_score(self, t, x, only_flow=False):
         if self.is_image:
             x = x.reshape(-1, *self.dim)
-        v_out = self.net(t, x.unsqueeze(1), self.data_idx).squeeze(1) if self.net is not None else 0
+        v_out = (
+            self.net(t, x.unsqueeze(1), self.data_idx).squeeze(1) if self.net is not None else 0
+        )
         c_out = self.corr_net(t, x) if self.corr_net is not None else 0
         s_out = None
         if self.score_net is not None and not only_flow:
@@ -125,7 +127,7 @@ class FlowSolver(torch.nn.Module):
         vt, ct, st = self.forward_flow_and_score(t, x)
         drift = vt + ct
         if st is not None:
-            alpha = (self.sigma(t)**2 / 2)
+            alpha = self.sigma(t) ** 2 / 2
             drift = drift + alpha * st
         return drift
 
@@ -135,7 +137,7 @@ class FlowSolver(torch.nn.Module):
         vt, ct, st = self.forward_flow_and_score(t, x)
         drift = -(vt + ct)
         if st is not None:
-            alpha = (self.sigma(t)**2 / 2)
+            alpha = self.sigma(t) ** 2 / 2
             drift = drift + alpha * st
         return drift
 

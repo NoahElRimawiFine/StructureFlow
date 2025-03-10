@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from sklearn.metrics import average_precision_score, roc_auc_score
 
+
 def compare_graphs(true_graph, estimated_graph):
     """Compute performance measures on (binary) adjacency matrix.
 
@@ -16,8 +17,8 @@ def compare_graphs(true_graph, estimated_graph):
 
     # mask the diagonal of our matrices
     n = true_graph.shape[0]
-    true_graph = true_graph * (1-np.eye(n))
-    estimated_graph = estimated_graph * (1-np.eye(n))
+    true_graph = true_graph * (1 - np.eye(n))
+    estimated_graph = estimated_graph * (1 - np.eye(n))
 
     def structural_hamming_distance(W_true, W_est):
         """Computes the structural hamming distance."""
