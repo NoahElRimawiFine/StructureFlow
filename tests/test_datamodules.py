@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from src.data.mnist_datamodule import MNISTDataModule
+from src.datamodules.mnist_datamodule import MNISTDataModule
 
 
 @pytest.mark.parametrize("batch_size", [32, 128])
@@ -14,7 +14,7 @@ def test_mnist_datamodule(batch_size: int) -> None:
 
     :param batch_size: Batch size of the data to be loaded by the dataloader.
     """
-    data_dir = "data/"
+    data_dir = "datamodules/"
 
     dm = MNISTDataModule(data_dir=data_dir, batch_size=batch_size)
     dm.prepare_data()
