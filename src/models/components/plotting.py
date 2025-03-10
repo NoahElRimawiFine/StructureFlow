@@ -54,7 +54,7 @@ def plot_scatter_and_flow(obs, model, title="stream", wandb_logger=None):
             out[:, :, i, 1],
             color=np.sum(out[:, :, i] ** 2, axis=-1),
         )
-        axes[i].set_title(f"t = {np.linspace(0,ts-1,7)[i]:0.2f}")
+        axes[i].set_title(f"t = {np.linspace(0, ts-1, 7)[i]:0.2f}")
     os.makedirs("figs", exist_ok=True)
     plt.savefig(f"figs/{title}.png")
     plt.close()
