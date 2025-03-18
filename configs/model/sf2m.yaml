@@ -1,0 +1,37 @@
+_target_: src.models.sf2m_module.SF2MLitModule
+_partial_: true
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.001
+  weight_decay: 1e-5
+
+net:
+  _target_: src.models.components.base.MLPODEFKO
+  _partial_: true
+  hidden_dims: [64, 64, 64]
+  batch_norm: False
+  activation: "selu"
+
+score_net:
+  _target_: src.models.components.cond_mlp.MLP
+
+corr_net:
+  _target_: src.models.components.simple_mlp.MLP
+
+partial_solver:
+  _target_: src.models.components.solver.FlowSolver
+  _partial_: true
+  ode_solver: "euler"
+  atol: 1e-5
+  rtol: 1e-5
+
+ot_sampler: null
+
+sigma_min: 0.1
+
+# Set to integer if want to train with left out timepoint
+leaveout_timepoint: -1
+
+plot: False

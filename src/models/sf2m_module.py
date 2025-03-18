@@ -6,10 +6,12 @@ from typing import Any, List, Optional, Union
 import numpy as np
 import torch
 import torchsde
-from pytorch_lightning import LightningDataModule, LightningModule
+from pytorch_lightning import LightningDataModule, LightningModule, Trainer
 from torch.distributions import MultivariateNormal
 from torchdyn.core import NeuralODE
 from torchvision import transforms
+
+from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 
 from .components.distribution_distances import compute_distribution_distances
 from .components.optimal_transport import EntropicOTFM
@@ -43,6 +45,7 @@ class SF2MLitModule(LightningModule):
         alpha: float = 0.1,
         corr_strength: float = 1e-3,
         reg: float = 1e-4,
+        lr: float = 1e-3,
         batch_size: int = 64,
         avg_size: int = -1,
         leaveout_timepoint: int = -1,
@@ -124,9 +127,7 @@ class SF2MLitModule(LightningModule):
         cond_vector = self.cond_matrix[ds_idx]
 
         # 2. Sample bridging from your OTFM or bridging method
-        _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
-            batch_size=self.batch_size, skip_time=self.skip_time
-        )
+        _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(batch_size=self.batch_size)
 
         # 3. Possibly move them onto correct device
         _x = _x.to(self.device)
@@ -158,7 +159,7 @@ class SF2MLitModule(LightningModule):
         L_flow = torch.mean((v_fit * model.dt - _u) ** 2)
 
         L_reg_v = self.net.l2_reg() + self.net.fc1_reg()
-        L_reg_corr = sum(p.pow(2).sum() for p in self.v_correction.parameters())
+        L_reg_corr = sum(p.pow(2).sum() for p in self.corr_net.parameters())
 
         if self.current_epoch < 1 and self.global_step < 100:
             loss = self.alpha * L_score
@@ -182,14 +183,10 @@ class SF2MLitModule(LightningModule):
     def validation_step(self, batch, batch_idx):
         """If you want a simple bridging check during validation, do something akin to
         training_step but without gradient."""
-        # e.g. pick a dataset, sample bridging, measure the same losses
-        # For brevity, let's do a no-op or a small example
         ds_idx = 0
         model = self.otfms[ds_idx]
         with torch.no_grad():
-            _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
-                batch_size=self.batch_size, skip_time=self.skip_time
-            )
+            _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(batch_size=self.batch_size)
             # Move to device, compute v_fit, s_fit, compute a validation loss, etc.
 
         # Return or log your validation losses
@@ -210,5 +207,89 @@ class SF2MLitModule(LightningModule):
             + list(self.score_net.parameters())
             + list(self.corr_net.parameters())
         )
-        optimizer = torch.optim.AdamW(params, lr=self.lr)
+        optimizer = torch.optim.AdamW(params, lr=self.hparams.lr)
         return optimizer
+
+
+if __name__ == "__main__":
+    dm = TrajectoryStructureDataModule()
+    dm.setup(stage="fit")
+    print(f"DataModule dim: {dm.dim}")
+
+    class DummyBridgeModel:
+        """A dummy bridge model that mimics the interface of your entropic OT flow models.
+
+        It provides a sample_bridges_flows() method that returns random tensors.
+        """
+
+        def __init__(self, dim, dt=1 / 5):
+            self.dt = dt
+            self.sigma = 1.0  # dummy sigma value
+            self.dim = dim
+
+        def sample_bridges_flows(self, batch_size):
+            # For simplicity, create random tensors with appropriate shapes.
+            # Assuming x has shape [batch_size, dim]
+            _x = torch.randn(batch_size, self.dim)
+            _s = torch.randn(batch_size, self.dim)
+            _u = torch.randn(batch_size, self.dim)
+            _t = torch.rand(batch_size, 1)  # time between 0 and 1
+            _t_orig = torch.rand(batch_size, 1)
+            return _x, _s, _u, _t, _t_orig
+
+    # Instantiate your networks.
+    # Replace these with your actual implementations if available.
+    class DummyMLP(torch.nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            self.fc = torch.nn.Linear(dim, dim)
+
+        def forward(self, t, x, cond=None):
+            # t is ignored for simplicity.
+            return self.fc(x)
+
+        def l2_reg(self):
+            return self.fc.weight.norm(2)
+
+        def fc1_reg(self):
+            return self.fc.weight.norm(2)
+
+    flow_net = DummyMLP(dm.dim)
+    score_net = DummyMLP(dm.dim)
+    corr_net = DummyMLP(dm.dim)
+
+    dummy_solver = None  # Not used directly in training_step
+
+    # Instantiate the SF2M Lightning Module.
+    module = SF2MLitModule(
+        net=DummyMLP,
+        score_net=DummyMLP,
+        corr_net=DummyMLP,
+        optimizer=torch.optim.AdamW,
+        datamodule=dm,
+        partial_solver=dummy_solver,
+        scheduler=None,
+        ot_sampler=None,
+        sigma=None,  # Will default to ConstantNoiseScheduler
+        sigma_min=0.1,
+        alpha=0.1,
+        corr_strength=1e-3,
+        reg=1e-4,
+        lr=1e-3,
+        batch_size=64,
+        avg_size=-1,
+        leaveout_timepoint=-1,
+        test_nfe=100,
+        plot=False,
+        nice_name="SF2M",
+    )
+    # For testing, fill otfms and cond_matrix with a dummy bridge model.
+    dummy_bridge = DummyBridgeModel(dim=dm.dim)
+    module.otfms = [dummy_bridge]
+    # Build a simple conditional matrix for testing.
+    cond_matrix = torch.zeros(module.batch_size, dm.dim)
+    module.cond_matrix = [cond_matrix]
+
+    # Create a Trainer (using fast_dev_run for a quick check).
+    trainer = Trainer(fast_dev_run=True)
+    trainer.fit(module, dm)

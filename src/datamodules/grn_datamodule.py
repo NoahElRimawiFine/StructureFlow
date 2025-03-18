@@ -5,11 +5,37 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader, random_split
+import torch
+from torch.utils.data import DataLoader, Dataset, random_split
 
 from .components import sc_dataset as util
 
 T = 5
+
+
+class AnnDataDataset(Dataset):
+    """Wraps an AnnData object so that each sample is a dictionary with the cell's expression data
+    and its corresponding pseudo-time."""
+
+    def __init__(self, adata):
+        """
+        Args:
+            adata: An AnnData object.
+        """
+        self.adata = adata
+        # If the data matrix is sparse, convert it to dense (or you can use .toarray())
+        if hasattr(adata.X, "toarray"):
+            self.X = torch.tensor(adata.X.toarray(), dtype=torch.float32)
+        else:
+            self.X = torch.tensor(adata.X, dtype=torch.float32)
+        # Assume pseudo-time is stored in adata.obs["t"]
+        self.t = torch.tensor(adata.obs["t"].values, dtype=torch.long)
+
+    def __len__(self):
+        return self.X.shape[0]
+
+    def __getitem__(self, idx):
+        return {"X": self.X[idx], "t": self.t[idx]}
 
 
 class TrajectoryStructureDataModule(pl.LightningDataModule):
@@ -46,6 +72,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         self.kos = None
         self.ko_indices = None
         self.true_matrix = None
+        self.dim = None
 
         self._full_dataset = None
         self.dataset_train = None
@@ -85,6 +112,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             # Build the reference matrix
             df = pd.read_csv(os.path.join(os.path.dirname(paths[0]), "refNetwork.csv"))
             n_genes = self.adatas[0].n_vars
+            self.dim = n_genes
             self.true_matrix = pd.DataFrame(
                 np.zeros((n_genes, n_genes), int),
                 index=self.adatas[0].var.index,
@@ -129,7 +157,8 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             # Merge them by just concatenating in a single ConcatDataset
             from torch.utils.data import ConcatDataset
 
-            self._full_dataset = ConcatDataset(all_datasets)
+            wrapped_datasets = [AnnDataDataset(adata) for adata in self.adatas]
+            self._full_dataset = ConcatDataset(wrapped_datasets)
 
             # Next, we do train/val/test split:
             full_len = len(self._full_dataset)
@@ -139,7 +168,6 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             self.dataset_train, self.dataset_val, self.dataset_test = random_split(
                 self._full_dataset, [train_len, val_len, test_len]
             )
-            print(len(self.dataset_train))
 
         # if stage == "test" or something, we could do different logic
         # but often we do all in one go

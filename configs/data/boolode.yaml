@@ -1,0 +1,14 @@
+_target_: src.datamodules.grn_datamodule.TrajectoryStructureDataModule
+
+# Define dataset parameters
+data_path: ${paths.data_dir}
+dataset: "dyn-TF"
+dataset_type: "Synthetic"
+
+# DataLoader parameters
+batch_size: 64
+num_workers: 1
+pin_memory: False
+
+# Train-validation-test split
+train_val_test_split: [0.8, 0.1, 0.1]
