@@ -2,27 +2,26 @@ import glob
 import os
 
 import anndata as ad
+import lightning.pytorch as pl
 import numpy as np
 import pandas as pd
-import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader, Dataset, random_split
 
 from .components import sc_dataset as util
-
-T = 5
 
 
 class AnnDataDataset(Dataset):
     """Wraps an AnnData object so that each sample is a dictionary with the cell's expression data
     and its corresponding pseudo-time."""
 
-    def __init__(self, adata):
+    def __init__(self, adata, source_id: int = None):
         """
         Args:
             adata: An AnnData object.
         """
         self.adata = adata
+        self.source_id = source_id
         # If the data matrix is sparse, convert it to dense (or you can use .toarray())
         if hasattr(adata.X, "toarray"):
             self.X = torch.tensor(adata.X.toarray(), dtype=torch.float32)
@@ -35,7 +34,7 @@ class AnnDataDataset(Dataset):
         return self.X.shape[0]
 
     def __getitem__(self, idx):
-        return {"X": self.X[idx], "t": self.t[idx]}
+        return {"X": self.X[idx], "t": self.t[idx], "source_id": self.source_id}
 
 
 class TrajectoryStructureDataModule(pl.LightningDataModule):
@@ -50,6 +49,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         batch_size: int = 64,
         num_workers: int = 4,
         train_val_test_split: tuple = (0.8, 0.1, 0.1),
+        T: int = 5,
     ):
         """
         Args:
@@ -66,6 +66,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.train_val_test_split = train_val_test_split
+        self.T = T
 
         # Will be filled in setup():
         self.adatas = None
@@ -125,7 +126,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                 self.true_matrix.loc[_i, _j] = _v
 
             # Bin timepoints
-            t_bins = np.linspace(0, 1, T + 1)[:-1]
+            t_bins = np.linspace(0, 1, self.T + 1)[:-1]
             for adata in self.adatas:
                 adata.obs["t"] = np.digitize(adata.obs.t_sim, t_bins) - 1
 
@@ -154,13 +155,15 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                 ds = adata
                 all_datasets.append(ds)
 
-            # Merge them by just concatenating in a single ConcatDataset
             from torch.utils.data import ConcatDataset
 
-            wrapped_datasets = [AnnDataDataset(adata) for adata in self.adatas]
+            wrapped_datasets = [
+                AnnDataDataset(adata, source_id=i) for i, adata in enumerate(self.adatas)
+            ]
+            self._dataset_lengths = [len(ds) for ds in wrapped_datasets]
             self._full_dataset = ConcatDataset(wrapped_datasets)
 
-            # Next, we do train/val/test split:
+            # train/val/test split:
             full_len = len(self._full_dataset)
             train_len = int(full_len * self.train_val_test_split[0])
             val_len = int(full_len * self.train_val_test_split[1])
@@ -172,13 +175,62 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         # if stage == "test" or something, we could do different logic
         # but often we do all in one go
 
+    def get_subset_adatas(self, split: str = "train"):
+        """Returns a list of AnnData objects, each containing only the cells used in the specified
+        split.
+
+        Args:
+            split (str): One of "train", "val", or "test" indicating which split's cells to extract.
+
+        Returns:
+            List[AnnData]: A list of AnnData objects containing only the cells for the specified split.
+        """
+        # Select the appropriate Subset from the random split
+        if split == "train":
+            subset = self.dataset_train
+        elif split == "val":
+            subset = self.dataset_val
+        elif split == "test":
+            subset = self.dataset_test
+        else:
+            raise ValueError("split must be one of 'train', 'val', or 'test'")
+
+        # Get the global indices of the selected cells from the ConcatDataset.
+        indices = subset.indices  # This is a list of integers.
+
+        # Compute the cumulative lengths for each wrapped AnnDataDataset.
+        # For example, if we have 3 datasets with lengths L1, L2, L3, then:
+        # cum_lengths = [0, L1, L1+L2, L1+L2+L3]
+        cum_lengths = np.cumsum(
+            [0] + self._dataset_lengths
+        )  # self._dataset_lengths was computed in setup().
+
+        # Create a dictionary to accumulate local indices for each original AnnData.
+        indices_by_file = {i: [] for i in range(len(self.adatas))}
+
+        # Map each global index to its corresponding dataset.
+        for idx in indices:
+            for i in range(len(cum_lengths) - 1):
+                if cum_lengths[i] <= idx < cum_lengths[i + 1]:
+                    local_idx = idx - cum_lengths[i]
+                    indices_by_file[i].append(local_idx)
+                    break
+
+        # Now, for each original AnnData, select the subset of cells corresponding to the computed local indices.
+        subset_adatas = []
+        for i, adata in enumerate(self.adatas):
+            if indices_by_file[i]:
+                # AnnData supports advanced indexing: adata[indices, :] returns a new AnnData with those cells.
+                subset_adatas.append(adata[indices_by_file[i], :])
+
+        return subset_adatas
+
     def train_dataloader(self):
         return DataLoader(
-            self.dataset_train,
+            self._full_dataset,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=False,
             num_workers=self.num_workers,
-            drop_last=True,
         )
 
     def val_dataloader(self):
