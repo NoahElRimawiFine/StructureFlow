@@ -158,7 +158,7 @@ class MLPODEF(nn.Module):
     def causal_graph(self, w_threshold=0.3):  # [j * m1, i] -> [i, j]
         """Get W from fc1 weights, take 2-norm over m1 dim."""
         d = self.dims[0]
-        fc1_weight = self.fc1.weight  # [j * m1, i] or [j * m1, i+1] if time-vary
+        fc1_weight = self.fc1.weight  # [j * m1, i] or [j * m1, i+1] if time-varying
 
         if not self.time_invariant:
             # Remove the time dimension (last column) before reshaping
@@ -196,8 +196,13 @@ class MLPODEFKO(nn.Module):
         self.fc2 = nn.ModuleList(layers)
         self.elu = nn.ELU(inplace=True)
         self.knockout_masks = None
-        if knockout_masks is not None:
-            self.knockout_masks = [torch.tensor(m, dtype=torch.float32) for m in knockout_masks]
+        if callable(knockout_masks):
+            knockout_masks = knockout_masks()
+
+            self.knockout_masks = [
+                torch.tensor(m, dtype=torch.float32) if not isinstance(m, torch.Tensor) else m
+                for m in knockout_masks
+            ]
 
     def forward(self, t, x, dataset_idx=None):  # [n, 1, d] -> [n, 1, d]
         if not self.time_invariant:

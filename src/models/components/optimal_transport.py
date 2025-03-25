@@ -39,7 +39,7 @@ class EntropicOTFM:
             p, q = torch.full((x0.shape[0],), 1 / x0.shape[0]), torch.full(
                 (x1.shape[0],), 1 / x1.shape[0]
             )
-            return pot.sinkhorn(p, q, C, eps, method="sinkhorn")
+            return pot.sinkhorn(p, q, C, eps, method="sinkhorn", numItermax=5000)
 
         self.sigma = sigma
         self.bm = BridgeMatcher()

@@ -7,6 +7,7 @@ import pandas as pd
 import scprep
 import seaborn as sb
 import torch
+from sklearn.metrics import average_precision_score, precision_recall_curve
 
 
 def plot_scatter(obs, model, title="fig", wandb_logger=None):
@@ -283,3 +284,46 @@ def plot_comparison_heatmaps(
 
     plt.tight_layout()
     plt.show()
+
+
+def maskdiag(A):
+    """Zero out the diagonal entries (or remove them) from matrix A."""
+    return A * (1 - np.eye(A.shape[0]))
+
+
+def plot_aupr_curve(A_true, W_v, prefix="val"):
+    """Plots the precision-recall curve based on the true and estimated adjacency matrices.
+
+    Args:
+        A_true (np.ndarray): The true adjacency matrix.
+        W_v (np.ndarray): The estimated adjacency matrix from your model.
+        prefix (str): Prefix for the title and logged metric.
+
+    Returns:
+        fig: The matplotlib figure object.
+    """
+    # Compute binary ground truth from A_true.
+    if isinstance(A_true, pd.DataFrame):
+        A_true = A_true.values
+    y_true = np.abs(np.sign(maskdiag(A_true)).astype(int).flatten())
+    # Estimated predictions: absolute value of the estimated adjacency matrix.
+    y_pred = np.abs(maskdiag(W_v).flatten())
+
+    # Compute precision, recall and thresholds
+    prec, rec, thresh = precision_recall_curve(y_true, y_pred)
+    avg_prec = average_precision_score(y_true, y_pred)
+
+    # Compute AUPR ratio if needed (e.g., average precision divided by fraction of nonzero edges in A_true)
+    nonzero_ratio = np.mean(np.abs(A_true) > 0)
+    aupr_ratio = avg_prec / nonzero_ratio if nonzero_ratio > 0 else float("nan")
+
+    # Create the figure
+    fig, ax = plt.subplots(figsize=(6, 5))
+    ax.plot(rec, prec, label=f"MLPODEF-based (AP = {avg_prec:.2f})")
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_title(f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {aupr_ratio:.2f}")
+    ax.legend()
+    ax.grid(True)
+    fig.tight_layout()
+    return fig
