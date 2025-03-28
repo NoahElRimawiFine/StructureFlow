@@ -292,6 +292,11 @@ class SF2MLitModule(LightningModule):
                 f"Reg(Flow)={L_reg.item():.4f}, Reg(Corr)={L_reg_correction.item():.4f}"
             )
 
+        self.log("train/loss", L.item(), on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train/flow_loss", L_flow.item(), on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train/score_loss", L_flow.item(), on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train/reg_loss", L_flow.item(), on_step=True, on_epoch=True, prog_bar=True)
+
         # Backprop and update
         self.manual_backward(L)
         optimizer.step()
