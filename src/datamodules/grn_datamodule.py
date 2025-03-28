@@ -41,6 +41,8 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
     """A LightningDataModule that loads your custom dataset from disk and returns DataLoaders for
     train/val/test."""
 
+    pass_to_model = True
+
     def __init__(
         self,
         data_path: str = "data/",
@@ -84,7 +86,6 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         """
         - Called once on 1 GPU/CPU in a distributed environment.
         - Here download/untar data if needed.
-        - Our data presumably is already local, so we do nothing special.
         """
         pass
 
@@ -148,8 +149,6 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                     self.ko_indices.append(self.gene_to_index[ko])
 
             # Now build a single "full" dataset from all adatas,
-            # or keep them separate.
-            # For a minimal example, let's merge them into one dataset.
             all_datasets = []
             for adata in self.adatas:
                 ds = adata

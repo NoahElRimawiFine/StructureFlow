@@ -1,4 +1,5 @@
 import math
+import random
 from functools import partial
 from typing import Optional
 
@@ -26,9 +27,9 @@ class BridgeMatcher:
         means = (1 - ts) * x0 + ts * x1
         vars = (sigma**2) * ts * (1 - ts)
         # x = means + torch.sqrt(vars) * torch.randn_like(x0)
-        x = means + torch.sqrt(vars.clamp_min(1e-10)) * torch.randn_like(x0)
-        s = (-1 / vars.clamp_min(1e-10)) * (x - means)
-        u = (1 - 2 * ts) / (2 * ts * (1 - ts)) * (x - means) + x1 - x0
+        x = means + torch.sqrt(vars.clamp_min(1e-4)) * torch.randn_like(x0)
+        s = (-1 / vars.clamp_min(1e-4)) * (x - means)
+        u = (1 - 2 * ts) / (2 * ts * (1 - ts) + 1e-4) * (x - means) + x1 - x0
         return means, vars, x, s, u
 
 

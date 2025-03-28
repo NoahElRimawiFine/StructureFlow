@@ -327,3 +327,168 @@ def plot_aupr_curve(A_true, W_v, prefix="val"):
     ax.grid(True)
     fig.tight_layout()
     return fig
+
+
+def get_weights_hist(model):
+    """Extracts all weight parameters (from parameters whose names contain 'weight' and that
+    require gradients) and concatenates them into a single 1D numpy array."""
+    weights = []
+    for name, param in model.named_parameters():
+        # Check that the parameter is a weight and is trainable
+        if "weight" in name and param.requires_grad:
+            # Detach, move to CPU, flatten, and add to our list
+            weights.append(param.detach().cpu().numpy().flatten())
+    if weights:
+        return np.concatenate(weights)
+    else:
+        return np.array([])
+
+
+def plot_histograms(model_before, model_after, bins=50):
+    """Plots side-by-side histograms of the weight values for two models.
+
+    Parameters:
+        model_before: The original NN model (before integration into Lightning).
+        model_after: The NN model after being incorporated into the Lightning module.
+        bins: Number of bins for the histogram.
+    """
+    weights_before = get_weights_hist(model_before)
+    weights_after = get_weights_hist(model_after)
+
+    # Create subplots for side-by-side histograms
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    axes[0].hist(weights_before, bins=bins, color="blue", alpha=0.7)
+    axes[0].set_title("Weights Before Lightning Module")
+    axes[0].set_xlabel("Weight Value")
+    axes[0].set_ylabel("Frequency")
+
+    axes[1].hist(weights_after, bins=bins, color="green", alpha=0.7)
+    axes[1].set_title("Weights After Lightning Module")
+    axes[1].set_xlabel("Weight Value")
+    axes[1].set_ylabel("Frequency")
+
+    plt.tight_layout()
+    plt.show()
+
+
+def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
+    """Compute a single adjacency from a big set of states across all datasets.
+
+    Returns a [d, d] numpy array representing an average Jacobian.
+    """
+
+    all_x_list = []
+    for ds_idx, adata in enumerate(adatas):
+        x0 = adata.X[adata.obs["t"] == 0]
+        all_x_list.append(x0)
+    if len(all_x_list) == 0:
+        return None
+
+    X_all = np.concatenate(all_x_list, axis=0)
+    if X_all.shape[0] == 0:
+        return None
+
+    X_all_torch = torch.from_numpy(X_all).float().to(device)
+
+    def get_flow(t, x):
+        x_input = x.unsqueeze(0).unsqueeze(0)
+        t_input = t.unsqueeze(0).unsqueeze(0)
+        return v(t_input, x_input).squeeze(0).squeeze(0)
+
+    # Or loop over multiple times if the model is time-varying
+    t_val = torch.tensor(0.0).to(device)
+
+    Ju = torch.func.jacrev(get_flow, argnums=1)
+
+    Js = []
+
+    batch_size = 256
+    for start in range(0, X_all_torch.shape[0], batch_size):
+        end = start + batch_size
+        batch_x = X_all_torch[start:end]
+
+        J_local = torch.vmap(lambda x: Ju(t_val, x))(batch_x)
+        J_avg = J_local.mean(dim=0)
+        Js.append(J_avg)
+
+    if len(Js) == 0:
+        return None
+    J_final = torch.stack(Js, dim=0).mean(dim=0)
+
+    A_est = J_final
+
+    return A_est.detach().cpu().numpy().T
+
+
+def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0):
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5))  # Create a figure explicitly
+
+    y_true = np.abs(np.sign(maskdiag(true_graph)).astype(int).flatten())
+
+    # --- Jacobian-based ---
+    y_pred = np.abs(maskdiag(jacobian).flatten())
+    prec, rec, _ = precision_recall_curve(y_true, y_pred)
+    avg_prec = average_precision_score(y_true, y_pred)
+
+    axs[0].plot(rec, prec, label=f"Jacobian-based (AP = {avg_prec:.2f})")
+    axs[0].set_xlabel("Recall")
+    axs[0].set_ylabel("Precision")
+    axs[0].set_title(
+        f"Precision-Recall Curve (Jacobian)\nAUPR ratio = {avg_prec / np.mean(np.abs(true_graph) > 0):.2f}"
+    )
+    axs[0].legend()
+    axs[0].grid(True)
+
+    # --- MLPODEF-based ---
+    y_pred_mlp = np.abs(maskdiag(causal_graph).flatten())
+    prec, rec, _ = precision_recall_curve(y_true, y_pred_mlp)
+    avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
+
+    axs[1].plot(rec, prec, label=f"MLPODEF-based (AP = {avg_prec_mlp:.2f})")
+    axs[1].set_xlabel("Recall")
+    axs[1].set_ylabel("Precision")
+    axs[1].set_title(
+        f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp / np.mean(np.abs(true_graph) > 0):.2f}"
+    )
+    axs[1].legend()
+    axs[1].grid(True)
+
+    fig.tight_layout()
+
+    # --- Logging or showing ---
+    if logger is not None:
+        logger.experiment.add_figure("Causal_Graph", fig, global_step=global_step)
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0):
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+
+    # --- A_estim ---
+    im1 = axs[0].imshow(maskdiag(A_estim), vmin=-0.5, vmax=0.5, cmap="RdBu_r")
+    axs[0].invert_yaxis()
+    axs[0].set_title("A_estim (from Jacobian)")
+    fig.colorbar(im1, ax=axs[0])
+
+    # --- W_v ---
+    im2 = axs[1].imshow(maskdiag(W_v), cmap="Reds")
+    axs[1].invert_yaxis()
+    axs[1].set_title("Causal Graph (from MLPODEF)")
+    fig.colorbar(im2, ax=axs[1])
+
+    # --- A_true ---
+    im3 = axs[2].imshow(maskdiag(A_true), vmin=-1, vmax=1, cmap="RdBu_r")
+    axs[2].invert_yaxis()
+    axs[2].set_title("A_true")
+    fig.colorbar(im3, ax=axs[2])
+
+    fig.tight_layout()
+
+    if logger is not None:
+        logger.experiment.add_figure("Causal_Graph_Matrices", fig, global_step=global_step)
+        plt.close(fig)
+    else:
+        plt.show()

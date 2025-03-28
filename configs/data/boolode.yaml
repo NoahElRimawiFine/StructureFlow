@@ -8,7 +8,6 @@ dataset_type: "Synthetic"
 # DataLoader parameters
 batch_size: 64
 num_workers: 1
-pin_memory: False
 
 # Train-validation-test split
 train_val_test_split: [0.8, 0.1, 0.1]
