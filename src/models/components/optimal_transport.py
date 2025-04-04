@@ -26,7 +26,6 @@ class BridgeMatcher:
         # Sample Brownian bridges between paired entries of [x0, x1] at times ts \in [0, 1].
         means = (1 - ts) * x0 + ts * x1
         vars = (sigma**2) * ts * (1 - ts)
-        # x = means + torch.sqrt(vars) * torch.randn_like(x0)
         x = means + torch.sqrt(vars.clamp_min(1e-4)) * torch.randn_like(x0)
         s = (-1 / vars.clamp_min(1e-4)) * (x - means)
         u = (1 - 2 * ts) / (2 * ts * (1 - ts) + 1e-4) * (x - means) + x1 - x0

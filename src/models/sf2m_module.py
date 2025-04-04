@@ -35,7 +35,7 @@ from .components.plotting import (
     plot_trajectory,
 )
 from .components.schedule import ConstantNoiseScheduler, NoiseScheduler
-from .components.solver import FlowSolver
+from .components.solver import TrajectorySolver, simulate_trajectory, wasserstein
 
 
 class SF2MLitModule(LightningModule):
@@ -100,7 +100,7 @@ class SF2MLitModule(LightningModule):
         datamodule.prepare_data()
         datamodule.setup(stage="fit")
 
-        self.adatas = self.data_loader.adatas
+        self.adatas = self.data_loader.get_subset_adatas()
         self.kos = self.data_loader.kos
         self.ko_indices = self.data_loader.ko_indices
         self.true_matrix = self.data_loader.true_matrix.values
@@ -294,8 +294,8 @@ class SF2MLitModule(LightningModule):
 
         self.log("train/loss", L.item(), on_step=True, on_epoch=True, prog_bar=True)
         self.log("train/flow_loss", L_flow.item(), on_step=True, on_epoch=True, prog_bar=True)
-        self.log("train/score_loss", L_flow.item(), on_step=True, on_epoch=True, prog_bar=True)
-        self.log("train/reg_loss", L_flow.item(), on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train/score_loss", L_score.item(), on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train/reg_loss", L_reg.item(), on_step=True, on_epoch=True, prog_bar=True)
 
         # Backprop and update
         self.manual_backward(L)
@@ -312,6 +312,81 @@ class SF2MLitModule(LightningModule):
 
         plot_auprs(W_v, A_estim, A_true, self.logger, self.global_step)
         log_causal_graph_matrices(A_estim, W_v, A_true, self.logger, self.global_step)
+
+        table_rows = []
+
+        if self.current_epoch % 10 == 0:
+            for time in range(self.T):
+                time_distances = []
+                for i, adata in enumerate(self.adatas):
+                    x0 = torch.from_numpy(adata.X[adata.obs["t"] == time - 1]).float()
+                    true_dist = torch.from_numpy(adata.X[adata.obs["t"] == time]).float()
+                    cond_vector = self.conditionals[i]
+                    if cond_vector is not None:
+                        cond_vector = cond_vector[0].repeat(len(x0), 1)
+
+                    if len(x0) == 0 or len(true_dist) == 0:
+                        continue
+
+                    traj_ode = simulate_trajectory(
+                        self.func_v,
+                        self.v_correction,
+                        self.score_net,
+                        x0,
+                        dataset_idx=i,
+                        start_time=time - 1,
+                        end_time=time,
+                        n_times=400,
+                        cond_vector=cond_vector,
+                    )
+
+                    traj_sde = simulate_trajectory(
+                        self.func_v,
+                        self.v_correction,
+                        self.score_net,
+                        x0,
+                        dataset_idx=i,
+                        start_time=time - 1,
+                        end_time=time,
+                        n_times=400,
+                        cond_vector=cond_vector,
+                        use_sde=True,
+                    )
+
+                    # Compute Wasserstein distances for ODE and SDE simulated trajectories.
+                    w_dist_ode = wasserstein(traj_ode[-1], true_dist)
+                    w_dist_sde = wasserstein(traj_sde[-1], true_dist)
+
+                    time_distances.append({"ode": w_dist_ode, "sde": w_dist_sde})
+
+                # Compute averages for this time step if we have any results.
+                if time_distances:
+                    avg_ode = np.mean([d["ode"] for d in time_distances])
+                    avg_sde = np.mean([d["sde"] for d in time_distances])
+                else:
+                    avg_ode, avg_sde = None, None
+
+                # Save the results for this time step.
+                table_rows.append({"Time": time, "Avg ODE": avg_ode, "Avg SDE": avg_sde})
+
+            import pandas as pd
+
+            df = pd.DataFrame(table_rows)
+            if hasattr(self.logger, "experiment"):
+                self.logger.experiment.add_text(
+                    "Validation Wasserstein Distances",
+                    df.to_markdown(),
+                    global_step=self.global_step,
+                )
+                self.print("Validation Wasserstein Distances:\n", df.to_string(index=False))
+            else:
+                self.print("Validation Wasserstein Distances:\n", df.to_string(index=False))
+
+    def validation_step(self, batch, batch_idx):
+        pass
+
+    def test_step(self, *args, **kwargs):
+        pass
 
     def configure_optimizers(self):
         """Pass model parameters to optimizer."""

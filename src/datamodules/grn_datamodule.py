@@ -226,7 +226,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(
-            self._full_dataset,
+            self.dataset_train,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
@@ -235,7 +235,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         return DataLoader(
             self.dataset_val,
-            batch_size=self.batch_size,
+            batch_size=len(self.dataset_val),
             shuffle=False,
             num_workers=self.num_workers,
         )
@@ -243,7 +243,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(
             self.dataset_test,
-            batch_size=self.batch_size,
+            batch_size=len(self.dataset_test),
             shuffle=False,
             num_workers=self.num_workers,
         )

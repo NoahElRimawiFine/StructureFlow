@@ -5,10 +5,15 @@ Implements ODE and SDE solvers for the model.
 Joins the torchdyn and torchsde libraries.
 """
 
+import math
+from functools import partial
 from math import prod
 
+import ot as pot
 import torch
+import torch.nn as nn
 import torchsde
+from torchdiffeq import odeint
 from torchdyn.core import NeuralODE
 
 
@@ -260,3 +265,205 @@ class DSBMFlowSolver(FlowSolver):
         self.nfe += 1
         fvt, bvt = self.forward_flow_and_score(t, x)
         return -(fvt - bvt) / 2
+
+
+class TrajectorySolver(nn.Module):
+    def __init__(
+        self,
+        sigma=1.0,
+        T=1.0,
+        device="cpu",
+    ):
+        """
+        Parameters:
+            flow_model: The neural network representing the flow field.
+            corr_model: The network representing the correction term.
+            score_model: The network returning the score (gradient of log-density).
+            sigma (float): Noise level (diffusion coefficient).
+            T (float): Total time such that dt = 1 / T.
+            device (str): Device to use ("cpu" or "cuda").
+            use_sde (bool): Whether to simulate using an SDE or ODE.
+            cond_vector: Optional conditional vector used by score_model.
+            dataset_idx: Identifier (or index) for the dataset.
+        """
+        super().__init__()
+        self.sigma = sigma
+        self.T = T
+        self.dt = 1.0 / T
+        self.device = device
+
+    def simulate(
+        self,
+        x0,
+        start_time,
+        end_time,
+        flow_model,
+        score_model,
+        corr_model,
+        n_times=400,
+        cond_vector=None,
+        dataset_idx=None,
+        use_sde=False,
+    ):
+        """Simulate a trajectory starting from x0.
+
+        Parameters:
+            x0 (torch.Tensor): The initial state tensor.
+            start_time (float): Starting time index (in discrete units).
+            end_time (float): Ending time index (in discrete units).
+            n_times (int): Number of time points to evaluate the trajectory.
+
+        Returns:
+            trajectory (torch.Tensor): The simulated trajectory (moved to CPU).
+        """
+        x0 = x0.to(self.device)
+        t_start = start_time * self.dt
+        t_end = end_time * self.dt
+        ts = torch.linspace(t_start, t_end, n_times, device=self.device)
+
+        if use_sde:
+            # Define an inner class for the SDE dynamics.
+            class FlowSDE(nn.Module):
+                def __init__(
+                    self, flow_model, corr_model, score_model, sigma, dataset_idx, cond_vector
+                ):
+                    super().__init__()
+                    self.flow_model = flow_model
+                    self.corr_model = corr_model
+                    self.score_model = score_model
+                    self.sigma = sigma
+                    self.dataset_idx = dataset_idx
+                    self.cond_vector = cond_vector
+                    self.noise_type = "diagonal"
+                    self.sde_type = "ito"
+
+                def f(self, t, x):
+                    t_batch = torch.full((x.shape[0],), t.item(), device=x.device)
+                    flow_out = self.flow_model(t_batch, x.unsqueeze(1), self.dataset_idx).squeeze(
+                        1
+                    )
+                    corr_out = self.corr_model(t_batch.unsqueeze(1), x)
+                    # Note: score_model is computed here but not used in the drift.
+                    score_out = self.score_model(t_batch, x, self.cond_vector)
+                    return flow_out + corr_out
+
+                def g(self, t, x):
+                    return self.sigma * torch.ones_like(x)
+
+            sde = FlowSDE(
+                self.flow_model,
+                self.corr_model,
+                self.score_model,
+                self.sigma,
+                self.dataset_idx,
+                self.cond_vector,
+            )
+            with torch.no_grad():
+                trajectory = torchsde.sdeint(sde, x0, ts, method="euler")
+        else:
+
+            def ode_func(t, x):
+                t_batch = torch.full((x.shape[0],), t.item(), device=x.device)
+                flow_out = self.flow_model(t_batch, x.unsqueeze(1), self.dataset_idx).squeeze(1)
+                corr_out = self.corr_model(t_batch.unsqueeze(1), x)
+                score_out = self.score_model(t_batch, x, self.cond_vector)
+                return flow_out + corr_out - (self.sigma**2 / 2) * score_out
+
+            with torch.no_grad():
+                trajectory = odeint(ode_func, x0, ts, method="dopri5")
+
+        return trajectory.cpu()
+
+
+def wasserstein(
+    x0: torch.Tensor, x1: torch.Tensor, method: str = "exact", reg: float = 0.05
+) -> float:
+    """Compute Wasserstein-2 distance between two distributions."""
+    # Set up the OT function
+    if method == "exact":
+        ot_fn = pot.emd2
+    elif method == "sinkhorn":
+        ot_fn = partial(pot.sinkhorn2, reg=reg)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    # Get uniform weights for the samples
+    a = pot.unif(x0.shape[0])
+    b = pot.unif(x1.shape[0])
+
+    # Reshape if needed
+    if x0.dim() > 2:
+        x0 = x0.reshape(x0.shape[0], -1)
+    if x1.dim() > 2:
+        x1 = x1.reshape(x1.shape[0], -1)
+
+    # Compute cost matrix (squared Euclidean distance)
+    M = torch.cdist(x0, x1) ** 2
+
+    # Compute Wasserstein distance
+    ret = ot_fn(a, b, M.detach().cpu().numpy(), numItermax=1e7)
+
+    # Return square root for W2 distance
+    return math.sqrt(ret)
+
+
+def simulate_trajectory(
+    flow_model,
+    corr_model,
+    score_model,
+    x0,
+    dataset_idx,
+    start_time,
+    end_time,
+    n_times=400,
+    sigma=1.0,
+    device="cpu",
+    use_sde=False,
+    cond_vector=None,
+    T: int = 5,
+):
+    x0 = x0.to(device)
+    dt = 1 / T
+    t_start = start_time * dt
+    t_end = end_time * dt
+    ts = torch.linspace(t_start, t_end, n_times, device=device)
+
+    if use_sde:
+
+        class FlowSDE(torch.nn.Module):
+            def __init__(self, flow_model, corr_model, score_model, sigma):
+                super().__init__()
+                self.flow_model = flow_model
+                self.corr_model = corr_model
+                self.score_model = score_model
+                self.sigma = sigma
+                self.noise_type = "diagonal"
+                self.sde_type = "ito"
+
+            def f(self, t, x):
+                t_batch = torch.full((x.shape[0],), t.item(), device=x.device)
+                flow_out = self.flow_model(t_batch, x.unsqueeze(1), dataset_idx).squeeze(1)
+                corr_out = self.corr_model(t_batch.unsqueeze(1), x)
+                score_out = self.score_model(t_batch, x, cond_vector)
+                return flow_out + corr_out
+
+            def g(self, t, x):
+                return 0.1 * torch.ones_like(x)
+
+        sde = FlowSDE(flow_model, corr_model, score_model, sigma)
+        with torch.no_grad():
+            trajectory = torchsde.sdeint(sde, x0, ts, method="euler")
+
+    else:
+
+        def ode_func(t, x):
+            t_batch = torch.full((x.shape[0],), t.item(), device=x.device)
+            flow_out = flow_model(t_batch, x.unsqueeze(1), dataset_idx).squeeze(1)
+            corr_out = corr_model(t_batch.unsqueeze(1), x)
+            score_out = score_model(t_batch, x, cond_vector)
+            return flow_out + corr_out + (sigma**2 / 2) * score_out
+
+        with torch.no_grad():
+            trajectory = odeint(ode_func, x0, ts, method="euler")
+
+    return trajectory.cpu()
