@@ -1,0 +1,23 @@
+_target_: src.models.ngmNode_module.NGMNodeModule
+_partial_: false
+
+datamodule: ${data}
+
+net:
+  _target_: src.models.components.base.MLPODEFKO
+  dims: [8, 100, 1]
+  GL_reg: 0.09
+  bias: true
+  knockout_masks: null
+
+# ot_sampler:
+#  _target_: src.models.components.optimal_transport.EntropicOTFM
+
+l1_reg: 1e-5
+l2_reg: 1e-5
+lr: 5e-3
+batch_size: 64
+n_steps_per_transition: 2500
+plot_freq: 1000
+plot: True
+nice_name: "NGM_Node"

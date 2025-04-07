@@ -1,0 +1,4 @@
+_target_: src.models.rf_module.ReferenceFittingModule
+_partial_: false
+
+use_cuda: True
