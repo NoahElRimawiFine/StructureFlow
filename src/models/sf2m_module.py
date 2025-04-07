@@ -383,7 +383,68 @@ class SF2MLitModule(LightningModule):
                 self.print("Validation Wasserstein Distances:\n", df.to_string(index=False))
 
     def validation_step(self, batch, batch_idx):
-        pass
+        x_val = batch["X"]
+        t_val = batch["t"]
+
+        unique_times = torch.unique(t_val).tolist()
+        results = []
+
+        # TODO: get adatas batched by ko index
+        for time in sorted(unique_times):
+            idx_x0 = t_val == time - 1
+            idx_true = t_val == time
+            if idx_x0.sum() == 0 or idx_true.sum() == 0:
+                continue
+
+            # Extract x0 and the true final state; move to device.
+            x0 = x_val[idx_x0]
+            true_dist = x_val[idx_true]
+
+            if self.cond_matrix is not None and len(self.cond_matrix) > 0:
+                # For example, take the first one (or select by some identifier)
+                cond_vector = self.cond_matrix[0].to(self.device)
+                # Repeat it for the number of samples in x0:
+                cond_vector = cond_vector[0].repeat(x0.shape[0], 1)
+            else:
+                cond_vector = None
+
+            # Simulate trajectory with ODE dynamics (using your simulate_trajectory function)
+            traj_ode = simulate_trajectory(
+                self.func_v,
+                self.v_correction,
+                self.score_net,
+                x0,
+                dataset_idx=0,  # adjust if you have multiple datasets
+                start_time=time - 1,
+                end_time=time,
+                n_times=400,
+                cond_vector=cond_vector,
+                use_sde=False,
+            )
+
+            # Simulate trajectory with SDE dynamics.
+            traj_sde = simulate_trajectory(
+                self.func_v,
+                self.v_correction,
+                self.score_net,
+                x0,
+                dataset_idx=0,
+                start_time=time - 1,
+                end_time=time,
+                n_times=400,
+                cond_vector=cond_vector,
+                use_sde=True,
+            )
+
+            # Compute Wasserstein distances for ODE and SDE trajectories.
+            w_dist_ode = wasserstein(traj_ode[-1], true_dist)
+            w_dist_sde = wasserstein(traj_sde[-1], true_dist)
+
+            # Save metrics for this time slice.
+            results.append({"Time": time, "Avg ODE": w_dist_ode, "Avg SDE": w_dist_sde})
+
+        # Return results as the output of validation_step.
+        return results
 
     def test_step(self, *args, **kwargs):
         pass

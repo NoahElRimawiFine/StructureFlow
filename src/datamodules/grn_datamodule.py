@@ -251,3 +251,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
 
 if __name__ == "__main__":
     _ = TrajectoryStructureDataModule()
+    _.setup(stage="fit")
+    data = _.val_dataloader()
+    for batch in data:
+        print(batch["X"])
