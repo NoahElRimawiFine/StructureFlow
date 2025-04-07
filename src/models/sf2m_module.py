@@ -147,12 +147,16 @@ class SF2MLitModule(LightningModule):
             conditional_dim=self.n_genes,
         )
 
-        self.v_correction = MLP(d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True)
+        self.v_correction = MLP(
+            d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True
+        )
 
         # -----------------------
         # 5. Build OTFMs
         # -----------------------
-        self.otfms = self.build_entropic_otfms(self.adatas, T=self.T, sigma=self.sigma, dt=self.dt)
+        self.otfms = self.build_entropic_otfms(
+            self.adatas, T=self.T, sigma=self.sigma, dt=self.dt
+        )
 
         # -----------------------
         # 6. Setup optimizer
@@ -293,20 +297,34 @@ class SF2MLitModule(LightningModule):
             )
 
         self.log("train/loss", L.item(), on_step=True, on_epoch=True, prog_bar=True)
-        self.log("train/flow_loss", L_flow.item(), on_step=True, on_epoch=True, prog_bar=True)
-        self.log("train/score_loss", L_score.item(), on_step=True, on_epoch=True, prog_bar=True)
-        self.log("train/reg_loss", L_reg.item(), on_step=True, on_epoch=True, prog_bar=True)
+        self.log(
+            "train/flow_loss", L_flow.item(), on_step=True, on_epoch=True, prog_bar=True
+        )
+        self.log(
+            "train/score_loss",
+            L_score.item(),
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+        )
+        self.log(
+            "train/reg_loss", L_reg.item(), on_step=True, on_epoch=True, prog_bar=True
+        )
 
         # Backprop and update
         self.manual_backward(L)
         optimizer.step()
 
         # Proximal step (group-lasso style)
-        self.proximal(self.func_v.fc1.weight, self.func_v.dims, lam=self.func_v.GL_reg, eta=0.01)
+        self.proximal(
+            self.func_v.fc1.weight, self.func_v.dims, lam=self.func_v.GL_reg, eta=0.01
+        )
 
     def on_train_epoch_end(self):
         with torch.no_grad():
-            A_estim = compute_global_jacobian(self.func_v, self.adatas, dt=1 / 5, device="cpu")
+            A_estim = compute_global_jacobian(
+                self.func_v, self.adatas, dt=1 / 5, device="cpu"
+            )
         W_v = self.func_v.causal_graph(w_threshold=0.0).T
         A_true = self.true_matrix
 
@@ -320,7 +338,9 @@ class SF2MLitModule(LightningModule):
                 time_distances = []
                 for i, adata in enumerate(self.adatas):
                     x0 = torch.from_numpy(adata.X[adata.obs["t"] == time - 1]).float()
-                    true_dist = torch.from_numpy(adata.X[adata.obs["t"] == time]).float()
+                    true_dist = torch.from_numpy(
+                        adata.X[adata.obs["t"] == time]
+                    ).float()
                     cond_vector = self.conditionals[i]
                     if cond_vector is not None:
                         cond_vector = cond_vector[0].repeat(len(x0), 1)
@@ -367,7 +387,9 @@ class SF2MLitModule(LightningModule):
                     avg_ode, avg_sde = None, None
 
                 # Save the results for this time step.
-                table_rows.append({"Time": time, "Avg ODE": avg_ode, "Avg SDE": avg_sde})
+                table_rows.append(
+                    {"Time": time, "Avg ODE": avg_ode, "Avg SDE": avg_sde}
+                )
 
             import pandas as pd
 
@@ -378,9 +400,13 @@ class SF2MLitModule(LightningModule):
                     df.to_markdown(),
                     global_step=self.global_step,
                 )
-                self.print("Validation Wasserstein Distances:\n", df.to_string(index=False))
+                self.print(
+                    "Validation Wasserstein Distances:\n", df.to_string(index=False)
+                )
             else:
-                self.print("Validation Wasserstein Distances:\n", df.to_string(index=False))
+                self.print(
+                    "Validation Wasserstein Distances:\n", df.to_string(index=False)
+                )
 
     def validation_step(self, batch, batch_idx):
         pass

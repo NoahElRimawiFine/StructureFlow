@@ -102,7 +102,9 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                 paths = glob.glob(
                     os.path.join(self.data_path, f"{self.dataset}/{self.dataset}*-1")
                 ) + glob.glob(
-                    os.path.join(self.data_path, f"{self.dataset}_ko*/{self.dataset}*-1")
+                    os.path.join(
+                        self.data_path, f"{self.dataset}_ko*/{self.dataset}*-1"
+                    )
                 )
             elif self.dataset_type == "Curated":
                 paths = glob.glob(os.path.join(self.data_path, "HSC*/HSC*-1"))
@@ -140,7 +142,9 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                     self.kos.append(None)
 
             # gene_to_index for knockouts
-            self.gene_to_index = {gene: idx for idx, gene in enumerate(self.adatas[0].var.index)}
+            self.gene_to_index = {
+                gene: idx for idx, gene in enumerate(self.adatas[0].var.index)
+            }
             self.ko_indices = []
             for ko in self.kos:
                 if ko is None:
@@ -157,7 +161,8 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             from torch.utils.data import ConcatDataset
 
             wrapped_datasets = [
-                AnnDataDataset(adata, source_id=i) for i, adata in enumerate(self.adatas)
+                AnnDataDataset(adata, source_id=i)
+                for i, adata in enumerate(self.adatas)
             ]
             self._dataset_lengths = [len(ds) for ds in wrapped_datasets]
             self._full_dataset = ConcatDataset(wrapped_datasets)
