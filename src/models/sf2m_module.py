@@ -57,6 +57,7 @@ class SF2MLitModule(LightningModule):
         score_hidden=[100, 100],
         correction_hidden=[64, 64],
         optimizer=Any,
+        enable_epoch_end_hook: bool = True,
     ):
         """Initializes the sf2m_ngm model and loads data.
 
@@ -92,6 +93,8 @@ class SF2MLitModule(LightningModule):
         self.lr = lr
 
         self.save_hyperparameters()
+
+        self.enable_epoch_end_hook = enable_epoch_end_hook
 
         # -----------------------
         # 1. Load the data
@@ -311,6 +314,8 @@ class SF2MLitModule(LightningModule):
         self.proximal(self.func_v.fc1.weight, self.func_v.dims, lam=self.func_v.GL_reg, eta=0.01)
 
     def on_train_epoch_end(self):
+        if not self.enable_epoch_end_hook:
+            return
         with torch.no_grad():
             A_estim = compute_global_jacobian(self.func_v, self.adatas, dt=1 / 5, device="cpu")
         W_v = self.func_v.causal_graph(w_threshold=0.0).T
@@ -389,6 +394,8 @@ class SF2MLitModule(LightningModule):
                 self.print("Validation Wasserstein Distances:\n", df.to_string(index=False))
 
     def validation_step(self, batch, batch_idx):
+        if not self.enable_epoch_end_hook:
+            return
         x_val = batch["X"]
         t_val = batch["t"]
 

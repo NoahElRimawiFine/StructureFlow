@@ -154,3 +154,6 @@ configs/local/default.yaml
 
 # Aim logging
 .aim
+
+# leave_one_out results
+loo_results/
