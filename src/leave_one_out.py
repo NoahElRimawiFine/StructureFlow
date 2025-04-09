@@ -8,38 +8,36 @@ from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.loggers import TensorBoardLogger
 import os
 import copy
-import anndata as ad # To handle AnnData objects
+import anndata as ad
+import argparse
 
 # --- Project Specific Imports ---
-# Adjust these paths based on your project structure
-from src.datamodules.grn_datamodule import TrajectoryStructureDataModule # Or your DataLoader equivalent
+from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.rf_module import ReferenceFittingModule
 from src.models.sf2m_module import SF2MLitModule
 from src.models.components.solver import mmd_squared, simulate_trajectory, wasserstein
-# from src.models.components.plotting import ... # Import if needed for plotting
 
-# --- Configuration ---
-# Match these with the relevant hyperparameters from SF2MLitModule and your training setup
-DATA_PATH = "data/" # Or the path your DataModule expects
-DATASET_TYPE = "Synthetic"   
-N_EPOCHS = 50 # Or the type your DataModule expects
-N_STEPS_PER_FOLD = 1000      # Training steps for each fold
-BATCH_SIZE = 64              # Training batch size
-LR = 3e-3
-ALPHA = 0.1                   # Weighting for score vs flow loss
-REG = 5e-6                    # Regularization for flow model (L2 + Group Lasso)
-CORRECTION_REG = 1e-3         # Regularization for correction network
-GL_REG = 0.04                 # Group Lasso specific strength
-KNOCKOUT_HIDDEN = 100
-SCORE_HIDDEN = [100, 100]
-CORRECTION_HIDDEN = [64, 64]
-SIGMA = 1.0                   # Noise level for OTFM and SDE simulation
-N_TIMES_SIM = 100             # Number of steps for trajectory simulation
-DEVICE = "cpu"
-SEED = 42
-RESULTS_DIR = "loo_results"   # Directory to save logs and potentially plots
-MODEL_TYPE = "sf2m" # "sf2m" or "rf" or "mlp_baseline"
-USE_CORRECTION_MLP = True
+# Default configuration values (will be overridden by command line arguments)
+DEFAULT_DATA_PATH = "data/"
+DEFAULT_DATASET_TYPE = "Synthetic"
+DEFAULT_N_EPOCHS = 50
+DEFAULT_N_STEPS_PER_FOLD = 1000
+DEFAULT_BATCH_SIZE = 64
+DEFAULT_LR = 3e-3
+DEFAULT_ALPHA = 0.1
+DEFAULT_REG = 5e-6
+DEFAULT_CORRECTION_REG = 1e-3
+DEFAULT_GL_REG = 0.04
+DEFAULT_KNOCKOUT_HIDDEN = 100
+DEFAULT_SCORE_HIDDEN = [100, 100]
+DEFAULT_CORRECTION_HIDDEN = [64, 64]
+DEFAULT_SIGMA = 1.0
+DEFAULT_N_TIMES_SIM = 100
+DEFAULT_DEVICE = "cpu"
+DEFAULT_SEED = 42
+DEFAULT_RESULTS_DIR = "loo_results"
+DEFAULT_MODEL_TYPE = "sf2m"
+DEFAULT_USE_CORRECTION_MLP = True
 
 
 def create_trajectory_pca_plot(adata, predictions, ko_name, held_out_time, folder_path, model_type):
@@ -112,7 +110,36 @@ def create_trajectory_pca_plot(adata, predictions, ko_name, held_out_time, folde
     plt.savefig(os.path.join(folder_path, filename), dpi=150, bbox_inches='tight')
     plt.close()
 
-def main():
+
+def main(args):
+    # Extract configuration from arguments
+    DATA_PATH = args.data_path
+    DATASET_TYPE = args.dataset_type
+    N_EPOCHS = args.n_epochs
+    N_STEPS_PER_FOLD = args.n_steps_per_fold
+    BATCH_SIZE = args.batch_size
+    LR = args.lr
+    ALPHA = args.alpha
+    REG = args.reg
+    CORRECTION_REG = args.correction_reg
+    GL_REG = args.gl_reg
+    KNOCKOUT_HIDDEN = args.knockout_hidden
+    SCORE_HIDDEN = [int(x) for x in args.score_hidden.split(',')]
+    CORRECTION_HIDDEN = [int(x) for x in args.correction_hidden.split(',')]
+    SIGMA = args.sigma
+    N_TIMES_SIM = args.n_times_sim
+    DEVICE = args.device
+    SEED = args.seed
+    RESULTS_DIR = args.results_dir
+    MODEL_TYPE = args.model_type
+    USE_CORRECTION_MLP = args.use_correction_mlp
+    
+    # Create results directory with model type and seed info
+    RESULTS_DIR = os.path.join(
+        RESULTS_DIR, 
+        f"{DATASET_TYPE}_{MODEL_TYPE}_seed{SEED}"
+    )
+    
     seed_everything(SEED, workers=True)
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
@@ -209,7 +236,7 @@ def main():
             trainer = Trainer(
                 max_epochs=-1,
                 max_steps=N_STEPS_PER_FOLD,
-                accelerator="cpu",
+                accelerator="cpu" if DEVICE == "cpu" else "gpu",
                 devices=1,
                 logger=fold_logger,
                 enable_checkpointing=False,
@@ -396,6 +423,8 @@ def main():
             for record in fold_distances_list:
                 record['held_out_time'] = held_out_time
                 record['model_type'] = MODEL_TYPE
+                record['seed'] = SEED
+                record['dataset_type'] = DATASET_TYPE
                 all_fold_metrics.append(record)
         else:
             print(f"Fold {fold_name}: No evaluation results.")
@@ -412,6 +441,9 @@ def main():
     print(f"\n===== Leave-One-Out Cross-Validation Summary ({MODEL_TYPE}) =====")
     if results:
         summary_df = pd.DataFrame(results)
+        summary_df['seed'] = SEED
+        summary_df['dataset_type'] = DATASET_TYPE
+        
         print("Average Metrics per Fold:")
         print(summary_df.to_string(index=False))
 
@@ -432,12 +464,12 @@ def main():
         print(f"Overall Average MMD2 (SDE): {final_avg_mmd2_sde:.4f} +/- {final_std_mmd2_sde:.4f}")
 
         # Save summary results
-        summary_df.to_csv(os.path.join(RESULTS_DIR, f"loo_summary_{MODEL_TYPE}.csv"), index=False)
+        summary_df.to_csv(os.path.join(RESULTS_DIR, f"loo_summary_{MODEL_TYPE}_seed{SEED}.csv"), index=False)
 
         if all_fold_metrics:
             detailed_df = pd.DataFrame(all_fold_metrics)
-            detailed_df.to_csv(os.path.join(RESULTS_DIR, f"loo_detailed_metrics_{MODEL_TYPE}.csv"), index=False)
-            print(f"\nDetailed metrics saved to loo_detailed_metrics_{MODEL_TYPE}.csv")
+            detailed_df.to_csv(os.path.join(RESULTS_DIR, f"loo_detailed_metrics_{MODEL_TYPE}_seed{SEED}.csv"), index=False)
+            print(f"\nDetailed metrics saved to loo_detailed_metrics_{MODEL_TYPE}_seed{SEED}.csv")
 
     else:
         print("No results generated.")
@@ -448,4 +480,39 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Leave-One-Out Cross-Validation for GRN models")
+    
+    # Data parameters
+    parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH, help="Path to data directory")
+    parser.add_argument("--dataset_type", type=str, default=DEFAULT_DATASET_TYPE, choices=["Synthetic", "Curated"], help="Type of dataset to use")
+    
+    # Model parameters
+    parser.add_argument("--model_type", type=str, default=DEFAULT_MODEL_TYPE, choices=["sf2m", "rf", "mlp_baseline"], help="Type of model to use")
+    parser.add_argument("--use_correction_mlp", action="store_true", default=DEFAULT_USE_CORRECTION_MLP, help="Whether to use correction MLP for SF2M")
+    
+    # Training parameters
+    parser.add_argument("--n_epochs", type=int, default=DEFAULT_N_EPOCHS, help="Number of epochs")
+    parser.add_argument("--n_steps_per_fold", type=int, default=DEFAULT_N_STEPS_PER_FOLD, help="Number of steps per fold")
+    parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Batch size")
+    parser.add_argument("--lr", type=float, default=DEFAULT_LR, help="Learning rate")
+    parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA, help="Alpha weighting for score vs flow loss")
+    parser.add_argument("--reg", type=float, default=DEFAULT_REG, help="Regularization for flow model")
+    parser.add_argument("--correction_reg", type=float, default=DEFAULT_CORRECTION_REG, help="Regularization for correction network")
+    parser.add_argument("--gl_reg", type=float, default=DEFAULT_GL_REG, help="Group Lasso regularization strength")
+    
+    # Model architecture parameters
+    parser.add_argument("--knockout_hidden", type=int, default=DEFAULT_KNOCKOUT_HIDDEN, help="Knockout hidden dimension")
+    parser.add_argument("--score_hidden", type=str, default=",".join(map(str, DEFAULT_SCORE_HIDDEN)), help="Score hidden dimensions (comma-separated)")
+    parser.add_argument("--correction_hidden", type=str, default=",".join(map(str, DEFAULT_CORRECTION_HIDDEN)), help="Correction hidden dimensions (comma-separated)")
+    
+    # Simulation parameters
+    parser.add_argument("--sigma", type=float, default=DEFAULT_SIGMA, help="Noise level for simulation")
+    parser.add_argument("--n_times_sim", type=int, default=DEFAULT_N_TIMES_SIM, help="Number of steps for trajectory simulation")
+    
+    # Other parameters
+    parser.add_argument("--device", type=str, default=DEFAULT_DEVICE, choices=["cpu", "cuda"], help="Device to use")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed")
+    parser.add_argument("--results_dir", type=str, default=DEFAULT_RESULTS_DIR, help="Directory to save results")
+    
+    args = parser.parse_args()
+    main(args)
