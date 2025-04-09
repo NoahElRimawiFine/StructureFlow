@@ -14,7 +14,7 @@ import anndata as ad # To handle AnnData objects
 # Adjust these paths based on your project structure
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule # Or your DataLoader equivalent
 from src.models.sf2m_module import SF2MLitModule
-from src.models.components.solver import simulate_trajectory, wasserstein
+from src.models.components.solver import mmd_squared, simulate_trajectory, wasserstein
 # from src.models.components.plotting import ... # Import if needed for plotting
 
 # --- Configuration ---
@@ -37,6 +37,54 @@ N_TIMES_SIM = 100             # Number of steps for trajectory simulation
 DEVICE = "cpu"
 SEED = 42
 RESULTS_DIR = "loo_results"   # Directory to save logs and potentially plots
+USE_MLP_BASELINE = False
+USE_CORRECTION_MLP = True
+
+def create_pca_plot(x0, true_dist, predicted_dist, ko_name, held_out_time, folder_path, sim_type="SDE"):
+    """
+    Create and save a PCA plot comparing true and predicted distributions.
+    
+    Args:
+        x0: Initial state (t-1) as numpy array
+        true_dist: True final state (t) as numpy array
+        predicted_dist: Predicted final state (t) as numpy array
+        ko_name: Name of the knockout for labeling
+        held_out_time: The held-out timepoint
+        folder_path: Path to save the plot
+        sim_type: "SDE" or "ODE" for labeling
+    """
+    # Create component folder if it doesn't exist
+    os.makedirs(folder_path, exist_ok=True)
+    
+    # Fit PCA on the combined true data points
+    pca = PCA(n_components=2)
+    combined_true_data = np.vstack((x0, true_dist))
+    pca.fit(combined_true_data)
+    
+    # Transform data
+    x0_pca = pca.transform(x0)
+    true_dist_pca = pca.transform(true_dist)
+    predicted_dist_pca = pca.transform(predicted_dist)
+    
+    # Create the plot
+    plt.figure(figsize=(10, 8))
+    plt.scatter(x0_pca[:, 0], x0_pca[:, 1], alpha=0.7, label=f"t={held_out_time-1}", c='blue')
+    plt.scatter(true_dist_pca[:, 0], true_dist_pca[:, 1], alpha=0.7, label=f"True t={held_out_time}", c='green')
+    plt.scatter(predicted_dist_pca[:, 0], predicted_dist_pca[:, 1], alpha=0.7, 
+               label=f"{sim_type} Predicted t={held_out_time}", c='red', marker='x')
+    
+    # Add title and labels
+    ko_label = "Wild Type" if ko_name is None else f"Knockout: {ko_name}"
+    plt.title(f"PCA: {ko_label}, {sim_type} Prediction, t={held_out_time-1}→{held_out_time}")
+    plt.xlabel("PC1")
+    plt.ylabel("PC2")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # Save the figure
+    filename = f"{sim_type.lower()}_{'wildtype' if ko_name is None else f'ko_{ko_name}'}_t{held_out_time}.png"
+    plt.savefig(os.path.join(folder_path, filename), dpi=150, bbox_inches='tight')
+    plt.close()
 
 def main():
     seed_everything(SEED, workers=True)
@@ -101,7 +149,7 @@ def main():
         # It will initialize using the filtered `datamodule.adatas`.
         print("Instantiating SF2MLitModule...")
         model = SF2MLitModule(
-            datamodule=datamodule, # Pass the datamodule instance (currently holding filtered data)
+            datamodule=datamodule,
             T=T_max,
             sigma=SIGMA,
             dt=DT_data,
@@ -109,20 +157,17 @@ def main():
             alpha=ALPHA,
             reg=REG,
             correction_reg_strength=CORRECTION_REG,
-            n_steps=N_STEPS_PER_FOLD, # Total steps for this fold's training
+            n_steps=N_STEPS_PER_FOLD,
             lr=LR,
-            device=DEVICE, # Pass device hint, although Trainer manages final placement
+            device=DEVICE,
             GL_reg=GL_REG,
             knockout_hidden=KNOCKOUT_HIDDEN,
             score_hidden=SCORE_HIDDEN,
             correction_hidden=CORRECTION_HIDDEN,
-            enable_epoch_end_hook=False
-            # Let SF2MLitModule handle its own optimizer creation via configure_optimizers
-            # optimizer=optimizer_partial, # Removed this line
+            enable_epoch_end_hook=False,
+            use_mlp_baseline=USE_MLP_BASELINE,
+            use_correction_mlp=USE_CORRECTION_MLP and not USE_MLP_BASELINE,
         )
-        # Note: device placement is handled by Trainer, but model needs internal device hint if used early
-
-        # --- 2.4 Setup Trainer for this Fold ---
         print("Setting up Trainer...")
         fold_logger = TensorBoardLogger(RESULTS_DIR, name=fold_name)
         trainer = Trainer(
@@ -151,16 +196,20 @@ def main():
         # Crucial before evaluation or the next fold!
         datamodule.adatas = original_adatas_backup
 
-        # --- 2.6 Evaluate on the Held-Out Timepoint ---
         print(f"Evaluating model on predicting t={held_out_time} from t={held_out_time-1}...")
-        model.eval() # Set model to evaluation mode
-        model.to(DEVICE) # Ensure model is on the correct device for inference
+        model.eval()
+        model.to(DEVICE)
+        
+        # Create folders for this fold's PCA plots
+        pca_folder = os.path.join(RESULTS_DIR, "pca_plots")
+        fold_pca_folder = os.path.join(pca_folder, f"holdout_{held_out_time}")
+        os.makedirs(fold_pca_folder, exist_ok=True)
 
-        fold_distances_list = [] # Store distances for each dataset within this fold
+        fold_distances_list = []
         with torch.no_grad():
             # Iterate through the *original* full datasets
             for i, adata_full in enumerate(full_adatas):
-                ko_name = datamodule.kos[i] # Get knockout name for logging
+                ko_name = datamodule.kos[i]
 
                 # Get initial conditions (t-1) and true final state (t) from the *full* data
                 x0_np = adata_full.X[adata_full.obs["t"] == held_out_time - 1]
@@ -173,103 +222,97 @@ def main():
 
                 x0 = torch.from_numpy(x0_np).float().to(DEVICE)
                 true_dist = torch.from_numpy(true_dist_np).float().to(DEVICE)
+                true_dist_cpu = true_dist.cpu()
 
-                # Get the conditional vector corresponding to this dataset index (i)
-                # SF2MLitModule stores these based on the initial datamodule order
-                cond_vector_template = model.conditionals[i].to(DEVICE) # Shape [train_batch_size, n_genes]
+                # Get conditional vector
+                cond_vector_template = model.conditionals[i].to(DEVICE)
                 if cond_vector_template is not None and cond_vector_template.nelement() > 0:
-                    # Use the template's pattern, replicated for the actual batch size of x0
                     cond_vector = cond_vector_template[0].repeat(x0.shape[0], 1)
-                else: # Handle case where there might be no conditioning (e.g., WT default)
-                    # Check if model expects None or zeros
-                    # Assuming zeros if template is empty/None but conditioning is conceptually needed
+                else:
                     n_genes = model.n_genes
-                    # Check if score_net expects conditional input
                     if model.score_net.conditional:
                         cond_dim = model.score_net.conditional_dim
                         cond_vector = torch.zeros(x0.shape[0], cond_dim, device=DEVICE)
-                    else: # if score_net is not conditional
+                    else:
                         cond_vector = None
 
-                # --- Simulate Trajectories ---
-                # Use the standalone simulate_trajectory function
+                # Common simulation arguments
                 common_sim_args = {
                     "flow_model": model.func_v,
-                    "correction_model": model.v_correction,
+                    "corr_model": model.v_correction,
                     "score_model": model.score_net,
                     "x0": x0,
-                    "dataset_idx": i, # Pass dataset index for potential use in models (e.g., masks)
+                    "dataset_idx": i,
                     "start_time": held_out_time - 1,
                     "end_time": held_out_time,
                     "n_times": N_TIMES_SIM,
                     "cond_vector": cond_vector,
-                    "T_max": T_max, # Pass max time for correct time scaling
+                    "T": T_times,
                     "sigma": SIGMA,
                     "device": DEVICE,
                 }
 
                 # ODE Simulation
                 traj_ode = simulate_trajectory(**common_sim_args, use_sde=False)
-                sim_ode_final = traj_ode[-1].cpu() # Get final state, move to CPU for metric calc
-
+                sim_ode_final = traj_ode[-1].cpu()
+                
                 # SDE Simulation
                 traj_sde = simulate_trajectory(**common_sim_args, use_sde=True)
                 sim_sde_final = traj_sde[-1].cpu()
 
-                # Compute Wasserstein distance
-                # Ensure wasserstein function handles tensors
-                w_dist_ode = wasserstein(sim_ode_final, true_dist.cpu())
-                w_dist_sde = wasserstein(sim_sde_final, true_dist.cpu())
+                # Compute metrics
+                w_dist_ode = wasserstein(sim_ode_final, true_dist_cpu)
+                w_dist_sde = wasserstein(sim_sde_final, true_dist_cpu)
+                mmd2_ode = mmd_squared(sim_ode_final, true_dist_cpu)
+                mmd2_sde = mmd_squared(sim_sde_final, true_dist_cpu)
 
+                # Create PCA plots for both ODE and SDE simulations
+                create_pca_plot(
+                    x0_np, 
+                    true_dist_np, 
+                    sim_ode_final.numpy(), 
+                    ko_name, 
+                    held_out_time, 
+                    fold_pca_folder, 
+                    sim_type="ODE"
+                )
+                
+                create_pca_plot(
+                    x0_np, 
+                    true_dist_np, 
+                    sim_sde_final.numpy(), 
+                    ko_name, 
+                    held_out_time, 
+                    fold_pca_folder, 
+                    sim_type="SDE"
+                )
+
+                # Store metrics
                 fold_distances_list.append({
-                    "dataset_idx": i,
+                    "dataset_idx": i, 
                     "ko": ko_name,
-                    "w_dist_ode": w_dist_ode.item() if isinstance(w_dist_ode, torch.Tensor) else w_dist_ode,
-                    "w_dist_sde": w_dist_sde.item() if isinstance(w_dist_sde, torch.Tensor) else w_dist_sde,
+                    "w_dist_ode": w_dist_ode,
+                    "w_dist_sde": w_dist_sde,
+                    "mmd2_ode": mmd2_ode,
+                    "mmd2_sde": mmd2_sde,
                 })
-                print(f"  Dataset {i} (KO: {ko_name}): W_dist(ODE)={w_dist_ode:.4f}, W_dist(SDE)={w_dist_sde:.4f}")
-
-                # --- Optional: Plotting for this specific dataset/fold ---
-                # You could add PCA plotting logic here, comparing true_dist_np and sim_sde_final.numpy()
-                # Example for the last fold and first dataset (if desired)
-                # if held_out_time == T_max and i == 0:
-                #     print("Generating PCA plot...")
-                #     # PCA fitting (fit on combined data or just this dataset/timepoint?)
-                #     pca = PCA(n_components=2)
-                #     # Fit PCA on the true data points involved in the transition
-                #     combined_true_data = np.vstack((x0_np, true_dist_np))
-                #     pca.fit(combined_true_data)
-
-                #     # Transform data
-                #     x0_pca = pca.transform(x0_np)
-                #     true_dist_pca = pca.transform(true_dist_np)
-                #     sim_sde_pca = pca.transform(sim_sde_final.numpy()) # Use SDE results for plot
-
-                #     plt.figure(figsize=(8, 6))
-                #     plt.scatter(x0_pca[:, 0], x0_pca[:, 1], alpha=0.5, label=f"True t={held_out_time-1}", c='blue')
-                #     plt.scatter(true_dist_pca[:, 0], true_dist_pca[:, 1], alpha=0.5, label=f"True t={held_out_time}", c='green')
-                #     plt.scatter(sim_sde_pca[:, 0], sim_sde_pca[:, 1], alpha=0.5, label=f"Simulated t={held_out_time} (SDE)", c='red', marker='x')
-                #     plt.title(f"PCA: Holdout t={held_out_time}, Dataset {i} (KO: {ko_name})")
-                #     plt.xlabel("PC1")
-                #     plt.ylabel("PC2")
-                #     plt.legend()
-                #     plt.grid(True)
-                #     plot_filename = os.path.join(RESULTS_DIR, fold_name, f"pca_ds{i}_t{held_out_time}.png")
-                #     os.makedirs(os.path.dirname(plot_filename), exist_ok=True)
-                #     plt.savefig(plot_filename)
-                #     plt.close()
-
+                print(f"  Dataset {i} (KO: {ko_name}): W_dist(ODE)={w_dist_ode:.4f}, MMD2(ODE)={mmd2_ode:.4f}, W_dist(SDE)={w_dist_sde:.4f}, MMD2(SDE)={mmd2_sde:.4f}")
+                print(f"  Created PCA plots for dataset {i} (KO: {ko_name})")
 
         # --- 2.7 Aggregate and Store Results for this Fold ---
         if fold_distances_list:
             fold_df = pd.DataFrame(fold_distances_list)
             avg_ode_dist = fold_df["w_dist_ode"].mean()
             avg_sde_dist = fold_df["w_dist_sde"].mean()
+            avg_mmd2_ode = fold_df["mmd2_ode"].mean()
+            avg_mmd2_sde = fold_df["mmd2_sde"].mean()
             print(f"Fold {fold_name} Avg W_dist: ODE={avg_ode_dist:.4f}, SDE={avg_sde_dist:.4f}")
             results.append({
                 "held_out_time": held_out_time,
                 "avg_ode_distance": avg_ode_dist,
                 "avg_sde_distance": avg_sde_dist,
+                "avg_mmd2_ode": avg_mmd2_ode,
+                "avg_mmd2_sde": avg_mmd2_sde,
             })
             # Add individual distances to a global list for detailed analysis later
             for record in fold_distances_list:
@@ -281,6 +324,8 @@ def main():
                 "held_out_time": held_out_time,
                 "avg_ode_distance": np.nan,
                 "avg_sde_distance": np.nan,
+                "avg_mmd2_ode": np.nan,
+                "avg_mmd2_sde": np.nan,
             })
 
     # --- 3. Final Reporting ---
@@ -292,12 +337,17 @@ def main():
 
         final_avg_ode = summary_df["avg_ode_distance"].mean()
         final_avg_sde = summary_df["avg_sde_distance"].mean()
+        final_avg_mmd2_ode = summary_df["avg_mmd2_ode"].mean()
+        final_avg_mmd2_sde = summary_df["avg_mmd2_sde"].mean()
         final_std_ode = summary_df["avg_ode_distance"].std()
         final_std_sde = summary_df["avg_sde_distance"].std()
-
+        final_std_mmd2_ode = summary_df["avg_mmd2_ode"].std()
+        final_std_mmd2_sde = summary_df["avg_mmd2_sde"].std()
 
         print(f"\nOverall Average W-Distance (ODE): {final_avg_ode:.4f} +/- {final_std_ode:.4f}")
         print(f"Overall Average W-Distance (SDE): {final_avg_sde:.4f} +/- {final_std_sde:.4f}")
+        print(f"Overall Average MMD2 (ODE): {final_avg_mmd2_ode:.4f} +/- {final_std_mmd2_ode:.4f}")
+        print(f"Overall Average MMD2 (SDE): {final_avg_mmd2_sde:.4f} +/- {final_std_mmd2_sde:.4f}")
 
         # Save summary results
         summary_df.to_csv(os.path.join(RESULTS_DIR, "loo_summary.csv"), index=False)
