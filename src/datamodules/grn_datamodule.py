@@ -244,9 +244,10 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         return DataLoader(
             self.dataset_val,
-            batch_size=len(self.dataset_val),
+            batch_size=self.dim,
             shuffle=False,
             num_workers=self.num_workers,
+            collate_fn=lambda x: x
         )
 
     def test_dataloader(self):
@@ -291,4 +292,5 @@ if __name__ == "__main__":
     _.setup(stage="fit")
     data = _.val_dataloader()
     for batch in data:
-        print(batch["X"])
+        print(batch)
+    print(_.get_subset_adatas("val"))
