@@ -1,5 +1,6 @@
 import copy
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -67,3 +68,99 @@ class MLP(nn.Module):
         # cat along dim=1 => shape [batch_size, (d + time + cond_dim)]
         net_in = torch.cat(inputs, dim=1)
         return self.net(net_in)
+
+class MLPFlow(nn.Module):
+    def __init__(
+        self, dims, GL_reg=0.01, bias=True, time_invariant=True, knockout_masks=None
+    ):
+        # dims: [number of variables, hidden_layer_1_dim, hidden_layer_2_dim, ..., output_dim=1]
+        super(MLPFlow, self).__init__()
+        self.dims = dims
+        self.d = dims[0]  # Number of variables
+        self.time_invariant = time_invariant
+        self.GL_reg = GL_reg  # For compatibility with MLPODEF1
+        self.knockout_masks = None
+
+        if knockout_masks is not None:
+            self.knockout_masks = [
+                torch.tensor(m, dtype=torch.float32) for m in knockout_masks
+            ]
+
+        # Input dimension includes time if not time_invariant
+        input_dim = self.d
+        if not time_invariant:
+            input_dim += 1
+
+        # Build MLP layers dynamically
+        layers = []
+        prev_dim = input_dim
+
+        # Create all layers except the last one
+        for hidden_dim in dims[1:-1]:
+            layers.append(nn.Linear(prev_dim, hidden_dim, bias=bias))
+            layers.append(nn.ELU())
+            prev_dim = hidden_dim
+
+        # Add final layer
+        layers.append(nn.Linear(prev_dim, self.d, bias=bias))
+
+        self.network = nn.Sequential(*layers)
+
+        # Initialize weights
+        for layer in self.network:
+            if isinstance(layer, nn.Linear):
+                nn.init.normal_(layer.weight, mean=0, std=0.1)
+
+    def forward(self, t, x, dataset_idx=None):  # [n, 1, d] -> [n, 1, d]
+        # Reshape input if needed
+        if x.dim() == 3:  # [n, 1, d]
+            x = x.squeeze(1)  # [n, d]
+
+        # Combine with time if not time_invariant
+        if not self.time_invariant:
+            if t.dim() == 3:
+                t = t.squeeze(1)
+            if t.dim() == 1:
+                t = t.unsqueeze(-1)
+            x = torch.cat((x, t), dim=-1)
+
+        # Forward pass through MLP
+        out = self.network(x)  # [n, d]
+
+        # Reshape to match expected output format
+        out = out.unsqueeze(1)  # [n, 1, d]
+        return out
+    
+    def l2_reg(self):
+        """L2 regularization on all parameters"""
+        reg = 0.0
+        for layer in self.network:
+            if isinstance(layer, nn.Linear):
+                reg += torch.sum(layer.weight**2)
+        return reg
+
+    def fc1_reg(self):
+        """
+        L1 regularization on input layer parameters
+        For standard MLP, we return 0 as this is specific to MLPODEF
+        """
+        return torch.tensor(0.0, device=next(self.parameters()).device)
+
+    def causal_graph(self, w_threshold=0.3):
+        """
+        Create a causal graph representation from the weights
+        For MLP, we'll use the first layer weights as a proxy for causal relationships
+        """
+        first_layer = next(
+            layer for layer in self.network if isinstance(layer, nn.Linear)
+        )
+        W = first_layer.weight.detach().cpu().numpy()
+        # Take the absolute values and reshape to [d, d]
+        W = np.abs(W[: self.d, : self.d])
+        W[np.abs(W) < w_threshold] = 0
+        return np.round(W, 2)
+
+    def reset_parameters(self):
+        for layer in self.network:
+            if isinstance(layer, nn.Linear):
+                layer.reset_parameters()

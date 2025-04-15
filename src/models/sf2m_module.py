@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.components.base import MLPODEFKO
-from src.models.components.cond_mlp import MLP as CONDMLP
+from src.models.components.cond_mlp import MLP as CONDMLP, MLPFlow
 from src.models.components.simple_mlp import MLP
 
 from .components.distribution_distances import compute_distribution_distances
@@ -57,6 +57,9 @@ class SF2MLitModule(LightningModule):
         score_hidden=[100, 100],
         correction_hidden=[64, 64],
         optimizer=Any,
+        enable_epoch_end_hook: bool = True,
+        use_mlp_baseline: bool = False,
+        use_correction_mlp: bool = True,
     ):
         """Initializes the sf2m_ngm model and loads data.
 
@@ -90,8 +93,12 @@ class SF2MLitModule(LightningModule):
         self.correction_reg_strength = correction_reg_strength
         self.n_steps = n_steps
         self.lr = lr
+        self.use_mlp_baseline = use_mlp_baseline
+        self.use_correction_mlp = use_correction_mlp
 
         self.save_hyperparameters()
+
+        self.enable_epoch_end_hook = enable_epoch_end_hook
 
         # -----------------------
         # 1. Load the data
@@ -135,9 +142,15 @@ class SF2MLitModule(LightningModule):
         # -----------------------
         # Dimensions for MLPODEFKO
         self.dims = [self.n_genes, knockout_hidden, 1]
-        self.func_v = MLPODEFKO(
-            dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
-        )
+
+        if self.use_mlp_baseline:
+            self.func_v = MLPFlow(
+                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
+            )
+        else:
+            self.func_v = MLPODEFKO(
+                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
+            )
 
         self.score_net = CONDMLP(
             d=self.n_genes,
@@ -147,7 +160,17 @@ class SF2MLitModule(LightningModule):
             conditional_dim=self.n_genes,
         )
 
-        self.v_correction = MLP(d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True)
+        # Create correction network only if enabled
+        if self.use_correction_mlp:
+            self.v_correction = MLP(d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True)
+        else:
+            # Create a dummy module that returns zeros
+            class ZeroModule(torch.nn.Module):
+                def __init__(self): 
+                    super().__init__()
+                def forward(self, t, x): 
+                    return torch.zeros_like(x)
+            self.v_correction = ZeroModule()
 
         # -----------------------
         # 5. Build OTFMs
@@ -252,8 +275,8 @@ class SF2MLitModule(LightningModule):
         s_fit = self.score_net(_t, _x, cond_expanded).squeeze(1)
 
         # Flow net output, with or without correction
-        if self.global_step <= 500:
-            # Warmup phase
+        if self.global_step <= 500 or not self.use_correction_mlp:
+            # Warmup phase or no correction
             v_fit = self.func_v(t_input, v_input).squeeze(1) - (
                 model.sigma**2 / 2
             ) * self.score_net(_t, _x, cond_expanded)
@@ -268,13 +291,19 @@ class SF2MLitModule(LightningModule):
             (_t_orig * (1 - _t_orig)) * (v_fit * model.dt - _u) ** 2
         )  # weighting by (_t_orig * (1 - _t_orig))
         L_reg = self.func_v.l2_reg() + self.func_v.fc1_reg()
-        L_reg_correction = self.mlp_l2_reg(self.v_correction)
+        
+        # Only apply correction regularization if we're using the correction network
+        if self.use_correction_mlp:
+            L_reg_correction = self.mlp_l2_reg(self.v_correction)
+        else:
+            L_reg_correction = torch.tensor(0.0, device=self.device)
 
+        # Loss combination logic
         if self.global_step < 100:
             # Train only score initially
             L = self.alpha * L_score
-        elif self.global_step <= 500:
-            # Mix score + flow + small reg
+        elif self.global_step <= 500 or not self.use_correction_mlp:
+            # Mix score + flow + small reg (or no correction case)
             L = self.alpha * L_score + (1 - self.alpha) * L_flow + self.reg * L_reg
         else:
             # Full combined loss with correction reg
@@ -308,9 +337,12 @@ class SF2MLitModule(LightningModule):
         optimizer.step()
 
         # Proximal step (group-lasso style)
-        self.proximal(self.func_v.fc1.weight, self.func_v.dims, lam=self.func_v.GL_reg, eta=0.01)
+        if not self.use_mlp_baseline:
+            self.proximal(self.func_v.fc1.weight, self.func_v.dims, lam=self.func_v.GL_reg, eta=0.01)
 
     def on_train_epoch_end(self):
+        if not self.enable_epoch_end_hook:
+            return
         with torch.no_grad():
             A_estim = compute_global_jacobian(self.func_v, self.adatas, dt=1 / 5, device="cpu")
         W_v = self.func_v.causal_graph(w_threshold=0.0).T
@@ -389,6 +421,8 @@ class SF2MLitModule(LightningModule):
                 self.print("Validation Wasserstein Distances:\n", df.to_string(index=False))
 
     def validation_step(self, batch, batch_idx):
+        if not self.enable_epoch_end_hook:
+            return
         x_val = batch["X"]
         t_val = batch["t"]
 
@@ -457,10 +491,14 @@ class SF2MLitModule(LightningModule):
 
     def configure_optimizers(self):
         """Pass model parameters to optimizer."""
+        params_to_optimize = list(self.func_v.parameters()) + list(self.score_net.parameters())
+        
+        # Only include correction network parameters if we're using it
+        if self.use_correction_mlp:
+            params_to_optimize += list(self.v_correction.parameters())
+            
         optimizer = torch.optim.AdamW(
-            list(self.func_v.parameters())
-            + list(self.score_net.parameters())
-            + list(self.v_correction.parameters()),
+            params_to_optimize,
             lr=self.hparams.lr,
             eps=1e-7,
         )

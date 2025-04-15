@@ -406,10 +406,31 @@ def wasserstein(
     # Return square root for W2 distance
     return math.sqrt(ret)
 
+def rbf_kernel(X, Y, gamma=None):
+    if X.dim() > 2: X = X.reshape(X.shape[0], -1)
+    if Y.dim() > 2: Y = Y.reshape(Y.shape[0], -1)
+    d = X.shape[1]
+    if gamma is None:
+        gamma = 1.0 / d
+    dist_sq = torch.cdist(X, Y)**2
+    K = torch.exp(-gamma * dist_sq)
+    return K, gamma
+
+def mmd_squared(X, Y, kernel=rbf_kernel, **kernel_args):
+    n = X.shape[0]
+    m = Y.shape[0]
+    K_XX, gamma = kernel(X, X, **kernel_args) 
+    K_YY, _ = kernel(Y, Y, gamma=gamma)
+    K_XY, _ = kernel(X, Y, gamma=gamma)
+    term1 = K_XX.mean()
+    term2 = K_YY.mean()
+    term3 = K_XY.mean()
+    mmd2 = term1 + term2 - 2 * term3
+    return mmd2.clamp(min=0).item()
 
 def simulate_trajectory(
     flow_model,
-    corr_model,
+    corr_model,  # This can now be None or a dummy module
     score_model,
     x0,
     dataset_idx,
@@ -429,7 +450,6 @@ def simulate_trajectory(
     ts = torch.linspace(t_start, t_end, n_times, device=device)
 
     if use_sde:
-
         class FlowSDE(torch.nn.Module):
             def __init__(self, flow_model, corr_model, score_model, sigma):
                 super().__init__()
@@ -443,8 +463,9 @@ def simulate_trajectory(
             def f(self, t, x):
                 t_batch = torch.full((x.shape[0],), t.item(), device=x.device)
                 flow_out = self.flow_model(t_batch, x.unsqueeze(1), dataset_idx).squeeze(1)
-                corr_out = self.corr_model(t_batch.unsqueeze(1), x)
-                score_out = self.score_model(t_batch, x, cond_vector)
+                corr_out = torch.zeros_like(x)
+                if self.corr_model is not None and hasattr(self.corr_model, 'parameters') and list(self.corr_model.parameters()):
+                    corr_out = self.corr_model(t_batch.unsqueeze(1), x)
                 return flow_out + corr_out
 
             def g(self, t, x):
@@ -455,11 +476,12 @@ def simulate_trajectory(
             trajectory = torchsde.sdeint(sde, x0, ts, method="euler")
 
     else:
-
         def ode_func(t, x):
             t_batch = torch.full((x.shape[0],), t.item(), device=x.device)
             flow_out = flow_model(t_batch, x.unsqueeze(1), dataset_idx).squeeze(1)
-            corr_out = corr_model(t_batch.unsqueeze(1), x)
+            corr_out = torch.zeros_like(x)
+            if corr_model is not None and hasattr(corr_model, 'parameters') and list(corr_model.parameters()):
+                corr_out = corr_model(t_batch.unsqueeze(1), x)
             score_out = score_model(t_batch, x, cond_vector)
             return flow_out + corr_out + (sigma**2 / 2) * score_out
 

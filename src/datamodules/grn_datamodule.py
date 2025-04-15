@@ -6,7 +6,7 @@ import lightning.pytorch as pl
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset, random_split, IterableDataset
 
 from .components import sc_dataset as util
 
@@ -52,6 +52,8 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         num_workers: int = 4,
         train_val_test_split: tuple = (0.8, 0.1, 0.1),
         T: int = 5,
+        use_dummy_train_loader: bool = False,
+        dummy_loader_steps: int = 10000,
     ):
         """
         Args:
@@ -62,6 +64,8 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             train_val_test_split: ratio to split the entire dataset
         """
         super().__init__()
+        self.use_dummy_train_loader = use_dummy_train_loader
+        self.dummy_loader_steps = dummy_loader_steps
         self.data_path = os.path.join(data_path, dataset_type)
         self.dataset_type = dataset_type
         self.dataset = dataset
@@ -225,12 +229,17 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         return subset_adatas
 
     def train_dataloader(self):
-        return DataLoader(
-            self.dataset_train,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-        )
+        if self.use_dummy_train_loader:
+            print(f"Using dummy infinite train dataloader for approx {self.dummy_loader_steps} steps.")
+            dummy_dataset = DummyInfiniteDataset(data_shape=(1,), length=self.dummy_loader_steps + 10) # Add buffer
+            return DataLoader(dummy_dataset, batch_size=1, num_workers=0)
+        else:
+            return DataLoader(
+                self.dataset_train,
+                batch_size=self.batch_size,
+                shuffle=False,
+                num_workers=self.num_workers,
+            )
 
     def val_dataloader(self):
         return DataLoader(
@@ -247,6 +256,34 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
         )
+
+class DummyInfiniteDataset(IterableDataset):
+    """
+    An IterableDataset that yields dummy tensors indefinitely or up to a specified length.
+    Useful when the training step doesn't depend on the dataloader's output
+    but needs to run for a fixed number of steps.
+    """
+    def __init__(self, data_shape=(1,), length=None):
+        """
+        Args:
+            data_shape (tuple): The shape of the dummy tensor to yield.
+            length (int, optional): If provided, stop iteration after yielding this many items.
+                                     If None, yield indefinitely. Defaults to None.
+        """
+        super().__init__()
+        self.data_shape = data_shape
+        self.length = length
+
+    def __iter__(self):
+        count = 0
+        while True:
+            if self.length is not None and count >= self.length:
+                return # Stop iteration
+            # Yield a dummy tensor (content doesn't matter)
+            # Ensure it's on the correct device type (CPU in this case) if needed,
+            # though Lightning usually handles placement.
+            yield torch.zeros(self.data_shape)
+            count += 1
 
 
 if __name__ == "__main__":
