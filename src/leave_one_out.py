@@ -20,8 +20,7 @@ from src.models.components.solver import mmd_squared, simulate_trajectory, wasse
 # Default configuration values (will be overridden by command line arguments)
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Synthetic"
-DEFAULT_N_EPOCHS = 50
-DEFAULT_N_STEPS_PER_FOLD = 1000
+DEFAULT_N_STEPS_PER_FOLD = 10000
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
 DEFAULT_ALPHA = 0.1
@@ -115,7 +114,6 @@ def main(args):
     # Extract configuration from arguments
     DATA_PATH = args.data_path
     DATASET_TYPE = args.dataset_type
-    N_EPOCHS = args.n_epochs
     N_STEPS_PER_FOLD = args.n_steps_per_fold
     BATCH_SIZE = args.batch_size
     LR = args.lr
@@ -491,7 +489,6 @@ if __name__ == "__main__":
     parser.add_argument("--use_correction_mlp", action="store_true", default=DEFAULT_USE_CORRECTION_MLP, help="Whether to use correction MLP for SF2M")
     
     # Training parameters
-    parser.add_argument("--n_epochs", type=int, default=DEFAULT_N_EPOCHS, help="Number of epochs")
     parser.add_argument("--n_steps_per_fold", type=int, default=DEFAULT_N_STEPS_PER_FOLD, help="Number of steps per fold")
     parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Batch size")
     parser.add_argument("--lr", type=float, default=DEFAULT_LR, help="Learning rate")

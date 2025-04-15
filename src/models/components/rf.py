@@ -35,6 +35,7 @@ class Estimator:
         reg_A_elastic=0,
         device="cpu",
         optimizer=torch.optim.SGD,
+        num_timepoints=None,
     ):
         self.n_pca_components = n_pca_components
         self.device = device
@@ -52,7 +53,7 @@ class Estimator:
         self.pca = pca
         self.norm = norm
         self.timepoints = sorted(self.adatas[0].obs[t_key].unique())
-        self.T = len(self.timepoints)
+        self.T = len(self.timepoints) if num_timepoints is None else num_timepoints
         self.dt = np.diff(self.timepoints)
         self.drift = drift
         if self.norm:

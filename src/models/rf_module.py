@@ -60,13 +60,13 @@ class ReferenceFittingModule(pl.LightningModule):
 
         print("Training reference model with knockouts...")
         self.estimator = rf.Estimator(
-            [adatas[i] for i in ko_idx], [kos[i] for i in ko_idx], **self.options
+            [adatas[i] for i in ko_idx], [kos[i] for i in ko_idx], **self.options, num_timepoints=len(adatas[0].obs["t"].unique())
         )
         self.estimator.fit(print_iter=100, alg="alternating", update_couplings_iter=250)
 
         print("Training reference model with wild type data only...")
         self.estimator_wt = rf.Estimator(
-            [adatas[i] for i in wt_idx], [kos[i] for i in wt_idx], **self.options
+            [adatas[i] for i in wt_idx], [kos[i] for i in wt_idx], **self.options, num_timepoints=len(adatas[0].obs["t"].unique())
         )
         self.estimator_wt.fit(print_iter=100, alg="alternating", update_couplings_iter=250)
 
