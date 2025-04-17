@@ -27,8 +27,9 @@ def aggregate_results(base_results_dir, dataset_types, model_types, seeds):
     agg_dir = os.path.join(base_results_dir, "aggregate_results")
     os.makedirs(agg_dir, exist_ok=True)
     
-    # Prepare a summary table for all models and datasets
-    all_summary_rows = []
+    # Prepare summary tables
+    all_summary_rows = []  # For overall comparison across models
+    timepoint_comparisons = {}  # For per-timepoint comparison across models
     
     # Process each dataset type
     for dataset_type in dataset_types:
@@ -100,6 +101,21 @@ def aggregate_results(base_results_dir, dataset_types, model_types, seeds):
             }
             all_summary_rows.append(overall_avg)
             
+            # Store per-timepoint data for comparison across models
+            for _, row in agg_summary.iterrows():
+                timepoint = int(row['held_out_time'])
+                if (dataset_type, timepoint) not in timepoint_comparisons:
+                    timepoint_comparisons[(dataset_type, timepoint)] = []
+                
+                # Add this model's results for this timepoint
+                timepoint_comparisons[(dataset_type, timepoint)].append({
+                    'Model': model_type,
+                    'W-Dist (ODE)': f"{row['avg_ode_distance_mean']:.4f} ± {row['avg_ode_distance_std']:.4f}",
+                    'W-Dist (SDE)': f"{row['avg_sde_distance_mean']:.4f} ± {row['avg_sde_distance_std']:.4f}",
+                    'MMD2 (ODE)': f"{row['avg_mmd2_ode_mean']:.4f} ± {row['avg_mmd2_ode_std']:.4f}",
+                    'MMD2 (SDE)': f"{row['avg_mmd2_sde_mean']:.4f} ± {row['avg_mmd2_sde_std']:.4f}",
+                })
+            
             # If detailed metrics are available, combine them
             if all_seed_details:
                 combined_details = pd.concat(all_seed_details, ignore_index=True)
@@ -117,6 +133,68 @@ def aggregate_results(base_results_dir, dataset_types, model_types, seeds):
         # Print summary table
         print("\n===== Overall Comparison =====")
         print(overall_summary.to_string(index=False))
+    
+    # Create per-timepoint comparison tables
+    if timepoint_comparisons:
+        print("\n===== Per-Timepoint Comparisons =====")
+        
+        # Create directory for timepoint comparisons if needed
+        timepoint_dir = os.path.join(agg_dir, "timepoint_comparisons")
+        os.makedirs(timepoint_dir, exist_ok=True)
+        
+        # For each dataset type and timepoint
+        for (dataset_type, timepoint), models_data in timepoint_comparisons.items():
+            if models_data:
+                # Create a DataFrame for this timepoint
+                timepoint_df = pd.DataFrame(models_data)
+                
+                # Save to CSV
+                timepoint_path = os.path.join(timepoint_dir, f"{dataset_type}_timepoint_{timepoint}.csv")
+                timepoint_df.to_csv(timepoint_path, index=False)
+                
+                # Print the comparison
+                print(f"\nDataset: {dataset_type}, Timepoint: {timepoint}")
+                print(timepoint_df.to_string(index=False))
+        
+        print(f"\nPer-timepoint comparisons saved to {timepoint_dir}")
+    
+    # Create a combined per-timepoint table for each dataset
+    for dataset_type in dataset_types:
+        # Get all timepoints for this dataset
+        timepoints = sorted(t for ds, t in timepoint_comparisons.keys() if ds == dataset_type)
+        
+        if timepoints:
+            # For each model, collect data across timepoints
+            model_timepoint_data = {model: [] for model in model_types if any(m['Model'] == model for tp in timepoints for m in timepoint_comparisons.get((dataset_type, tp), []))}
+            
+            for timepoint in timepoints:
+                models_at_tp = timepoint_comparisons.get((dataset_type, timepoint), [])
+                
+                # Add each model's data for this timepoint
+                for model_data in models_at_tp:
+                    model = model_data['Model']
+                    if model in model_timepoint_data:
+                        model_timepoint_data[model].append({
+                            'Timepoint': timepoint,
+                            'W-Dist (ODE)': model_data['W-Dist (ODE)'],
+                            'W-Dist (SDE)': model_data['W-Dist (SDE)'],
+                            'MMD2 (ODE)': model_data['MMD2 (ODE)'],
+                            'MMD2 (SDE)': model_data['MMD2 (SDE)'],
+                        })
+            
+            # Create a combined table for each model
+            for model, timepoint_rows in model_timepoint_data.items():
+                if timepoint_rows:
+                    # Sort by timepoint
+                    timepoint_rows.sort(key=lambda x: x['Timepoint'])
+                    
+                    # Create DataFrame
+                    model_tp_df = pd.DataFrame(timepoint_rows)
+                    
+                    # Save to CSV
+                    model_tp_path = os.path.join(agg_dir, f"{dataset_type}_{model}_by_timepoint.csv")
+                    model_tp_df.to_csv(model_tp_path, index=False)
+                    print(f"Saved {model} timepoint analysis for {dataset_type} to {model_tp_path}")
 
 def main():
     parser = argparse.ArgumentParser(description="Run multiple leave-one-out experiments")
