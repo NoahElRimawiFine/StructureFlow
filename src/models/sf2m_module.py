@@ -183,11 +183,8 @@ class SF2MLitModule(LightningModule):
         self.optimizer = optimizer
 
         # For tracking losses
-        self.loss_history = []
-        self.score_loss_history = []
-        self.flow_loss_history = []
-        self.reg_loss_history = []
-        self.reg_corr_loss_history = []
+        self.val_results = []
+        self.train_results = []
 
     # -------------------------------------------------------------------------
     # Supporting methods
@@ -354,7 +351,8 @@ class SF2MLitModule(LightningModule):
         table_rows = []
 
         if self.current_epoch % 10 == 0:
-            for time in range(self.T):
+            results = []
+            for time in range(1, self.T):
                 time_distances = []
                 for i, adata in enumerate(self.adatas):
                     x0 = torch.from_numpy(adata.X[adata.obs["t"] == time - 1]).float()
@@ -374,7 +372,7 @@ class SF2MLitModule(LightningModule):
                         dataset_idx=i,
                         start_time=time - 1,
                         end_time=time,
-                        n_times=400,
+                        n_times=min(len(x0), len(true_dist)),
                         cond_vector=cond_vector,
                     )
 
@@ -386,105 +384,127 @@ class SF2MLitModule(LightningModule):
                         dataset_idx=i,
                         start_time=time - 1,
                         end_time=time,
-                        n_times=400,
+                        n_times=min(len(x0), len(true_dist)),
                         cond_vector=cond_vector,
                         use_sde=True,
                     )
 
-                    # Compute Wasserstein distances for ODE and SDE simulated trajectories.
                     w_dist_ode = wasserstein(traj_ode[-1], true_dist)
                     w_dist_sde = wasserstein(traj_sde[-1], true_dist)
-
                     time_distances.append({"ode": w_dist_ode, "sde": w_dist_sde})
 
-                # Compute averages for this time step if we have any results.
                 if time_distances:
                     avg_ode = np.mean([d["ode"] for d in time_distances])
                     avg_sde = np.mean([d["sde"] for d in time_distances])
                 else:
                     avg_ode, avg_sde = None, None
 
-                # Save the results for this time step.
-                table_rows.append({"Time": time, "Avg ODE": avg_ode, "Avg SDE": avg_sde})
+                results.append({"Time": time, "Avg ODE": avg_ode, "Avg SDE": avg_sde})
 
+            self.train_results.extend(results)
+
+            # Flatten results if multiple batches
+            all_results = self.train_results
+
+            # Sort results by time and log the table
+            all_results = sorted(all_results, key=lambda r: r["Time"])
             import pandas as pd
+            df = pd.DataFrame(all_results)
+            table_str = df.to_markdown(index=False)
+            self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+            # Optionally also log individual metrics:
+            for row in all_results:
+                self.log(f"train/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True)
+                self.log(f"train/w_dist_sde_time_{row['Time']}", row["Avg SDE"], prog_bar=True)
 
-            df = pd.DataFrame(table_rows)
-            if hasattr(self.logger, "experiment"):
-                self.logger.experiment.add_text(
-                    "Validation Wasserstein Distances",
-                    df.to_markdown(),
-                    global_step=self.global_step,
-                )
-                self.print("Validation Wasserstein Distances:\n", df.to_string(index=False))
-            else:
-                self.print("Validation Wasserstein Distances:\n", df.to_string(index=False))
+            self.train_results.clear()
+        else:
+            pass
 
     def validation_step(self, batch, batch_idx):
         if not self.enable_epoch_end_hook:
             return
-        x_val = batch["X"]
-        t_val = batch["t"]
+        with torch.no_grad():
+            A_estim = compute_global_jacobian(self.func_v, self.adatas, dt=1 / 5, device="cpu")
+        W_v = self.func_v.causal_graph(w_threshold=0.0).T
+        A_true = self.true_matrix
 
-        unique_times = torch.unique(t_val).tolist()
+        plot_auprs(W_v, A_estim, A_true, self.logger, self.global_step)
+        log_causal_graph_matrices(A_estim, W_v, A_true, self.logger, self.global_step)
+
+        val_adatas = self.data_loader.get_subset_adatas("val")
+
         results = []
 
-        # TODO: get adatas batched by ko index
-        for time in sorted(unique_times):
-            idx_x0 = t_val == time - 1
-            idx_true = t_val == time
-            if idx_x0.sum() == 0 or idx_true.sum() == 0:
-                continue
+        for time in range(1, self.T):
+            time_distances = []
+            for i, adata in enumerate(val_adatas):
+                x0 = torch.from_numpy(adata.X[adata.obs["t"] == time - 1]).float()
+                true_dist = torch.from_numpy(adata.X[adata.obs["t"] == time]).float()
+                cond_vector = self.conditionals[i]
+                if cond_vector is not None:
+                    cond_vector = cond_vector[0].repeat(len(x0), 1)
 
-            # Extract x0 and the true final state; move to device.
-            x0 = x_val[idx_x0]
-            true_dist = x_val[idx_true]
+                if len(x0) == 0 or len(true_dist) == 0:
+                    continue
 
-            if self.cond_matrix is not None and len(self.cond_matrix) > 0:
-                # For example, take the first one (or select by some identifier)
-                cond_vector = self.cond_matrix[0].to(self.device)
-                # Repeat it for the number of samples in x0:
-                cond_vector = cond_vector[0].repeat(x0.shape[0], 1)
+                traj_ode = simulate_trajectory(
+                    self.func_v,
+                    self.v_correction,
+                    self.score_net,
+                    x0,
+                    dataset_idx=i,
+                    start_time=time - 1,
+                    end_time=time,
+                    n_times=min(len(x0), len(true_dist)),
+                    cond_vector=cond_vector,
+                )
+
+                # You might also compute the SDE metric similarly
+                traj_sde = simulate_trajectory(
+                    self.func_v,
+                    self.v_correction,
+                    self.score_net,
+                    x0,
+                    dataset_idx=i,
+                    start_time=time - 1,
+                    end_time=time,
+                    n_times=min(len(x0), len(true_dist)),
+                    cond_vector=cond_vector,
+                    use_sde=True,
+                )
+
+                w_dist_ode = wasserstein(traj_ode[-1], true_dist)
+                w_dist_sde = wasserstein(traj_sde[-1], true_dist)
+                time_distances.append({"ode": w_dist_ode, "sde": w_dist_sde})
+
+            if time_distances:
+                avg_ode = np.mean([d["ode"] for d in time_distances])
+                avg_sde = np.mean([d["sde"] for d in time_distances])
             else:
-                cond_vector = None
+                avg_ode, avg_sde = None, None
 
-            # Simulate trajectory with ODE dynamics (using your simulate_trajectory function)
-            traj_ode = simulate_trajectory(
-                self.func_v,
-                self.v_correction,
-                self.score_net,
-                x0,
-                dataset_idx=0,  # adjust if you have multiple datasets
-                start_time=time - 1,
-                end_time=time,
-                n_times=400,
-                cond_vector=cond_vector,
-                use_sde=False,
-            )
+            results.append({"Time": time, "Avg ODE": avg_ode, "Avg SDE": avg_sde})
 
-            # Simulate trajectory with SDE dynamics.
-            traj_sde = simulate_trajectory(
-                self.func_v,
-                self.v_correction,
-                self.score_net,
-                x0,
-                dataset_idx=0,
-                start_time=time - 1,
-                end_time=time,
-                n_times=400,
-                cond_vector=cond_vector,
-                use_sde=True,
-            )
+        self.val_results.extend(results)
 
-            # Compute Wasserstein distances for ODE and SDE trajectories.
-            w_dist_ode = wasserstein(traj_ode[-1], true_dist)
-            w_dist_sde = wasserstein(traj_sde[-1], true_dist)
+    def on_validation_epoch_end(self):
+        # Flatten results if multiple batches
+        all_results = self.val_results
 
-            # Save metrics for this time slice.
-            results.append({"Time": time, "Avg ODE": w_dist_ode, "Avg SDE": w_dist_sde})
+        # Sort results by time and log the table
+        all_results = sorted(all_results, key=lambda r: r["Time"])
+        import pandas as pd
+        df = pd.DataFrame(all_results)
+        table_str = df.to_markdown(index=False)
+        self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+        # Optionally also log individual metrics:
+        for row in all_results:
+            self.log(f"val/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True)
+            self.log(f"val/w_dist_sde_time_{row['Time']}", row["Avg SDE"], prog_bar=True)
 
-        # Return results as the output of validation_step.
-        return results
+        self.val_results.clear()
+
 
     def test_step(self, *args, **kwargs):
         pass
