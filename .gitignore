@@ -156,5 +156,6 @@ configs/local/default.yaml
 .aim
 
 # leave_one_out results
+results/
 loo_results/
 .cursor/rules/gemini-rules.mdc
