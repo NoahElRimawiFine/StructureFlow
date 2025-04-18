@@ -200,7 +200,7 @@ def plot_comparison_heatmaps(
     cmap="RdBu_r",
     figsize_per_plot=(3.5, 3.5),
     invert_yaxis=True,
-    mask_diagonal=False,
+    mask_diagonal=True,
 ):
     """Plots a row of heatmaps, one for each (title, matrix) pair in `matrices_and_titles`.
 
@@ -308,15 +308,21 @@ def plot_comparison_heatmaps(
 
 
 def maskdiag(A):
-    """Zero out the diagonal entries (or remove them) from matrix A."""
-    # Handle non-square matrices by creating an appropriate mask
-    rows, cols = A.shape
-    mask = np.ones((rows, cols))
-    # Only zero out diagonal elements where they exist (min dimension)
-    min_dim = min(rows, cols)
+    """Zero out the diagonal entries from matrix A, correctly handling non-square matrices.
+    Args:
+        A: numpy array of shape (rows, cols)
+    Returns:
+        numpy array with diagonal elements zeroed out
+    """
+    # Create a copy to avoid modifying the original
+    A_masked = A.copy()
+    
+    # Zero out the diagonal elements (only where they exist)
+    min_dim = min(A.shape[0], A.shape[1])
     for i in range(min_dim):
-        mask[i, i] = 0
-    return A * mask
+        A_masked[i, i] = 0
+        
+    return A_masked
 
 
 def plot_aupr_curve(A_true, W_v, prefix="val"):
