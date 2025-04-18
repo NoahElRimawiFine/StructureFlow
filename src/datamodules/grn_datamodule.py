@@ -1,12 +1,14 @@
 import glob
 import os
+import logging
+log = logging.getLogger(__name__)
 
 import anndata as ad
 import lightning.pytorch as pl
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, Dataset, random_split, IterableDataset
+from torch.utils.data import DataLoader, Dataset, random_split, IterableDataset, ConcatDataset
 
 from .components import sc_dataset as util
 
@@ -58,7 +60,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         """
         Args:
             data_path: Path to data directory
-            dataset_type: "Synthetic" or "Curated"
+            dataset_type: "Synthetic", "Curated", or "Renge"
             batch_size: batch size for the DataLoader
             num_workers: how many workers for DataLoader
             train_val_test_split: ratio to split the entire dataset
@@ -100,66 +102,12 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
           build/transform Datasets, and split them.
         """
         if stage == "fit" or stage is None:
-            # We'll load everything once
-            paths = []
-            if self.dataset_type == "Synthetic":
-                paths = glob.glob(
-                    os.path.join(self.data_path, f"{self.dataset}/{self.dataset}*-1")
-                ) + glob.glob(
-                    os.path.join(self.data_path, f"{self.dataset}_ko*/{self.dataset}*-1")
-                )
-            elif self.dataset_type == "Curated":
-                paths = glob.glob(os.path.join(self.data_path, "HSC*/HSC*-1"))
+            if self.dataset_type == "Renge":
+                self._setup_renge_data()
             else:
-                raise ValueError(f"Unknown dataset type: {self.dataset_type}")
+                self._setup_synthetic_or_curated_data()
 
-            self.adatas = [util.load_adata(p) for p in paths]
-
-            # Build the reference matrix
-            df = pd.read_csv(os.path.join(os.path.dirname(paths[0]), "refNetwork.csv"))
-            n_genes = self.adatas[0].n_vars
-            self.dim = n_genes
-            self.true_matrix = pd.DataFrame(
-                np.zeros((n_genes, n_genes), int),
-                index=self.adatas[0].var.index,
-                columns=self.adatas[0].var.index,
-            )
-            for i in range(df.shape[0]):
-                _i = df.iloc[i, 1]  # target gene
-                _j = df.iloc[i, 0]  # source gene
-                _v = {"+": 1, "-": -1}[df.iloc[i, 2]]
-                self.true_matrix.loc[_i, _j] = _v
-
-            # Bin timepoints
-            t_bins = np.linspace(0, 1, self.T + 1)[:-1]
-            for adata in self.adatas:
-                adata.obs["t"] = np.digitize(adata.obs.t_sim, t_bins) - 1
-
-            # Identify the knockouts
-            self.kos = []
-            for p in paths:
-                try:
-                    self.kos.append(os.path.basename(p).split("_ko_")[1].split("-")[0])
-                except IndexError:
-                    self.kos.append(None)
-
-            # gene_to_index for knockouts
-            self.gene_to_index = {gene: idx for idx, gene in enumerate(self.adatas[0].var.index)}
-            self.ko_indices = []
-            for ko in self.kos:
-                if ko is None:
-                    self.ko_indices.append(None)
-                else:
-                    self.ko_indices.append(self.gene_to_index[ko])
-
-            # Now build a single "full" dataset from all adatas,
-            all_datasets = []
-            for adata in self.adatas:
-                ds = adata
-                all_datasets.append(ds)
-
-            from torch.utils.data import ConcatDataset
-
+            # Create datasets from the loaded AnnData objects
             wrapped_datasets = [
                 AnnDataDataset(adata, source_id=i) for i, adata in enumerate(self.adatas)
             ]
@@ -175,8 +123,160 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                 self._full_dataset, [train_len, val_len, test_len]
             )
 
-        # if stage == "test" or something, we could do different logic
-        # but often we do all in one go
+    def _setup_synthetic_or_curated_data(self):
+        """Load Synthetic or Curated data from disk."""
+        # We'll load everything once
+        paths = []
+        if self.dataset_type == "Synthetic":
+            paths = glob.glob(
+                os.path.join(self.data_path, f"{self.dataset}/{self.dataset}*-1")
+            ) + glob.glob(
+                os.path.join(self.data_path, f"{self.dataset}_ko*/{self.dataset}*-1")
+            )
+        elif self.dataset_type == "Curated":
+            paths = glob.glob(os.path.join(self.data_path, "HSC*/HSC*-1"))
+        else:
+            raise ValueError(f"Unknown dataset type: {self.dataset_type}")
+
+        self.adatas = [util.load_adata(p) for p in paths]
+
+        # Build the reference matrix
+        df = pd.read_csv(os.path.join(os.path.dirname(paths[0]), "refNetwork.csv"))
+        n_genes = self.adatas[0].n_vars
+        self.dim = n_genes
+        self.true_matrix = pd.DataFrame(
+            np.zeros((n_genes, n_genes), int),
+            index=self.adatas[0].var.index,
+            columns=self.adatas[0].var.index,
+        )
+        for i in range(df.shape[0]):
+            _i = df.iloc[i, 1]  # target gene
+            _j = df.iloc[i, 0]  # source gene
+            _v = {"+": 1, "-": -1}[df.iloc[i, 2]]
+            self.true_matrix.loc[_i, _j] = _v
+
+        # Bin timepoints
+        t_bins = np.linspace(0, 1, self.T + 1)[:-1]
+        for adata in self.adatas:
+            adata.obs["t"] = np.digitize(adata.obs.t_sim, t_bins) - 1
+
+        # Identify the knockouts
+        self.kos = []
+        for p in paths:
+            try:
+                self.kos.append(os.path.basename(p).split("_ko_")[1].split("-")[0])
+            except IndexError:
+                self.kos.append(None)
+
+        # gene_to_index for knockouts
+        self.gene_to_index = {gene: idx for idx, gene in enumerate(self.adatas[0].var.index)}
+        self.ko_indices = []
+        for ko in self.kos:
+            if ko is None:
+                self.ko_indices.append(None)
+            else:
+                self.ko_indices.append(self.gene_to_index[ko])
+
+    def _setup_renge_data(self):
+        """Load Renge data from disk and convert to AnnData objects."""
+        # Load the Renge data files
+        x_renge_path = os.path.join(self.data_path, "X_renge_d2_80.csv")
+        e_renge_path = os.path.join(self.data_path, "E_renge_d2_80.csv")
+
+        # Load the reference network if available
+        ref_network_path = os.path.join(self.data_path, "A_ref_thresh_0.csv")
+        try:
+            ref_network = pd.read_csv(ref_network_path, index_col=0)
+            has_ref_network = True
+        except FileNotFoundError:
+            has_ref_network = False
+        
+        # Load the data
+        x_renge = pd.read_csv(x_renge_path, index_col=0)
+        e_renge = pd.read_csv(e_renge_path, index_col=0)
+        
+        # Create the reference network matrix
+        if has_ref_network:
+            # Handle the non-square reference network
+            # Get all unique genes from both rows and columns of ref_network
+            all_genes = list(set(list(ref_network.index) + list(ref_network.columns)))
+            
+            # Create a square matrix from the non-square reference
+            square_matrix = pd.DataFrame(
+                np.zeros((len(all_genes), len(all_genes)), int),
+                index=all_genes,
+                columns=all_genes,
+            )
+            
+            # Fill in the values from the reference network
+            for i in ref_network.index:
+                for j in ref_network.columns:
+                    if i in square_matrix.index and j in square_matrix.columns:
+                        square_matrix.loc[i, j] = ref_network.loc[i, j]
+            
+            self.true_matrix = square_matrix
+        else:
+            # Create an empty matrix if no reference is available
+            self.true_matrix = pd.DataFrame(
+                np.zeros((self.dim, self.dim), int),
+                index=gene_names,
+                columns=gene_names,
+            )
+        
+        # Extract time column from X_RENGE
+        time_column = x_renge.pop('t').values
+        
+        # Get gene names (all columns except the last one from X_RENGE, and first one is cell IDs)
+        gene_names = x_renge.columns.tolist()[1:]
+        self.dim = len(gene_names)
+        
+        # Create a dictionary to group cells by knockout gene
+        # e.g., ko_groups = {'gene1': [cell1, cell2], 'gene2': [cell3, cell4]}
+        ko_groups = {}
+        
+        # For each row, determine the knockout gene (if any)
+        for idx, row in x_renge.iterrows():
+            ko_gene = None
+            for gene in gene_names:
+                if row[gene] == 1.0:
+                    ko_gene = gene 
+                    break
+            
+            # Add to appropriate group (None for wildtype)
+            if ko_gene not in ko_groups:
+                ko_groups[ko_gene] = []
+            ko_groups[ko_gene].append(idx)
+        
+        # Create separate AnnData objects for each knockout condition
+        self.adatas = []
+        self.kos = []
+        self.ko_indices = []
+        
+        # gene_to_index mapping
+        self.gene_to_index = {gene: idx for idx, gene in enumerate(gene_names)}
+        
+        for ko_gene, cell_indices in ko_groups.items():
+            # Extract expression data for these cells
+            # e.g., subset_expr = pd.DataFrame([[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]], index=[cell1, cell3])
+            subset_expr = e_renge.loc[cell_indices]
+            # Extract time data for these cells
+            # e.g., subset_time = pd.Series([0.1, 0.2, 0.3, 0.4], index=[cell1, cell3, cell4, cell7])
+            subset_time = pd.Series(time_column[np.where(np.isin(x_renge.index, cell_indices))[0]], 
+                                   index=cell_indices)
+            
+            # Create AnnData object
+            adata = ad.AnnData(X=subset_expr.values)
+            adata.obs_names = subset_expr.index
+            adata.var_names = e_renge.columns
+            
+            # Store time in obs
+            unique_times = np.unique(subset_time.values)
+            time_mapping = {t: i for i, t in enumerate(sorted(unique_times))}
+            adata.obs['t'] = np.array([time_mapping[t] for t in subset_time.values])
+
+            self.adatas.append(adata)
+            self.kos.append(ko_gene)
+            self.ko_indices.append(None if ko_gene is None else self.gene_to_index[ko_gene])
 
     def get_subset_adatas(self, split: str = "train"):
         """Returns a list of AnnData objects, each containing only the cells used in the specified
@@ -228,6 +328,10 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
 
         return subset_adatas
 
+    def _identity_collate(self, x):
+        """Identity collate function that returns the input batch."""
+        return x
+
     def train_dataloader(self):
         if self.use_dummy_train_loader:
             print(f"Using dummy infinite train dataloader for approx {self.dummy_loader_steps} steps.")
@@ -247,7 +351,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             batch_size=self.dim,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=lambda x: x
+            collate_fn=self._identity_collate
         )
 
     def test_dataloader(self):
