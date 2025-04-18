@@ -5,6 +5,7 @@ from typing import Any, List, Optional, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn.functional as F
 import torchsde
@@ -14,6 +15,7 @@ from lightning.pytorch import (
     Trainer,
     seed_everything,
 )
+from sklearn.metrics import average_precision_score, precision_recall_curve
 from torch.distributions import MultivariateNormal
 from torchdyn.core import NeuralODE
 from torchvision import transforms
@@ -33,6 +35,7 @@ from .components.plotting import (
     plot_paths,
     plot_samples,
     plot_trajectory,
+    maskdiag,
 )
 from .components.schedule import ConstantNoiseScheduler, NoiseScheduler
 from .components.solver import TrajectorySolver, simulate_trajectory, wasserstein
@@ -207,7 +210,7 @@ class SF2MLitModule(LightningModule):
     def build_entropic_otfms(self, adatas, T, sigma, dt):
         """Returns a list of EntropicOTFM objects, one per dataset."""
         otfms = []
-        for adata in adatas:
+        for i, adata in enumerate(adatas):
             x_tensor = torch.tensor(adata.X, dtype=torch.float32)
             t_idx = torch.tensor(adata.obs["t"], dtype=torch.long)
             model = EntropicOTFM(
@@ -340,13 +343,48 @@ class SF2MLitModule(LightningModule):
     def on_train_epoch_end(self):
         if not self.enable_epoch_end_hook:
             return
+        
+        # Import pandas at the beginning of the method
+        import pandas as pd
+        
+        # Get all gene names from the model
+        model_gene_names = self.data_loader.adatas[0].var_names
+        
+        # Compute the full Jacobian (estimated causal graph)
         with torch.no_grad():
-            A_estim = compute_global_jacobian(self.func_v, self.adatas, dt=1 / 5, device="cpu")
+            A_estim = compute_global_jacobian(self.func_v, self.adatas, dt=1/self.T, device=torch.device("cpu"))
+        
+        # Get the directly extracted causal graph from the model
         W_v = self.func_v.causal_graph(w_threshold=0.0).T
-        A_true = self.true_matrix
-
-        plot_auprs(W_v, A_estim, A_true, self.logger, self.global_step)
-        log_causal_graph_matrices(A_estim, W_v, A_true, self.logger, self.global_step)
+        
+        # Different handling for DataFrame (Renge) vs. numpy array (synthetic)
+        if isinstance(self.data_loader.true_matrix, pd.DataFrame):
+            # For Renge dataset: extract the exact subset that matches the reference network
+            ref_network = self.data_loader.true_matrix
+            ref_rows = ref_network.index
+            ref_cols = ref_network.columns
+            
+            # Create DataFrames for the estimated graphs with all genes
+            A_estim_df = pd.DataFrame(A_estim, index=model_gene_names, columns=model_gene_names)
+            W_v_df = pd.DataFrame(W_v, index=model_gene_names, columns=model_gene_names)
+            
+            # Extract the exact subset that corresponds to the reference network dimensions
+            A_estim_subset = A_estim_df.loc[ref_rows, ref_cols]
+            W_v_subset = W_v_df.loc[ref_rows, ref_cols]
+            
+            # Convert to numpy arrays for evaluation
+            A_estim_np = A_estim_subset.values
+            W_v_np = W_v_subset.values
+            A_true_np = ref_network.values
+            
+            # Plot with the subset matrices
+            plot_auprs(W_v_np, A_estim_np, A_true_np, self.logger, self.global_step)
+            log_causal_graph_matrices(A_estim_np, W_v_np, A_true_np, self.logger, self.global_step)
+        else:
+            # Standard handling for synthetic data
+            A_true = self.true_matrix
+            plot_auprs(W_v, A_estim, A_true, self.logger, self.global_step)
+            log_causal_graph_matrices(A_estim, W_v, A_true, self.logger, self.global_step)
 
         table_rows = []
 
@@ -408,7 +446,6 @@ class SF2MLitModule(LightningModule):
 
             # Sort results by time and log the table
             all_results = sorted(all_results, key=lambda r: r["Time"])
-            import pandas as pd
             df = pd.DataFrame(all_results)
             table_str = df.to_markdown(index=False)
             self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
@@ -424,16 +461,50 @@ class SF2MLitModule(LightningModule):
     def validation_step(self, batch, batch_idx):
         if not self.enable_epoch_end_hook:
             return
-        with torch.no_grad():
-            A_estim = compute_global_jacobian(self.func_v, self.adatas, dt=1 / 5, device="cpu")
-        W_v = self.func_v.causal_graph(w_threshold=0.0).T
-        A_true = self.true_matrix
-
-        plot_auprs(W_v, A_estim, A_true, self.logger, self.global_step)
-        log_causal_graph_matrices(A_estim, W_v, A_true, self.logger, self.global_step)
-
+        
+        # Get validation adatas
         val_adatas = self.data_loader.get_subset_adatas("val")
-
+        
+        # Get all gene names from the model
+        model_gene_names = self.data_loader.adatas[0].var_names
+        
+        # Compute the full Jacobian (estimated causal graph)
+        with torch.no_grad():
+            A_estim = compute_global_jacobian(self.func_v, val_adatas, dt=1/self.T, device=torch.device("cpu"))
+        
+        # Get the directly extracted causal graph from the model
+        W_v = self.func_v.causal_graph(w_threshold=0.0).T
+        
+        # Different handling for DataFrame (Renge) vs. numpy array (synthetic)
+        if isinstance(self.data_loader.true_matrix, pd.DataFrame):
+            # For Renge dataset: extract the exact subset that matches the reference network
+            ref_network = self.data_loader.true_matrix
+            ref_rows = ref_network.index
+            ref_cols = ref_network.columns
+            
+            # Create DataFrames for the estimated graphs with all genes
+            A_estim_df = pd.DataFrame(A_estim, index=model_gene_names, columns=model_gene_names)
+            W_v_df = pd.DataFrame(W_v, index=model_gene_names, columns=model_gene_names)
+            
+            # Extract the exact subset that corresponds to the reference network dimensions
+            A_estim_subset = A_estim_df.loc[ref_rows, ref_cols]
+            W_v_subset = W_v_df.loc[ref_rows, ref_cols]
+            
+            # Convert to numpy arrays for evaluation
+            A_estim_np = A_estim_subset.values
+            W_v_np = W_v_subset.values
+            A_true_np = ref_network.values
+            
+            # Plot with the subset matrices
+            plot_auprs(W_v_np, A_estim_np, A_true_np, self.logger, self.global_step)
+            log_causal_graph_matrices(A_estim_np, W_v_np, A_true_np, self.logger, self.global_step)
+        else:
+            # Standard handling for synthetic data
+            A_true = self.true_matrix
+            plot_auprs(W_v, A_estim, A_true, self.logger, self.global_step)
+            log_causal_graph_matrices(A_estim, W_v, A_true, self.logger, self.global_step)
+        
+        # Continue with the standard Wasserstein distance evaluation
         results = []
 
         for time in range(1, self.T):
@@ -488,13 +559,12 @@ class SF2MLitModule(LightningModule):
 
         self.val_results.extend(results)
 
-    def on_validation_epoch_end(self):
+    def on_validation_epoch_end(self):        
         # Flatten results if multiple batches
         all_results = self.val_results
 
         # Sort results by time and log the table
         all_results = sorted(all_results, key=lambda r: r["Time"])
-        import pandas as pd
         df = pd.DataFrame(all_results)
         table_str = df.to_markdown(index=False)
         self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
@@ -523,74 +593,3 @@ class SF2MLitModule(LightningModule):
             eps=1e-7,
         )
         return optimizer
-
-
-# class SF2MLitModule(LightningModule):
-#     """SF2M Module for training generative models and learning structure."""
-
-#     def __init__(
-#         self,
-#         net: Any,
-#         score_net: Any,
-#         corr_net: Any,
-#         optimizer: Any,
-#         datamodule: LightningDataModule,
-#         partial_solver: FlowSolver,
-#         scheduler: Optional[Any] = None,
-#         neural_ode: Optional[Any] = None,
-#         ot_sampler: Optional[Union[str, Any]] = EntropicOTFM,
-#         sigma: Optional[NoiseScheduler] = None,
-#         sigma_min: float = 0.1,
-#         alpha: float = 0.1,
-#         corr_strength: float = 1e-3,
-#         reg: float = 1e-4,
-#         lr: float = 1e-3,
-#         batch_size: int = 64,
-#         skip_time=None,
-#         avg_size: int = -1,
-#         leaveout_timepoint: int = -1,
-#         test_nfe: int = 100,
-#         plot: bool = False,
-#         nice_name: Optional[str] = "SF2M",
-#     ) -> None:
-#         super().__init__()
-#         self.save_hyperparameters(
-#             ignore=[
-#                 "net",
-#                 "corr_net",
-#                 "score_net",
-#                 "scheduler",
-#                 "datamodule",
-#                 "partial_solver",
-#             ],
-#             logger=False,
-#         )
-
-#         self.is_trajectory = False
-#         if hasattr(datamodule, "IS_TRAJECTORY"):
-#             self.is_trajectory = datamodule.IS_TRAJECTORY
-#         if hasattr(datamodule, "dim"):
-#             self.dim = datamodule.dim
-#         elif hasattr(datamodule, "dims"):
-#             self.dim = datamodule.dims
-#         else:
-#             raise NotImplementedError("Datamodule must have either dim or dims")
-#         self.net = net
-#         self.score_net = score_net
-#         self.corr_net = corr_net
-
-#         self.partial_solver = partial_solver
-#         self.optimizer = optimizer
-#         self.scheduler = scheduler
-#         self.ot_sampler = ot_sampler
-#         self.alpha = alpha
-#         self.corr_strength = corr_strength
-#         self.reg = reg
-#         self.batch_size = batch_size
-#         self.skip_time = skip_time
-#         self.sigma = sigma
-#         if sigma is None:
-#             self.sigma = ConstantNoiseScheduler(sigma_min)
-#         self.criterion = torch.nn.MSELoss()
-#         self.otfms = []
-#         self.cond_matrix = []

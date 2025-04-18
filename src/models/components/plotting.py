@@ -190,6 +190,8 @@ def plot_samples(trajs, title="samples", wandb_logger=None):
 
 def plot_comparison_heatmaps(
     matrices_and_titles,
+    row_gene_names=None,
+    col_gene_names=None,
     gene_names=None,
     main_title="Heatmaps Representing Gene-Gene Interactions",
     default_vrange=(-2.5, 2.5),
@@ -198,6 +200,7 @@ def plot_comparison_heatmaps(
     cmap="RdBu_r",
     figsize_per_plot=(3.5, 3.5),
     invert_yaxis=True,
+    mask_diagonal=True,
 ):
     """Plots a row of heatmaps, one for each (title, matrix) pair in `matrices_and_titles`.
 
@@ -205,9 +208,15 @@ def plot_comparison_heatmaps(
         matrices_and_titles (list of (str, 2D array-like)):
             A list of tuples: (title, matrix). The matrix can be a numpy array or something convertible to DataFrame.
 
+        row_gene_names (list of str, optional):
+            If provided, used for row labels in the DataFrame.
+
+        col_gene_names (list of str, optional):
+            If provided, used for column labels in the DataFrame.
+
         gene_names (list of str, optional):
-            If provided, used for row/col labels in the DataFrame.
-            If None, numeric indices will be used.
+            If provided and row_gene_names/col_gene_names are not provided, used for both row/col labels in the DataFrame.
+            Kept for backward compatibility.
 
         main_title (str):
             A main title displayed above all subplots.
@@ -231,6 +240,9 @@ def plot_comparison_heatmaps(
 
         invert_yaxis (bool):
             If True, calls `plt.gca().invert_yaxis()` for each subplot.
+            
+        mask_diagonal (bool):
+            If True, masks the diagonal of each matrix before plotting.
 
     Example:
         plot_comparison_heatmaps(
@@ -241,7 +253,8 @@ def plot_comparison_heatmaps(
                 ("Model B", matrixB_wt),
                 ("True", true_matrix),
             ],
-            gene_names=gene_list,
+            row_gene_names=row_genes,
+            col_gene_names=col_genes,
             main_title="Comparison of Gene Interactions",
             default_vrange=(-2.5, 2.5),
             special_titles_for_range={"Model B KO", "Model B", "True"},
@@ -251,6 +264,11 @@ def plot_comparison_heatmaps(
     if special_titles_for_range is None:
         special_titles_for_range = set()
 
+    # For backward compatibility
+    if row_gene_names is None and col_gene_names is None and gene_names is not None:
+        row_gene_names = gene_names
+        col_gene_names = gene_names
+
     n = len(matrices_and_titles)
     figwidth = figsize_per_plot[0] * n
     figheight = figsize_per_plot[1]
@@ -259,12 +277,15 @@ def plot_comparison_heatmaps(
 
     for i, (title, matrix) in enumerate(matrices_and_titles, start=1):
         plt.subplot(1, n, i)
+        
+        # Apply maskdiag if requested
+        matrix_to_plot = maskdiag(matrix) if mask_diagonal else matrix
 
         # Build DataFrame for seaborn
-        if gene_names is not None:
-            df = pd.DataFrame(matrix, index=gene_names, columns=gene_names)
+        if row_gene_names is not None and col_gene_names is not None:
+            df = pd.DataFrame(matrix_to_plot, index=row_gene_names, columns=col_gene_names)
         else:
-            df = pd.DataFrame(matrix)
+            df = pd.DataFrame(matrix_to_plot)
 
         # Decide the color range
         if title in special_titles_for_range:
@@ -287,8 +308,21 @@ def plot_comparison_heatmaps(
 
 
 def maskdiag(A):
-    """Zero out the diagonal entries (or remove them) from matrix A."""
-    return A * (1 - np.eye(A.shape[0]))
+    """Zero out the diagonal entries from matrix A, correctly handling non-square matrices.
+    Args:
+        A: numpy array of shape (rows, cols)
+    Returns:
+        numpy array with diagonal elements zeroed out
+    """
+    # Create a copy to avoid modifying the original
+    A_masked = A.copy()
+    
+    # Zero out the diagonal elements (only where they exist)
+    min_dim = min(A.shape[0], A.shape[1])
+    for i in range(min_dim):
+        A_masked[i, i] = 0
+        
+    return A_masked
 
 
 def plot_aupr_curve(A_true, W_v, prefix="val"):

@@ -1,0 +1,15 @@
+_target_: src.datamodules.grn_datamodule.TrajectoryStructureDataModule
+
+# Define dataset parameters
+data_path: ${paths.data_dir}
+dataset_type: "Renge"
+
+# DataLoader parameters
+batch_size: 64
+num_workers: 1
+
+# Train-validation-test split
+train_val_test_split: [0.8, 0.1, 0.1]
+
+# Timepoints
+T: 4

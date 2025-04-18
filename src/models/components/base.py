@@ -267,7 +267,7 @@ class MLPODEFKO(nn.Module):
         fc1_weight = self.fc1.weight  # [j * m1, i]
         fc1_weight = fc1_weight.view(d, -1, d)  # [j, m1, i]
         W = torch.sum(fc1_weight**2, dim=1).pow(0.5)  # [i, j]
-        W = W.cpu().detach().cpu().numpy()  # [i, j]
+        W = W.cpu().detach().numpy()  # [i, j]
         W[np.abs(W) < w_threshold] = 0
         return np.round(W, 2)
 
