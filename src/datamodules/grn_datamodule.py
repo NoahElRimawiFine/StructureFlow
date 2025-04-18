@@ -288,8 +288,11 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             batch_size=self.dim,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=lambda x: x
+            collate_fn=self.identity_collate
         )
+        
+    def identity_collate(self, batch):
+        return batch
 
     def test_dataloader(self):
         return DataLoader(
