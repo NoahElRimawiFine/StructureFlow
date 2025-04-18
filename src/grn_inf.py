@@ -5,6 +5,7 @@ import pandas as pd
 import torch
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.loggers import TensorBoardLogger
+import matplotlib.pyplot as plt
 
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.sf2m_module import SF2MLitModule
@@ -14,7 +15,7 @@ from src.models.components.plotting import compute_global_jacobian, plot_auprs
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Synthetic"
 DEFAULT_MODEL_TYPE = "sf2m"
-DEFAULT_N_STEPS = 2000
+DEFAULT_N_STEPS = 15000
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 1e-3
 DEFAULT_ALPHA = 0.5
@@ -170,9 +171,7 @@ def main(args):
     plt.savefig(os.path.join(RESULTS_DIR, "grn_plots", "adjacency_matrices.png"))
     plt.close()
     
-    # Calculate and plot AUPR curves
-    aupr_file = os.path.join(RESULTS_DIR, "grn_plots", "aupr_curves.png")
-    plot_auprs(W_v, A_estim, A_true, save_path=aupr_file)
+    plot_auprs(W_v, A_estim, A_true)
     
     # Print some metrics
     print("\n===== GRN Inference Results =====")
