@@ -1,0 +1,230 @@
+import os
+import argparse
+import numpy as np
+import pandas as pd
+import torch
+from lightning.pytorch import Trainer, seed_everything
+from lightning.pytorch.loggers import TensorBoardLogger
+import matplotlib.pyplot as plt
+
+from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
+from src.models.sf2m_module import SF2MLitModule
+from src.models.components.plotting import compute_global_jacobian, plot_auprs
+
+# Default parameters
+DEFAULT_DATA_PATH = "data/"
+DEFAULT_DATASET_TYPE = "Synthetic"
+DEFAULT_MODEL_TYPE = "sf2m"
+DEFAULT_N_STEPS = 15000
+DEFAULT_BATCH_SIZE = 64
+DEFAULT_LR = 1e-3
+DEFAULT_ALPHA = 0.5
+DEFAULT_REG = 1e-5
+DEFAULT_CORRECTION_REG = 1e-3
+DEFAULT_GL_REG = 0.04
+DEFAULT_KNOCKOUT_HIDDEN = 100
+DEFAULT_SCORE_HIDDEN = [100, 100]
+DEFAULT_CORRECTION_HIDDEN = [64, 64]
+DEFAULT_SIGMA = 0.5
+DEFAULT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEFAULT_SEED = 42
+DEFAULT_RESULTS_DIR = "results"
+DEFAULT_USE_CORRECTION_MLP = True
+DEFAULT_LOG_TRANSFORM = False
+
+def main(args):
+    # Extract configuration from arguments
+    DATA_PATH = args.data_path
+    DATASET_TYPE = args.dataset_type
+    N_STEPS = args.n_steps
+    BATCH_SIZE = args.batch_size
+    LR = args.lr
+    ALPHA = args.alpha
+    REG = args.reg
+    CORRECTION_REG = args.correction_reg
+    GL_REG = args.gl_reg
+    KNOCKOUT_HIDDEN = args.knockout_hidden
+    SCORE_HIDDEN = [int(x) for x in args.score_hidden.split(',')]
+    CORRECTION_HIDDEN = [int(x) for x in args.correction_hidden.split(',')]
+    SIGMA = args.sigma
+    DEVICE = args.device
+    SEED = args.seed
+    RESULTS_DIR = args.results_dir
+    MODEL_TYPE = args.model_type
+    USE_CORRECTION_MLP = args.use_correction_mlp
+    LOG_TRANSFORM = args.log_transform
+    
+    # Create results directory with model type and seed info
+    RESULTS_DIR = os.path.join(
+        RESULTS_DIR, 
+        f"{DATASET_TYPE}_{MODEL_TYPE}_seed{SEED}"
+    )
+    
+    seed_everything(SEED, workers=True)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    # --- 1. Load Data ---
+    print("Loading dataset...")
+    datamodule = TrajectoryStructureDataModule(
+        data_path=DATA_PATH,
+        dataset_type=DATASET_TYPE,
+        batch_size=BATCH_SIZE,
+        num_workers=0,
+        log_transform=LOG_TRANSFORM,
+    )
+    datamodule.prepare_data()
+    datamodule.setup(stage="fit")
+    
+    full_adatas = datamodule.get_subset_adatas()
+    if not full_adatas:
+        raise ValueError("No datasets loaded.")
+    T_max = int(max(adata.obs['t'].max() for adata in full_adatas))
+    T_times = T_max + 1
+    DT_data = 1.0 / T_max if T_max > 0 else 1.0
+
+    print(f"Data loaded. Found {len(full_adatas)} datasets with T_max={T_max}.")
+    print(f"Kos: {datamodule.kos}")
+    print(f"Using model type: {MODEL_TYPE}")
+
+    # --- 2. Create and Train Model ---
+    print(f"Creating model...")
+    
+    # Configure correct flags based on MODEL_TYPE
+    use_mlp = MODEL_TYPE == "mlp_baseline"
+    use_correction = USE_CORRECTION_MLP and not use_mlp
+    
+    model = SF2MLitModule(
+        datamodule=datamodule,
+        T=T_max,
+        sigma=SIGMA,
+        dt=DT_data,
+        batch_size=BATCH_SIZE,
+        alpha=ALPHA,
+        reg=REG,
+        correction_reg_strength=CORRECTION_REG,
+        n_steps=N_STEPS,
+        lr=LR,
+        device=DEVICE,
+        GL_reg=GL_REG,
+        knockout_hidden=KNOCKOUT_HIDDEN,
+        score_hidden=SCORE_HIDDEN,
+        correction_hidden=CORRECTION_HIDDEN,
+        enable_epoch_end_hook=False,
+        use_mlp_baseline=use_mlp,
+        use_correction_mlp=use_correction,
+    )
+    
+    # Train the model with Lightning
+    print("Setting up Trainer...")
+    logger = TensorBoardLogger(RESULTS_DIR, name="grn_training")
+    trainer = Trainer(
+        max_epochs=-1,
+        max_steps=N_STEPS,
+        accelerator="cpu" if DEVICE == "cpu" else "gpu",
+        devices=1,
+        logger=logger,
+        enable_checkpointing=True,
+        enable_progress_bar=True,
+        log_every_n_steps=100,
+    )
+    
+    print(f"Training model for {N_STEPS} steps...")
+    trainer.fit(model, datamodule=datamodule)
+    print("Training complete.")
+
+    # --- 3. Evaluate and Plot GRN ---
+    print("Evaluating model and plotting GRN...")
+    model.eval()
+
+    # Compute the global Jacobian
+    with torch.no_grad():
+        A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=1/T_max, device=DEVICE)
+    
+    # Get the causal graph from the model
+    W_v = model.func_v.causal_graph(w_threshold=0.0).T
+    
+    # Get the ground truth matrix
+    A_true = model.true_matrix
+    
+    # Plot the GRN and save the figures
+    os.makedirs(os.path.join(RESULTS_DIR, "grn_plots"), exist_ok=True)
+    
+    # Plot matrices
+    fig, axs = plt.subplots(1, 3, figsize=(18, 6))
+    
+    # Plot the true adjacency matrix
+    im0 = axs[0].imshow(A_true, cmap="RdBu", vmin=-1, vmax=1)
+    axs[0].set_title("True Adjacency Matrix")
+    plt.colorbar(im0, ax=axs[0])
+    
+    # Plot the learned causal graph
+    im1 = axs[1].imshow(W_v, cmap="RdBu", vmin=-np.max(np.abs(W_v)), vmax=np.max(np.abs(W_v)))
+    axs[1].set_title("Learned Causal Graph")
+    plt.colorbar(im1, ax=axs[1])
+    
+    # Plot the Jacobian matrix
+    im2 = axs[2].imshow(A_estim, cmap="RdBu", vmin=-np.max(np.abs(A_estim)), vmax=np.max(np.abs(A_estim)))
+    axs[2].set_title("Estimated Jacobian")
+    plt.colorbar(im2, ax=axs[2])
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(RESULTS_DIR, "grn_plots", "adjacency_matrices.png"))
+    plt.close()
+    
+    plot_auprs(W_v, A_estim, A_true)
+    
+    # Print some metrics
+    print("\n===== GRN Inference Results =====")
+    
+    # Calculate edge prediction accuracy statistics
+    true_edges = np.abs(A_true) > 0
+    pred_edges_w = np.abs(W_v) > 0.1  # threshold can be adjusted
+    pred_edges_j = np.abs(A_estim) > 0.1  # threshold can be adjusted
+    
+    accuracy_w = np.mean((true_edges == pred_edges_w).astype(float))
+    accuracy_j = np.mean((true_edges == pred_edges_j).astype(float))
+    
+    print(f"Edge Prediction Accuracy (Causal Graph): {accuracy_w:.4f}")
+    print(f"Edge Prediction Accuracy (Jacobian): {accuracy_j:.4f}")
+    
+    print(f"\nResults saved in: {RESULTS_DIR}")
+    print(f"GRN plots saved in: {os.path.join(RESULTS_DIR, 'grn_plots')}")
+    print("Script finished.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="GRN inference from single-cell data")
+    
+    # Data parameters
+    parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH, help="Path to data directory")
+    parser.add_argument("--dataset_type", type=str, default=DEFAULT_DATASET_TYPE, choices=["Synthetic", "Curated"], help="Type of dataset to use")
+    parser.add_argument("--log_transform", action="store_true", default=DEFAULT_LOG_TRANSFORM, help="Apply log transformation to data")
+    
+    # Model parameters
+    parser.add_argument("--model_type", type=str, default=DEFAULT_MODEL_TYPE, choices=["sf2m", "mlp_baseline"], help="Type of model to use")
+    parser.add_argument("--use_correction_mlp", action="store_true", default=DEFAULT_USE_CORRECTION_MLP, help="Whether to use correction MLP for SF2M")
+    
+    # Training parameters
+    parser.add_argument("--n_steps", type=int, default=DEFAULT_N_STEPS, help="Number of training steps")
+    parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Batch size")
+    parser.add_argument("--lr", type=float, default=DEFAULT_LR, help="Learning rate")
+    parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA, help="Alpha weighting for score vs flow loss")
+    parser.add_argument("--reg", type=float, default=DEFAULT_REG, help="Regularization for flow model")
+    parser.add_argument("--correction_reg", type=float, default=DEFAULT_CORRECTION_REG, help="Regularization for correction network")
+    parser.add_argument("--gl_reg", type=float, default=DEFAULT_GL_REG, help="Group Lasso regularization strength")
+    
+    # Model architecture parameters
+    parser.add_argument("--knockout_hidden", type=int, default=DEFAULT_KNOCKOUT_HIDDEN, help="Knockout hidden dimension")
+    parser.add_argument("--score_hidden", type=str, default=",".join(map(str, DEFAULT_SCORE_HIDDEN)), help="Score hidden dimensions (comma-separated)")
+    parser.add_argument("--correction_hidden", type=str, default=",".join(map(str, DEFAULT_CORRECTION_HIDDEN)), help="Correction hidden dimensions (comma-separated)")
+    
+    # Simulation parameters
+    parser.add_argument("--sigma", type=float, default=DEFAULT_SIGMA, help="Noise level for simulation")
+    
+    # Other parameters
+    parser.add_argument("--device", type=str, default=DEFAULT_DEVICE, choices=["cpu", "cuda"], help="Device to use")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed")
+    parser.add_argument("--results_dir", type=str, default=DEFAULT_RESULTS_DIR, help="Directory to save results")
+    
+    args = parser.parse_args()
+    main(args)

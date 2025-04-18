@@ -29,12 +29,49 @@ class AnnDataDataset(Dataset):
             self.X = torch.tensor(adata.X, dtype=torch.float32)
         # Assume pseudo-time is stored in adata.obs["t"]
         self.t = torch.tensor(adata.obs["t"].values, dtype=torch.long)
+        # Add velocity data
+        if "velocity" in adata.obsm:
+            self.velocity = torch.tensor(adata.obsm["velocity"], dtype=torch.float32)
+        else:
+            self.velocity = None
 
     def __len__(self):
         return self.X.shape[0]
 
     def __getitem__(self, idx):
-        return {"X": self.X[idx], "t": self.t[idx], "source_id": self.source_id}
+        item = {"X": self.X[idx], "t": self.t[idx], "source_id": self.source_id}
+        if self.velocity is not None:
+            item["velocity"] = self.velocity[idx]
+        return item
+
+
+def load_adata_with_velocity(path, log_transform=False):
+    """Load AnnData with velocity information"""
+    # Load expression data
+    adata = ad.AnnData(
+        pd.read_csv(os.path.join(path, "ExpressionData.csv"), index_col=0).T
+    )
+
+    # Load pseudotime
+    df_pt = pd.read_csv(os.path.join(path, "PseudoTime.csv"), index_col=0)
+    df_pt[np.isnan(df_pt)] = 0
+    adata.obs["t_sim"] = np.max(df_pt.to_numpy(), -1)
+
+    # Load velocity data
+    velocity_df = pd.read_csv(os.path.join(path, "VelocityData.csv"), index_col=0).T
+    adata.obsm["velocity"] = velocity_df.values
+
+    if log_transform:
+        import scanpy as sc
+        sc.pp.log1p(adata)
+        
+    # Perform the same preprocessing as in the original load_adata function
+    import scanpy as sc
+    sc.tl.pca(adata)
+    sc.pp.neighbors(adata)
+    sc.tl.umap(adata, min_dist=0.9)
+
+    return adata
 
 
 class TrajectoryStructureDataModule(pl.LightningDataModule):
@@ -54,6 +91,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         T: int = 5,
         use_dummy_train_loader: bool = False,
         dummy_loader_steps: int = 10000,
+        log_transform: bool = False,
     ):
         """
         Args:
@@ -62,6 +100,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             batch_size: batch size for the DataLoader
             num_workers: how many workers for DataLoader
             train_val_test_split: ratio to split the entire dataset
+            log_transform: Whether to apply log1p transform to the data
         """
         super().__init__()
         self.use_dummy_train_loader = use_dummy_train_loader
@@ -73,6 +112,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.train_val_test_split = train_val_test_split
         self.T = T
+        self.log_transform = log_transform
 
         # Will be filled in setup():
         self.adatas = None
@@ -113,7 +153,8 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             else:
                 raise ValueError(f"Unknown dataset type: {self.dataset_type}")
 
-            self.adatas = [util.load_adata(p) for p in paths]
+            # Load data with velocity
+            self.adatas = [load_adata_with_velocity(p, self.log_transform) for p in paths]
 
             # Build the reference matrix
             df = pd.read_csv(os.path.join(os.path.dirname(paths[0]), "refNetwork.csv"))

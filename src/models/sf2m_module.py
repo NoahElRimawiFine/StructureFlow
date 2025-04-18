@@ -210,6 +210,12 @@ class SF2MLitModule(LightningModule):
         for adata in adatas:
             x_tensor = torch.tensor(adata.X, dtype=torch.float32)
             t_idx = torch.tensor(adata.obs["t"], dtype=torch.long)
+            
+            # Check if velocity data is available in the AnnData object
+            velocity_tensor = None
+            if "velocity" in adata.obsm:
+                velocity_tensor = torch.tensor(adata.obsm["velocity"], dtype=torch.float32)
+            
             model = EntropicOTFM(
                 x=x_tensor,
                 t_idx=t_idx,
@@ -218,6 +224,7 @@ class SF2MLitModule(LightningModule):
                 T=T,
                 dim=x_tensor.shape[1],
                 device=self.device,
+                velocity=velocity_tensor,  # Pass velocity data to EntropicOTFM
             )
             otfms.append(model)
         return otfms

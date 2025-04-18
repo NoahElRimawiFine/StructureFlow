@@ -33,9 +33,18 @@ class BridgeMatcher:
 
 
 class EntropicOTFM:
-    def __init__(self, x, t_idx, dt, sigma, T, dim, device):
-        def entropic_ot_plan(x0, x1, eps):
-            C = pot.utils.euclidean_distances(x0, x1, squared=True) / 2
+    def __init__(self, x, t_idx, dt, sigma, T, dim, device, velocity=None):
+        def entropic_ot_plan(x0, x1, eps, v0=None):
+            # If velocity data is available, use it to modify the cost
+            if v0 is not None:
+                # Predict where x0 would be after time t=1 using velocity
+                x0_predicted = x0 + v0*self.dt
+                # Use the predicted position for cost calculation
+                C = pot.utils.euclidean_distances(x0_predicted, x1, squared=True) / 2
+            else:
+                # Original cost function without velocity information
+                C = pot.utils.euclidean_distances(x0, x1, squared=True) / 2
+                
             p, q = torch.full((x0.shape[0],), 1 / x0.shape[0]), torch.full(
                 (x1.shape[0],), 1 / x1.shape[0]
             )
@@ -45,21 +54,33 @@ class EntropicOTFM:
         self.bm = BridgeMatcher()
         self.x = x
         self.t_idx = t_idx
+        self.velocity = velocity  # New parameter for velocity data
         self.dt = dt
         self.T = T
         self.dim = dim
         self.device = device
         self.Ts = []
+        
         # construct EOT plans
         for i in range(self.T - 1):
+            # Get data for current timepoint
+            x0 = self.x[self.t_idx == i, :]
+            x1 = self.x[self.t_idx == i + 1, :]
+            
+            # If velocity data is available, get velocities for current timepoint
+            v0 = None
+            if self.velocity is not None:
+                v0 = self.velocity[self.t_idx == i, :]
+            
+            # Calculate the entropic OT plan with velocity if available
             self.Ts.append(
                 entropic_ot_plan(
-                    self.x[self.t_idx == i, :],
-                    self.x[self.t_idx == i + 1, :],
+                    x0,
+                    x1,
                     self.dt * self.sigma**2,
+                    v0
                 )
             )
-
     def sample_bridges_flows(self, batch_size=64, skip_time=None):
         _x = []
         _t = []
