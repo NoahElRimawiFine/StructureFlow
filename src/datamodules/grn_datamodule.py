@@ -353,6 +353,9 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=self._identity_collate
         )
+        
+    def identity_collate(self, batch):
+        return batch
 
     def test_dataloader(self):
         return DataLoader(

@@ -20,7 +20,7 @@ from src.models.components.solver import mmd_squared, simulate_trajectory, wasse
 # Default configuration values (will be overridden by command line arguments)
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Synthetic"
-DEFAULT_N_STEPS_PER_FOLD = 10000
+DEFAULT_N_STEPS_PER_FOLD = 15000
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
 DEFAULT_ALPHA = 0.1
