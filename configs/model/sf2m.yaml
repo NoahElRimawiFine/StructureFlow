@@ -2,7 +2,7 @@ _target_: src.models.sf2m_module.SF2MLitModule
 _partial_: true
 
 datamodule: ${data}
-T: 4
+T: 5
 sigma: 1.0
 dt: 0.2
 batch_size: 64

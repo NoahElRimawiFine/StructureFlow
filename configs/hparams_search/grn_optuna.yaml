@@ -1,3 +1,5 @@
+# @package _global_
+
 defaults:
   - override /hydra/sweeper: optuna
 
@@ -14,9 +16,8 @@ hydra:
   sweeper:
     _target_: hydra_plugins.hydra_optuna_sweeper.optuna_sweeper.OptunaSweeper
 
-    # storage URL to persist optimization results
-    # for example, you can use SQLite if you set 'sqlite:///example.db'
-    storage: "sqlite:///optuna_results.db"  # Store results in a SQLite database
+    # Using in-memory storage to avoid SQLite issues
+    storage: null
 
     # name of the study to persist optimization results
     study_name: "sf2m_grn_optimization"
@@ -46,7 +47,6 @@ hydra:
       model.reg: interval(1e-6, 1e-4)  # Regularization strength
       model.GL_reg: interval(0.01, 0.15)  # Graph Laplacian regularization parameter
       model.n_steps: choice(10000, 15000, 20000)  # Number of training steps
-      model.dr: interval(0.1, 0.5)  # Added dropout rate for the network
       
       # Optimizer parameters
       model.optimizer.lr: interval(0.0001, 0.01)  # Learning rate
