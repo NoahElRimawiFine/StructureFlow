@@ -152,6 +152,7 @@ configs/local/default.yaml
 !data/.gitkeep
 /logs/
 .env
+./src/jobs/results
 
 # Aim logging
 .aim
