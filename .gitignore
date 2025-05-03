@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.DS_Store
 
 # C extensions
 *.so
@@ -151,6 +152,7 @@ configs/local/default.yaml
 !data/.gitkeep
 /logs/
 .env
+./src/jobs/results
 
 # Aim logging
 .aim
