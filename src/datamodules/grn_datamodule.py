@@ -91,7 +91,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         T: int = 5,
         use_dummy_train_loader: bool = False,
         dummy_loader_steps: int = 10000,
-        log_transform: bool = False,
+        log_transform: bool = True,
     ):
         """
         Args:

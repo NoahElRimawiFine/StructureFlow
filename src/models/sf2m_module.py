@@ -60,6 +60,7 @@ class SF2MLitModule(LightningModule):
         enable_epoch_end_hook: bool = True,
         use_mlp_baseline: bool = False,
         use_correction_mlp: bool = True,
+        use_velocity: bool = False,
     ):
         """Initializes the sf2m_ngm model and loads data.
 
@@ -204,7 +205,7 @@ class SF2MLitModule(LightningModule):
             mask[g, g] = 1.0
             return mask
 
-    def build_entropic_otfms(self, adatas, T, sigma, dt):
+    def build_entropic_otfms(self, adatas, T, sigma, dt, use_velocity=False):
         """Returns a list of EntropicOTFM objects, one per dataset."""
         otfms = []
         for adata in adatas:
@@ -213,9 +214,9 @@ class SF2MLitModule(LightningModule):
             
             # Check if velocity data is available in the AnnData object
             velocity_tensor = None
-            if "velocity" in adata.obsm:
+            if "velocity" in adata.obsm and use_velocity:
                 velocity_tensor = torch.tensor(adata.obsm["velocity"], dtype=torch.float32)
-            
+                        
             model = EntropicOTFM(
                 x=x_tensor,
                 t_idx=t_idx,

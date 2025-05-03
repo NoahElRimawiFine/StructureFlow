@@ -81,6 +81,7 @@ class EntropicOTFM:
                     v0
                 )
             )
+
     def sample_bridges_flows(self, batch_size=64, skip_time=None):
         _x = []
         _t = []
