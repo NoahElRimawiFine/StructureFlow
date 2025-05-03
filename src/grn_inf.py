@@ -188,7 +188,6 @@ def main(args):
         # For synthetic data, use matrices directly
         A_true = true_matrix.values
     
-    breakpoint()
     plot_auprs(W_v, A_estim, A_true)
     log_causal_graph_matrices(A_estim, W_v, A_true)
 
