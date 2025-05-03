@@ -195,26 +195,16 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         x_renge = pd.read_csv(x_renge_path, index_col=0)
         e_renge = pd.read_csv(e_renge_path, index_col=0)
         
-        # Create the reference network matrix
+        # Extract time column from X_RENGE
+        time_column = x_renge.pop('t').values
+        
+        # Get gene names (all columns except the last one from X_RENGE, and first one is cell IDs)
+        gene_names = x_renge.columns.tolist()[1:]
+        self.dim = len(gene_names)
+        
+        # Set the reference network matrix - keep original dimensions
         if has_ref_network:
-            # Handle the non-square reference network
-            # Get all unique genes from both rows and columns of ref_network
-            all_genes = list(set(list(ref_network.index) + list(ref_network.columns)))
-            
-            # Create a square matrix from the non-square reference
-            square_matrix = pd.DataFrame(
-                np.zeros((len(all_genes), len(all_genes)), int),
-                index=all_genes,
-                columns=all_genes,
-            )
-            
-            # Fill in the values from the reference network
-            for i in ref_network.index:
-                for j in ref_network.columns:
-                    if i in square_matrix.index and j in square_matrix.columns:
-                        square_matrix.loc[i, j] = ref_network.loc[i, j]
-            
-            self.true_matrix = square_matrix
+            self.true_matrix = ref_network
         else:
             # Create an empty matrix if no reference is available
             self.true_matrix = pd.DataFrame(
@@ -223,15 +213,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                 columns=gene_names,
             )
         
-        # Extract time column from X_RENGE
-        time_column = x_renge.pop('t').values
-        
-        # Get gene names (all columns except the last one from X_RENGE, and first one is cell IDs)
-        gene_names = x_renge.columns.tolist()[1:]
-        self.dim = len(gene_names)
-        
         # Create a dictionary to group cells by knockout gene
-        # e.g., ko_groups = {'gene1': [cell1, cell2], 'gene2': [cell3, cell4]}
         ko_groups = {}
         
         # For each row, determine the knockout gene (if any)
@@ -257,12 +239,10 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         
         for ko_gene, cell_indices in ko_groups.items():
             # Extract expression data for these cells
-            # e.g., subset_expr = pd.DataFrame([[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]], index=[cell1, cell3])
             subset_expr = e_renge.loc[cell_indices]
             # Extract time data for these cells
-            # e.g., subset_time = pd.Series([0.1, 0.2, 0.3, 0.4], index=[cell1, cell3, cell4, cell7])
             subset_time = pd.Series(time_column[np.where(np.isin(x_renge.index, cell_indices))[0]], 
-                                   index=cell_indices)
+                                index=cell_indices)
             
             # Create AnnData object
             adata = ad.AnnData(X=subset_expr.values)

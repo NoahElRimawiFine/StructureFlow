@@ -376,6 +376,8 @@ class SF2MLitModule(LightningModule):
             A_estim_np = A_estim_subset.values
             W_v_np = W_v_subset.values
             A_true_np = ref_network.values
+
+            breakpoint()
             
             # Plot with the subset matrices
             plot_auprs(W_v_np, A_estim_np, A_true_np, self.logger, self.global_step)

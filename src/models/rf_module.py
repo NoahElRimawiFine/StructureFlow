@@ -7,7 +7,7 @@ from .components import rf
 
 
 class ReferenceFittingModule(pl.LightningModule):
-    def __init__(self, use_cuda=True):
+    def __init__(self, use_cuda=True, iter=1000):
         super().__init__()
         # Set the device as before.
         self.my_device = torch.device("cuda" if use_cuda and torch.cuda.is_available() else "cpu")
@@ -17,7 +17,7 @@ class ReferenceFittingModule(pl.LightningModule):
             "reg_sinkhorn": 0.1,
             "reg_A": 1e-3,
             "reg_A_elastic": 0,
-            "iter": 1000,
+            "iter": iter,
             "ot_coupling": True,
             "optimizer": torch.optim.Adam,
         }

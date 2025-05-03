@@ -161,3 +161,4 @@ configs/local/default.yaml
 loo_results/
 .cursor/rules/gemini-rules.mdc
 .conda/
+results/

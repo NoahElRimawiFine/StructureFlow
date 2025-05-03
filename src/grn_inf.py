@@ -9,13 +9,14 @@ import matplotlib.pyplot as plt
 
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.sf2m_module import SF2MLitModule
+from src.models.rf_module import ReferenceFittingModule
 from src.models.components.plotting import compute_global_jacobian, plot_auprs, log_causal_graph_matrices
 
 # Default parameters
 DEFAULT_DATA_PATH = "data/"
-DEFAULT_DATASET_TYPE = "Synthetic"
+DEFAULT_DATASET_TYPE = "Renge"
 DEFAULT_MODEL_TYPE = "sf2m"
-DEFAULT_N_STEPS = 15000
+DEFAULT_N_STEPS = 10000
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
 DEFAULT_ALPHA = 0.1
@@ -30,7 +31,6 @@ DEFAULT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DEFAULT_SEED = 42
 DEFAULT_RESULTS_DIR = "results"
 DEFAULT_USE_CORRECTION_MLP = True
-DEFAULT_LOG_TRANSFORM = False
 
 def main(args):
     # Extract configuration from arguments
@@ -52,7 +52,6 @@ def main(args):
     RESULTS_DIR = args.results_dir
     MODEL_TYPE = args.model_type
     USE_CORRECTION_MLP = args.use_correction_mlp
-    LOG_TRANSFORM = args.log_transform
     
     # Create results directory with model type and seed info
     RESULTS_DIR = os.path.join(
@@ -70,7 +69,6 @@ def main(args):
         dataset_type=DATASET_TYPE,
         batch_size=BATCH_SIZE,
         num_workers=0,
-        log_transform=LOG_TRANSFORM,
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
@@ -89,62 +87,108 @@ def main(args):
     # --- 2. Create and Train Model ---
     print(f"Creating model...")
     
-    # Configure correct flags based on MODEL_TYPE
-    use_mlp = MODEL_TYPE == "mlp_baseline"
-    use_correction = USE_CORRECTION_MLP and not use_mlp
+    model = None
     
-    model = SF2MLitModule(
-        datamodule=datamodule,
-        T=T_times,
-        sigma=SIGMA,
-        dt=DT_data,
-        batch_size=BATCH_SIZE,
-        alpha=ALPHA,
-        reg=REG,
-        correction_reg_strength=CORRECTION_REG,
-        n_steps=N_STEPS,
-        lr=LR,
-        device=DEVICE,
-        GL_reg=GL_REG,
-        knockout_hidden=KNOCKOUT_HIDDEN,
-        score_hidden=SCORE_HIDDEN,
-        correction_hidden=CORRECTION_HIDDEN,
-        enable_epoch_end_hook=False,
-        use_mlp_baseline=use_mlp,
-        use_correction_mlp=use_correction,
-    )
-    
-    # Train the model with Lightning
-    print("Setting up Trainer...")
-    logger = TensorBoardLogger(RESULTS_DIR, name="grn_training")
-    trainer = Trainer(
-        max_epochs=-1,
-        max_steps=N_STEPS,
-        accelerator="cpu" if DEVICE == "cpu" else "gpu",
-        devices=1,
-        logger=logger,
-        enable_checkpointing=True,
-        enable_progress_bar=True,
-        log_every_n_steps=100,
-    )
-    
-    print(f"Training model for {N_STEPS} steps...")
-    trainer.fit(model, datamodule=datamodule)
-    print("Training complete.")
+    if MODEL_TYPE == "rf":
+        print("Using Reference Fitting model...")
+        # Initialize RF model
+        model = ReferenceFittingModule(use_cuda=(DEVICE == "cuda"), iter=N_STEPS)
+        
+        # Fit the model
+        print("Fitting RF model...")
+        model.fit_model(full_adatas, datamodule.kos)
+        
+        # No Lightning Trainer used for RF
+        print("RF model fitting complete.")
+        
+    else:  # "sf2m" or "mlp_baseline"
+        # Configure correct flags based on MODEL_TYPE
+        use_mlp = MODEL_TYPE == "mlp_baseline"
+        use_correction = USE_CORRECTION_MLP and not use_mlp
+        
+        model = SF2MLitModule(
+            datamodule=datamodule,
+            T=T_times,
+            sigma=SIGMA,
+            dt=DT_data,
+            batch_size=BATCH_SIZE,
+            alpha=ALPHA,
+            reg=REG,
+            correction_reg_strength=CORRECTION_REG,
+            n_steps=N_STEPS,
+            lr=LR,
+            device=DEVICE,
+            GL_reg=GL_REG,
+            knockout_hidden=KNOCKOUT_HIDDEN,
+            score_hidden=SCORE_HIDDEN,
+            correction_hidden=CORRECTION_HIDDEN,
+            enable_epoch_end_hook=False,
+            use_mlp_baseline=use_mlp,
+            use_correction_mlp=use_correction,
+        )
+        
+        # Train the model with Lightning
+        print("Setting up Trainer...")
+        logger = TensorBoardLogger(RESULTS_DIR, name="grn_training")
+        trainer = Trainer(
+            max_epochs=-1,
+            max_steps=N_STEPS,
+            accelerator="cpu" if DEVICE == "cpu" else "gpu",
+            devices=1,
+            logger=logger,
+            enable_checkpointing=True,
+            enable_progress_bar=True,
+            log_every_n_steps=100,
+        )
+        
+        print(f"Training model for {N_STEPS} steps...")
+        trainer.fit(model, datamodule=datamodule)
+        print("Training complete.")
 
     # --- 3. Evaluate and Plot GRN ---
     model.eval()
 
-    # Compute the global Jacobian
-    with torch.no_grad():
-        A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=DT_data, device=DEVICE)
-    
-    # Get the causal graph from the model
-    W_v = model.func_v.causal_graph(w_threshold=0.0).T
+    if MODEL_TYPE != "rf":
+        # Compute the global Jacobian for SF2M models
+        with torch.no_grad():
+            A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=DT_data, device=DEVICE)
+        
+        # Get the causal graph from the model
+        W_v = model.func_v.causal_graph(w_threshold=0.0).T
+    else:
+        # For RF model, get the adjacency matrix directly
+        W_v = model.get_interaction_matrix().detach().cpu().numpy()
+        A_estim = W_v.copy()  # For RF, they are the same
 
     # Get the ground truth matrix
-    A_true = model.true_matrix
+    true_matrix = datamodule.true_matrix
     
+    # Special handling for Renge dataset to align gene sets
+    if DATASET_TYPE == "Renge":
+        # Get gene names from the dataset
+        gene_names = datamodule.adatas[0].var_names
+        
+        # Get reference network rows and columns
+        ref_rows = true_matrix.index
+        ref_cols = true_matrix.columns
+        
+        # Create DataFrames for the estimated graphs with all genes
+        A_estim_df = pd.DataFrame(A_estim, index=gene_names, columns=gene_names)
+        W_v_df = pd.DataFrame(W_v, index=gene_names, columns=gene_names)
+        
+        # Extract the exact subset that corresponds to the reference network dimensions
+        A_estim_subset = A_estim_df.loc[ref_rows, ref_cols]
+        W_v_subset = W_v_df.loc[ref_rows, ref_cols]
+        
+        # Convert to numpy arrays for evaluation
+        A_estim = A_estim_subset.values
+        W_v = W_v_subset.values
+        A_true = true_matrix.values
+    else:
+        # For synthetic data, use matrices directly
+        A_true = true_matrix.values
+    
+    breakpoint()
     plot_auprs(W_v, A_estim, A_true)
     log_causal_graph_matrices(A_estim, W_v, A_true)
 
@@ -155,10 +199,9 @@ if __name__ == "__main__":
     # Data parameters
     parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH, help="Path to data directory")
     parser.add_argument("--dataset_type", type=str, default=DEFAULT_DATASET_TYPE, choices=["Synthetic", "Curated"], help="Type of dataset to use")
-    parser.add_argument("--log_transform", action="store_true", default=DEFAULT_LOG_TRANSFORM, help="Apply log transformation to data")
     
     # Model parameters
-    parser.add_argument("--model_type", type=str, default=DEFAULT_MODEL_TYPE, choices=["sf2m", "mlp_baseline"], help="Type of model to use")
+    parser.add_argument("--model_type", type=str, default=DEFAULT_MODEL_TYPE, choices=["sf2m", "mlp_baseline", "rf"], help="Type of model to use")
     parser.add_argument("--use_correction_mlp", action="store_true", default=DEFAULT_USE_CORRECTION_MLP, help="Whether to use correction MLP for SF2M")
     
     # Training parameters
