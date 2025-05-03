@@ -13,6 +13,7 @@ import argparse
 
 # --- Project Specific Imports ---
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
+from src.models.components.plotting import compute_global_jacobian, log_causal_graph_matrices, plot_auprs
 from src.models.rf_module import ReferenceFittingModule
 from src.models.sf2m_module import SF2MLitModule
 from src.models.components.solver import mmd_squared, simulate_trajectory, wasserstein
@@ -70,8 +71,18 @@ def create_trajectory_pca_plot(adata, predictions, ko_name, held_out_time, folde
         predictions = predictions.cpu().numpy()
     pred_pca = pca.transform(predictions)
     
+    # Set larger font sizes
+    plt.rcParams.update({
+        'font.size': 18,         # Base font size
+        'axes.titlesize': 22,    # Title font size
+        'axes.labelsize': 20,    # Axis label font size
+        'xtick.labelsize': 18,   # X-tick label font size
+        'ytick.labelsize': 18,   # Y-tick label font size
+        'legend.fontsize': 18,   # Legend font size
+    })
+    
     # Create the plot
-    plt.figure(figsize=(10, 8))
+    plt.figure(figsize=(12, 10))  # Slightly larger figure
     
     # Plot the true trajectory points, colored by time
     scatter = plt.scatter(
@@ -79,7 +90,8 @@ def create_trajectory_pca_plot(adata, predictions, ko_name, held_out_time, folde
         full_data_pca[:, 1], 
         c=times, 
         cmap='viridis', 
-        label="True trajectory"
+        label="True trajectory",
+        s=70  # Larger point size
     )
     
     # Plot the model predictions
@@ -87,27 +99,42 @@ def create_trajectory_pca_plot(adata, predictions, ko_name, held_out_time, folde
         pred_pca[:, 0], 
         pred_pca[:, 1], 
         c='salmon', 
-        s=80,  # Make slightly larger
+        s=120,  # Make predictions larger and more visible
         marker='x',
+        linewidth=2,  # Thicker lines for the X markers
         label=f"{model_type} predictions"
     )
     
-    # Add colorbar
+    # Add colorbar with larger font
     cbar = plt.colorbar(scatter)
-    cbar.set_label('Time')
+    cbar.set_label('Time', fontsize=16)
+    cbar.ax.tick_params(labelsize=14)
     
     # Add title and labels
     ko_label = "Wild Type" if ko_name is None else f"Knockout: {ko_name}"
-    plt.title(f"{ko_label} - {model_type} Prediction")
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.legend(loc="upper right")
-    plt.grid(True, alpha=0.3)
+    plt.title(f"{ko_label} - {model_type} Prediction", fontweight='bold')
+    plt.xlabel("PC1", fontweight='bold')
+    plt.ylabel("PC2", fontweight='bold')
+    
+    # Larger and better positioned legend
+    plt.legend(loc="upper right", frameon=True, framealpha=0.9, fontsize=14)
+    
+    # Clearer grid
+    plt.grid(True, alpha=0.4, linestyle='--')
+    
+    # Add a border around the plot
+    plt.gca().spines['top'].set_visible(True)
+    plt.gca().spines['right'].set_visible(True)
+    plt.gca().spines['bottom'].set_visible(True)
+    plt.gca().spines['left'].set_visible(True)
     
     # Save the figure
     filename = f"traj_{'wildtype' if ko_name is None else f'ko_{ko_name}'}.png"
-    plt.savefig(os.path.join(folder_path, filename), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(folder_path, filename), dpi=200, bbox_inches='tight')
     plt.close()
+    
+    # Reset rcParams to default to avoid affecting other plots
+    plt.rcParams.update(plt.rcParamsDefault)
 
 
 def main(args):
@@ -131,7 +158,7 @@ def main(args):
     RESULTS_DIR = args.results_dir
     MODEL_TYPE = args.model_type
     USE_CORRECTION_MLP = args.use_correction_mlp
-    
+
     # Create results directory with model type and seed info
     RESULTS_DIR = os.path.join(
         RESULTS_DIR, 
@@ -159,7 +186,7 @@ def main(args):
         raise ValueError("No datasets loaded.")
     T_max = int(max(adata.obs['t'].max() for adata in full_adatas))
     T_times = T_max + 1
-    DT_data = 1.0 / T_max if T_max > 0 else 1.0
+    DT_data = 1.0 / T_times
 
     print(f"Data loaded. Found {len(full_adatas)} datasets with T_max={T_max}.")
     print(f"Kos: {datamodule.kos}")
@@ -209,7 +236,7 @@ def main(args):
             
             model = SF2MLitModule(
                 datamodule=datamodule,
-                T=T_max,
+                T=T_times,
                 sigma=SIGMA,
                 dt=DT_data,
                 batch_size=BATCH_SIZE,
@@ -371,7 +398,7 @@ def main(args):
                         # For SF2M, use the SDE simulation for the plot
                         create_trajectory_pca_plot(
                             adata_full,
-                            sim_sde_final.numpy(),
+                            sim_ode_final.numpy(),
                             ko_name,
                             held_out_time,
                             fold_pca_folder,
@@ -434,6 +461,19 @@ def main(args):
                 "avg_mmd2_ode": np.nan,
                 "avg_mmd2_sde": np.nan,
             })
+
+        if MODEL_TYPE == "sf2m" and held_out_time == T_max:  # Only for SF2M            
+            with torch.no_grad():
+                A_estim = compute_global_jacobian(model.func_v, datamodule.adatas, dt=DT_data, device="cpu")
+            
+            # Get the causal graph from the model
+            W_v = model.func_v.causal_graph(w_threshold=0.0).T
+            
+            # Get the ground truth matrix
+            A_true = model.true_matrix
+            # Also display AUPR plot
+            plot_auprs(W_v, A_estim, A_true)
+            log_causal_graph_matrices(A_estim, W_v, A_true)
 
     # --- 3. Final Reporting ---
     print(f"\n===== Leave-One-Out Cross-Validation Summary ({MODEL_TYPE}) =====")
