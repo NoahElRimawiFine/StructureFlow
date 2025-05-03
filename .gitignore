@@ -158,3 +158,4 @@ configs/local/default.yaml
 # leave_one_out results
 loo_results/
 .cursor/rules/gemini-rules.mdc
+.conda
