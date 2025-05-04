@@ -130,12 +130,13 @@ def main(args):
         # Train the model with Lightning
         print("Setting up Trainer...")
         logger = TensorBoardLogger(RESULTS_DIR, name="grn_training")
+        logger._default_hp_metric = False
         trainer = Trainer(
             max_epochs=-1,
             max_steps=N_STEPS,
             accelerator="cpu" if DEVICE == "cpu" else "gpu",
             devices=1,
-            logger=False,
+            logger=logger,
             enable_checkpointing=True,
             enable_progress_bar=True,
             log_every_n_steps=100,
