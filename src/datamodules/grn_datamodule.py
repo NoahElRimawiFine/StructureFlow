@@ -103,7 +103,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         """
         if stage == "fit" or stage is None:
             if self.dataset_type == "Renge":
-                self._setup_renge_data_old()
+                self._setup_renge_data()
             else:
                 self._setup_synthetic_or_curated_data()
 
