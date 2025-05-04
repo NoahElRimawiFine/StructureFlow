@@ -135,11 +135,10 @@ def main(args):
             max_steps=N_STEPS,
             accelerator="cpu" if DEVICE == "cpu" else "gpu",
             devices=1,
-            logger=logger,
+            logger=False,
             enable_checkpointing=True,
             enable_progress_bar=True,
             log_every_n_steps=100,
-            logger_kwargs={"log_graph": False},
         )
         
         print(f"Training model for {N_STEPS} steps...")
