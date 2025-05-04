@@ -16,7 +16,7 @@ from src.models.components.plotting import compute_global_jacobian, plot_auprs, 
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Renge"
 DEFAULT_MODEL_TYPE = "rf"
-DEFAULT_N_STEPS = 10000
+DEFAULT_N_STEPS = 100
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
 DEFAULT_ALPHA = 0.1
