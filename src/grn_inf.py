@@ -130,7 +130,6 @@ def main(args):
         # Train the model with Lightning
         print("Setting up Trainer...")
         # logger = TensorBoardLogger(RESULTS_DIR, name="grn_training", default_hp_metric=False)
-        logger = CSVLogger(RESULTS_DIR, name="grn_training")
         trainer = Trainer(
             max_epochs=-1,
             max_steps=N_STEPS,
