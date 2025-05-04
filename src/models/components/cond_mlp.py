@@ -49,11 +49,12 @@ class MLP(nn.Module):
                 nn.init.normal_(m.bias, mean=0, std=0)
 
     def forward(self, t, x, cond=None):
+        device = x.device
         inputs = [x]
         if self.time_varying:
             if t.dim() == 1:
                 t = t.unsqueeze(-1)
-            inputs.append(t)
+            inputs.append(t.to(device))
 
         if self.conditional:
             if cond is None:
@@ -63,7 +64,7 @@ class MLP(nn.Module):
                 cond = cond.unsqueeze(0).expand(Bx, -1)
             elif cond.shape[0] != Bx:
                 raise ValueError(f"cond batch size ({cond.shape[0]}) != x batch size ({Bx}). ")
-            inputs.append(cond)
+            inputs.append(cond.to(device))
 
         # cat along dim=1 => shape [batch_size, (d + time + cond_dim)]
         net_in = torch.cat(inputs, dim=1)
@@ -112,6 +113,7 @@ class MLPFlow(nn.Module):
                 nn.init.normal_(layer.weight, mean=0, std=0.1)
 
     def forward(self, t, x, dataset_idx=None):  # [n, 1, d] -> [n, 1, d]
+        device = x.device
         # Reshape input if needed
         if x.dim() == 3:  # [n, 1, d]
             x = x.squeeze(1)  # [n, d]
@@ -122,7 +124,7 @@ class MLPFlow(nn.Module):
                 t = t.squeeze(1)
             if t.dim() == 1:
                 t = t.unsqueeze(-1)
-            x = torch.cat((x, t), dim=-1)
+            x = torch.cat((x, t.to(device)), dim=-1)
 
         # Forward pass through MLP
         out = self.network(x)  # [n, d]
@@ -144,7 +146,8 @@ class MLPFlow(nn.Module):
         L1 regularization on input layer parameters
         For standard MLP, we return 0 as this is specific to MLPODEF
         """
-        return torch.tensor(0.0, device=next(self.parameters()).device)
+        device = next(self.parameters()).device
+        return torch.tensor(0.0, device=device)
 
     def causal_graph(self, w_threshold=0.3):
         """
