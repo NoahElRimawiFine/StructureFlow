@@ -411,7 +411,9 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
 
     Returns a [d, d] numpy array representing an average Jacobian.
     """
-
+    # Move model to the specified device if it's not already there
+    v = v.to(device)
+    
     all_x_list = []
     for ds_idx, adata in enumerate(adatas):
         x0 = adata.X[adata.obs["t"] == 0]
@@ -423,34 +425,41 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
     if X_all.shape[0] == 0:
         return None
 
+    # Move data to device once
     X_all_torch = torch.from_numpy(X_all).float().to(device)
+    t_val = torch.tensor(0.0, device=device)
 
     def get_flow(t, x):
-        x_input = x.unsqueeze(0).unsqueeze(0).to(device)
-        t_input = t.unsqueeze(0).unsqueeze(0).to(device)
+        # No need to move to device again as input tensors are already on the right device
+        x_input = x.unsqueeze(0).unsqueeze(0)
+        t_input = t.unsqueeze(0).unsqueeze(0)
         return v(t_input, x_input).squeeze(0).squeeze(0)
 
-    t_val = torch.tensor(0.0).to(device)
-
+    # Move the function to device context to ensure all intermediates stay on device
     Ju = torch.func.jacrev(get_flow, argnums=1)
 
     Js = []
-
     batch_size = 256
-    for start in range(0, X_all_torch.shape[0], batch_size):
-        end = start + batch_size
-        batch_x = X_all_torch[start:end]
-
-        J_local = torch.vmap(lambda x: Ju(t_val, x))(batch_x)
-        J_avg = J_local.mean(dim=0)
-        Js.append(J_avg)
+    
+    # Using a context manager to ensure all operations happen on the specified device
+    with torch.device(device):
+        for start in range(0, X_all_torch.shape[0], batch_size):
+            end = start + batch_size
+            batch_x = X_all_torch[start:end]
+            
+            # Using a lambda that ensures inputs stay on device
+            J_local = torch.vmap(lambda x: Ju(t_val, x))(batch_x)
+            J_avg = J_local.mean(dim=0)
+            Js.append(J_avg)
 
     if len(Js) == 0:
         return None
+        
+    # Stack and compute mean, ensuring it stays on device
     J_final = torch.stack(Js, dim=0).mean(dim=0)
-
     A_est = J_final
 
+    # Only move to CPU at the very end
     return A_est.detach().cpu().numpy().T
 
 
