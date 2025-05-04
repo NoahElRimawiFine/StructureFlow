@@ -280,11 +280,11 @@ class SF2MLitModule(LightningModule):
             # Warmup phase or no correction
             v_fit = self.func_v(t_input, v_input).squeeze(1) - (
                 model.sigma**2 / 2
-            ) * self.score_net(_t, _x, cond_expanded)
+            ) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded.to(self.device))
         else:
             # Full training phase with correction
-            v_fit = self.func_v(t_input, v_input).squeeze(1) + self.v_correction(_t, _x)
-            v_fit = v_fit - (model.sigma**2 / 2) * self.score_net(_t, _x, cond_expanded)
+            v_fit = self.func_v(t_input.to(self.device), v_input.to(self.device)).squeeze(1) + self.v_correction(_t.to(self.device), _x.to(self.device))
+            v_fit = v_fit - (model.sigma**2 / 2) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded.to(self.device))
 
         # Losses
         L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
