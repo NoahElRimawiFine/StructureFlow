@@ -260,6 +260,11 @@ class SF2MLitModule(LightningModule):
         _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
             batch_size=self.batch_size, skip_time=None
         )
+        _x = _x.to(self.device)
+        _s = _s.to(self.device)
+        _u = _u.to(self.device)
+        _t = _t.to(self.device)
+        _t_orig = _t_orig.to(self.device)
 
         optimizer.zero_grad()
 
@@ -288,7 +293,6 @@ class SF2MLitModule(LightningModule):
             v_fit = v_fit - (model.sigma**2 / 2) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
 
         # Losses
-        breakpoint()
         L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
         L_flow = torch.mean(
             (_t_orig * (1 - _t_orig)) * (v_fit * model.dt - _u) ** 2
