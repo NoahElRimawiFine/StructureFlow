@@ -265,26 +265,27 @@ class SF2MLitModule(LightningModule):
 
         # Prepare inputs
         s_input = _x.unsqueeze(1)
-        v_input = _x.unsqueeze(1)
-        t_input = _t.unsqueeze(1)
+        v_input = _x.unsqueeze(1).to(self.device)
+        t_input = _t.unsqueeze(1).to(self.device)
         B = _x.shape[0]
 
         # Expand conditional vectors to match batch size
         cond_expanded = cond_vector.repeat(B // cond_vector.shape[0] + 1, 1)[:B]
+        cond_expanded = cond_expanded.to(self.device)
 
         # Score net output
-        s_fit = self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded.to(self.device)).squeeze(1)
+        s_fit = self.score_net(_t, _x, cond_expanded).squeeze(1)
 
         # Flow net output, with or without correction
         if self.global_step <= 500 or not self.use_correction_mlp:
             # Warmup phase or no correction
             v_fit = self.func_v(t_input, v_input).squeeze(1) - (
                 model.sigma**2 / 2
-            ) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded.to(self.device))
+            ) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
         else:
             # Full training phase with correction
-            v_fit = self.func_v(t_input.to(self.device), v_input.to(self.device)).squeeze(1) + self.v_correction(_t.to(self.device), _x.to(self.device))
-            v_fit = v_fit - (model.sigma**2 / 2) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded.to(self.device))
+            v_fit = self.func_v(t_input, v_input).squeeze(1) + self.v_correction(_t.to(self.device), _x.to(self.device))
+            v_fit = v_fit - (model.sigma**2 / 2) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
 
         # Losses
         L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
