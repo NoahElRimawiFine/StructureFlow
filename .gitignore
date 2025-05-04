@@ -150,6 +150,7 @@ configs/local/default.yaml
 /logs/
 .env
 ./src/jobs/results
+lightning_logs/
 
 # Aim logging
 .aim
