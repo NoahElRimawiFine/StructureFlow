@@ -245,7 +245,6 @@ class MLPODEFKO(nn.Module):
                 bias = self.fc1.bias.view(d, m)
                 x_out = x_out + bias.unsqueeze(0)
         else:
-            breakpoint()
             x = self.fc1(x)
             x_out = x.view(-1, self.dims[0], self.dims[1])
             
