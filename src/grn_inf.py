@@ -135,7 +135,7 @@ def main(args):
             max_steps=N_STEPS,
             accelerator="cpu" if DEVICE == "cpu" else "gpu",
             devices=1,
-            logger=None,
+            logger=False,
             enable_checkpointing=True,
             enable_progress_bar=True,
             log_every_n_steps=100,
