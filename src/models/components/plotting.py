@@ -496,6 +496,9 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0):
         plt.close(fig)
     else:
         plt.show()
+    
+    print("AP: ", avg_prec)
+    print("AUPR ratio: ", avg_prec / np.mean(np.abs(true_graph) > 0))
 
 
 def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0):
