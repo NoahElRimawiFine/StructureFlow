@@ -139,6 +139,7 @@ def main(args):
             enable_checkpointing=True,
             enable_progress_bar=True,
             log_every_n_steps=100,
+            logger_kwargs={"log_graph": False},
         )
         
         print(f"Training model for {N_STEPS} steps...")
