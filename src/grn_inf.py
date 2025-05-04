@@ -16,7 +16,7 @@ from src.models.components.plotting import compute_global_jacobian, plot_auprs, 
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Renge"
 DEFAULT_MODEL_TYPE = "sf2m"
-DEFAULT_N_STEPS = 5000
+DEFAULT_N_STEPS = 15000
 DEFAULT_BATCH_SIZE = 128
 DEFAULT_LR = 3e-3
 DEFAULT_ALPHA = 0.1
@@ -30,7 +30,7 @@ DEFAULT_SIGMA = 1.0
 DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 DEFAULT_SEED = 42
 DEFAULT_RESULTS_DIR = "results"
-DEFAULT_USE_CORRECTION_MLP = True
+DEFAULT_USE_CORRECTION_MLP = False
 
 def main(args):
     # Extract configuration from arguments
@@ -136,7 +136,7 @@ def main(args):
             max_steps=N_STEPS,
             accelerator="cpu" if DEVICE == "cpu" else "gpu",
             devices=1,
-            logger=logger,
+            logger=None,
             enable_checkpointing=True,
             enable_progress_bar=True,
             log_every_n_steps=100,

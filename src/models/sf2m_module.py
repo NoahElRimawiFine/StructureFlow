@@ -448,7 +448,8 @@ class SF2MLitModule(LightningModule):
             all_results = sorted(all_results, key=lambda r: r["Time"])
             df = pd.DataFrame(all_results)
             table_str = df.to_markdown(index=False)
-            self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+            if self.logger is not None:
+                self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
             # Optionally also log individual metrics:
             for row in all_results:
                 self.log(f"train/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True)
@@ -567,7 +568,8 @@ class SF2MLitModule(LightningModule):
         all_results = sorted(all_results, key=lambda r: r["Time"])
         df = pd.DataFrame(all_results)
         table_str = df.to_markdown(index=False)
-        self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+        if self.logger is not None:
+            self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
         # Optionally also log individual metrics:
         for row in all_results:
             self.log(f"val/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True)
