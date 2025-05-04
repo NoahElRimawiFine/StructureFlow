@@ -288,6 +288,7 @@ class SF2MLitModule(LightningModule):
             v_fit = v_fit - (model.sigma**2 / 2) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
 
         # Losses
+        breakpoint()
         L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
         L_flow = torch.mean(
             (_t_orig * (1 - _t_orig)) * (v_fit * model.dt - _u) ** 2
