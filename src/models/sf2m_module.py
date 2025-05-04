@@ -274,7 +274,7 @@ class SF2MLitModule(LightningModule):
         cond_expanded = cond_expanded.to(self.device)
 
         # Score net output
-        s_fit = self.score_net(_t, _x, cond_expanded).squeeze(1)
+        s_fit = self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded).squeeze(1)
 
         # Flow net output, with or without correction
         if self.global_step <= 500 or not self.use_correction_mlp:
