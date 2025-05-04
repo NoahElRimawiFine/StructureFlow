@@ -430,7 +430,6 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
         t_input = t.unsqueeze(0).unsqueeze(0)
         return v(t_input, x_input).squeeze(0).squeeze(0)
 
-    # Or loop over multiple times if the model is time-varying
     t_val = torch.tensor(0.0).to(device)
 
     Ju = torch.func.jacrev(get_flow, argnums=1)

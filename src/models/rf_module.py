@@ -20,6 +20,7 @@ class ReferenceFittingModule(pl.LightningModule):
             "iter": iter,
             "ot_coupling": True,
             "optimizer": torch.optim.Adam,
+            "n_pca_components": 50,
         }
         # Placeholders for the two estimators
         self.estimator = None
@@ -41,7 +42,7 @@ class ReferenceFittingModule(pl.LightningModule):
         self.estimator = rf.Estimator(
             [adatas[i] for i in ko_idx], [kos[i] for i in ko_idx], **self.options
         )
-        self.estimator.fit(print_iter=100, alg="alternating", update_couplings_iter=250)
+        self.estimator.fit(print_iter=100, alg="alternating", update_couplings_iter=500)
 
         # print("Training reference model with wild type data only...")
         # self.estimator_wt = rf.Estimator(
