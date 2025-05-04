@@ -178,20 +178,19 @@ class MLPODEF(nn.Module):
 
 class MLPODEFKO(nn.Module):
     def __init__(self, dims, GL_reg=0.01, bias=True, time_invariant=True, knockout_masks=None, device=None):
-        # dims: [number of variables, dimension hidden layers, output dim=1]
         super().__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
         self.dims = dims
         self.time_invariant = time_invariant
-        self.GL_reg = GL_reg  # adaptive lasso parameter
+        self.GL_reg = GL_reg
         self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         if time_invariant:
-            self.fc1 = nn.Linear(dims[0], dims[0] * dims[1], bias=bias, device=self.device)
+            self.fc1 = nn.Linear(dims[0], dims[0] * dims[1], bias=bias)
         else:
-            self.fc1 = nn.Linear(dims[0] + 1, dims[0] * dims[1], bias=bias, device=self.device)
-        # fc2: local linear layers
+            self.fc1 = nn.Linear(dims[0] + 1, dims[0] * dims[1], bias=bias)
+        
         layers = []
         for layer in range(len(dims) - 2):
             layers.append(LocallyConnected(dims[0], dims[layer + 1], dims[layer + 2], bias=bias))
@@ -204,51 +203,55 @@ class MLPODEFKO(nn.Module):
 
         if knockout_masks is not None:
             self.knockout_masks = [
-                torch.tensor(m, dtype=torch.float32, device=self.device) 
-                if not isinstance(m, torch.Tensor) else m.to(self.device)
+                torch.tensor(m, dtype=torch.float32) 
+                if not isinstance(m, torch.Tensor) else m
                 for m in knockout_masks
             ]
-            
+        
         self.to(self.device)
 
-    def forward(self, t, x, dataset_idx=None):  # [n, 1, d] -> [n, 1, d]
+    def forward(self, t, x, dataset_idx=None):
         x = x.to(self.device)
         t = t.to(self.device)
+        
         if not self.time_invariant:
             x = torch.cat((x, t), dim=-1)
+            
         if dataset_idx is not None and self.knockout_masks is not None:
-            mask = self.knockout_masks[dataset_idx].to(x.device)  # [d, d]
+            mask = self.knockout_masks[dataset_idx].to(self.device)
             x = x.squeeze(1)
             d = self.dims[0]
             m = self.dims[1]
+            
             if self.time_invariant:
                 w_raw = self.fc1.weight
                 w_reshaped = w_raw.view(d, m, d)
                 masked_w = w_reshaped * mask.unsqueeze(1)
                 x_out = torch.einsum("rhd,nd->nrh", masked_w, x)
             else:
-                w_raw = self.fc1.weight  # [d*m, d+1]
-                w_vars = w_raw[:, :d]  # [d*m, d]
-                w_time = w_raw[:, d:]  # [d*m, 1]
-                w_vars_reshaped = w_vars.view(d, m, d)  # [d, m, d]
-                mask = self.knockout_masks.to(x.device)  # [d, d]
-                masked_w_vars = w_vars_reshaped * mask.unsqueeze(1)  # [d, m, d]
-                x_vars = x[:, :d]  # [n, d]
-                x_time = x[:, d:]  # [n, 1]
-                out_vars = torch.einsum("rhd,nd->nrh", masked_w_vars, x_vars)  # [n, d, m]
-                w_time_reshaped = w_time.view(d, m, 1)  # [d, m, 1]
-                out_time = w_time_reshaped * x_time.unsqueeze(1)  # [n, d, m]
+                w_raw = self.fc1.weight
+                w_vars = w_raw[:, :d]
+                w_time = w_raw[:, d:]
+                w_vars_reshaped = w_vars.view(d, m, d)
+                masked_w_vars = w_vars_reshaped * mask.unsqueeze(1)
+                x_vars = x[:, :d]
+                x_time = x[:, d:]
+                out_vars = torch.einsum("rhd,nd->nrh", masked_w_vars, x_vars)
+                w_time_reshaped = w_time.view(d, m, 1)
+                out_time = w_time_reshaped * x_time.unsqueeze(1)
                 x_out = out_vars + out_time
+                
             if self.fc1.bias is not None:
-                bias = self.fc1.bias.view(d, m)  # reshape bias to [d, m]
-                x_out = x_out + bias.unsqueeze(0)  # broadcast over batch dimension
+                bias = self.fc1.bias.view(d, m)
+                x_out = x_out + bias.unsqueeze(0)
         else:
             x = self.fc1(x)
-            x_out = x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
+            x_out = x.view(-1, self.dims[0], self.dims[1])
+            
         for fc in self.fc2:
-            x_out = fc(self.elu(x_out))  # [n, d, m2]
-        x_out = x_out.squeeze(dim=2)  # [n, d]
-        x_out = x_out.unsqueeze(dim=1)  # [n, 1, d]
+            x_out = fc(self.elu(x_out))
+        x_out = x_out.squeeze(dim=2)
+        x_out = x_out.unsqueeze(dim=1)
         return x_out
 
     def l2_reg(self):
