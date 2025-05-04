@@ -264,6 +264,17 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         hipsc_path = os.path.join(self.data_path, "hipsc.h5ad")
         hipsc = sc.read_h5ad(hipsc_path)
         
+        if 'gene' in hipsc.var:
+            # Create a mapping from current IDs to gene symbols
+            gene_mapping = dict(zip(hipsc.var_names, hipsc.var['gene']))
+            
+            # Create a new AnnData with gene symbols as variable names
+            gene_symbols = hipsc.var['gene'].tolist()
+            
+            # Rename the variables using the gene symbols
+            hipsc.var_names = pd.Index(gene_symbols)
+            hipsc.var.index = hipsc.var_names
+        
         # Load the reference network if available
         ref_network_path = os.path.join(self.data_path, "A_ref_thresh_0.csv")
         try:
