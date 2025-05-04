@@ -148,11 +148,11 @@ class SF2MLitModule(LightningModule):
 
         if self.use_mlp_baseline:
             self.func_v = MLPFlow(
-                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
+                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks, device=device
             )
         else:
             self.func_v = MLPODEFKO(
-                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
+                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks, device=device
             )
 
         self.score_net = CONDMLP(
@@ -161,6 +161,7 @@ class SF2MLitModule(LightningModule):
             time_varying=True,
             conditional=True,
             conditional_dim=self.n_genes,
+            device=device
         )
 
         # Create correction network only if enabled

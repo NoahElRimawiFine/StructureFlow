@@ -101,10 +101,13 @@ class MLP(nn.Module):
         ],
         activation=nn.ReLU,
         time_varying=True,
+        device=None
     ):
         super().__init__()
         self.net = nn.Sequential()
         self.time_varying = time_varying
+        self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
         assert len(hidden_sizes) > 0
         hidden_sizes = copy.copy(hidden_sizes)
         if time_varying:
@@ -118,13 +121,20 @@ class MLP(nn.Module):
             )
             if i < len(hidden_sizes) - 2:
                 self.net.add_module(name=f"A{i}", module=activation())
+        
+        # Move model to device
+        self.to(self.device)
+        
+        # Initialize weights
         for m in self.net.modules():
             if isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, mean=0, std=0.1)
                 nn.init.normal_(m.bias, mean=0, std=0)
 
     def forward(self, t, x):
+        device = x.device
         if self.time_varying:
+            t = t.to(device)
             return self.net(torch.hstack([x, t.expand(*x.shape[:-1], 1)]))
         else:
             return self.net(x)

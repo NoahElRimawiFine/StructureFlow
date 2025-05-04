@@ -177,7 +177,7 @@ class MLPODEF(nn.Module):
 
 
 class MLPODEFKO(nn.Module):
-    def __init__(self, dims, GL_reg=0.01, bias=True, time_invariant=True, knockout_masks=None):
+    def __init__(self, dims, GL_reg=0.01, bias=True, time_invariant=True, knockout_masks=None, device=None):
         # dims: [number of variables, dimension hidden layers, output dim=1]
         super().__init__()
         assert len(dims) >= 2
@@ -185,6 +185,8 @@ class MLPODEFKO(nn.Module):
         self.dims = dims
         self.time_invariant = time_invariant
         self.GL_reg = GL_reg  # adaptive lasso parameter
+        self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
         if time_invariant:
             self.fc1 = nn.Linear(dims[0], dims[0] * dims[1], bias=bias)
         else:
@@ -196,13 +198,18 @@ class MLPODEFKO(nn.Module):
         self.fc2 = nn.ModuleList(layers)
         self.elu = nn.ELU(inplace=True)
         self.knockout_masks = None
+        
         if callable(knockout_masks):
             knockout_masks = knockout_masks()
 
+        if knockout_masks is not None:
             self.knockout_masks = [
-                torch.tensor(m, dtype=torch.float32) if not isinstance(m, torch.Tensor) else m
+                torch.tensor(m, dtype=torch.float32, device=self.device) 
+                if not isinstance(m, torch.Tensor) else m.to(self.device)
                 for m in knockout_masks
             ]
+            
+        self.to(self.device)
 
     def forward(self, t, x, dataset_idx=None):  # [n, 1, d] -> [n, 1, d]
         if not self.time_invariant:

@@ -16,10 +16,12 @@ class MLP(nn.Module):
         time_varying=True,
         conditional=False,
         conditional_dim=0,  # dimension of the knockout or condition
+        device=None
     ):
         super().__init__()
         self.time_varying = time_varying
         self.conditional = conditional
+        self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         input_dim = d
         if self.time_varying:
@@ -41,6 +43,7 @@ class MLP(nn.Module):
                 layers.append(activation())
 
         self.net = nn.Sequential(*layers)
+        self.to(self.device)
 
         # Weight init
         for m in self.net.modules():
@@ -72,7 +75,7 @@ class MLP(nn.Module):
 
 class MLPFlow(nn.Module):
     def __init__(
-        self, dims, GL_reg=0.01, bias=True, time_invariant=True, knockout_masks=None
+        self, dims, GL_reg=0.01, bias=True, time_invariant=True, knockout_masks=None, device=None
     ):
         # dims: [number of variables, hidden_layer_1_dim, hidden_layer_2_dim, ..., output_dim=1]
         super(MLPFlow, self).__init__()
@@ -81,10 +84,11 @@ class MLPFlow(nn.Module):
         self.time_invariant = time_invariant
         self.GL_reg = GL_reg  # For compatibility with MLPODEF1
         self.knockout_masks = None
+        self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         if knockout_masks is not None:
             self.knockout_masks = [
-                torch.tensor(m, dtype=torch.float32) for m in knockout_masks
+                torch.tensor(m, dtype=torch.float32, device=self.device) for m in knockout_masks
             ]
 
         # Input dimension includes time if not time_invariant
@@ -106,6 +110,7 @@ class MLPFlow(nn.Module):
         layers.append(nn.Linear(prev_dim, self.d, bias=bias))
 
         self.network = nn.Sequential(*layers)
+        self.to(self.device)
 
         # Initialize weights
         for layer in self.network:
