@@ -188,9 +188,9 @@ class MLPODEFKO(nn.Module):
         self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         if time_invariant:
-            self.fc1 = nn.Linear(dims[0], dims[0] * dims[1], bias=bias)
+            self.fc1 = nn.Linear(dims[0], dims[0] * dims[1], bias=bias, device=self.device)
         else:
-            self.fc1 = nn.Linear(dims[0] + 1, dims[0] * dims[1], bias=bias)
+            self.fc1 = nn.Linear(dims[0] + 1, dims[0] * dims[1], bias=bias, device=self.device)
         # fc2: local linear layers
         layers = []
         for layer in range(len(dims) - 2):
