@@ -243,6 +243,7 @@ class MLPODEFKO(nn.Module):
                 bias = self.fc1.bias.view(d, m)  # reshape bias to [d, m]
                 x_out = x_out + bias.unsqueeze(0)  # broadcast over batch dimension
         else:
+            breakpoint()
             x = self.fc1(x)
             x_out = x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
         for fc in self.fc2:
