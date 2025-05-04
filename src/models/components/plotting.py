@@ -426,8 +426,8 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
     X_all_torch = torch.from_numpy(X_all).float().to(device)
 
     def get_flow(t, x):
-        x_input = x.unsqueeze(0).unsqueeze(0)
-        t_input = t.unsqueeze(0).unsqueeze(0)
+        x_input = x.unsqueeze(0).unsqueeze(0).to(device)
+        t_input = t.unsqueeze(0).unsqueeze(0).to(device)
         return v(t_input, x_input).squeeze(0).squeeze(0)
 
     t_val = torch.tensor(0.0).to(device)
