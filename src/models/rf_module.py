@@ -14,9 +14,9 @@ class ReferenceFittingModule(pl.LightningModule):
         self.PLT_CELL = 3.5
         self.options = {
             "lr": 0.1,
-            "reg_sinkhorn": 0.1,
-            "reg_A": 1e-3,
-            "reg_A_elastic": 0,
+            "reg_sinkhorn": 0.05,
+            "reg_A": 0.5e-3,
+            "reg_A_elastic": 0.5,
             "iter": iter,
             "ot_coupling": True,
             "optimizer": torch.optim.Adam,
