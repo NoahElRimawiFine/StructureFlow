@@ -178,7 +178,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                 self.ko_indices.append(self.gene_to_index[ko])
 
     def _setup_renge_data_old(self):
-        """Load Renge data from disk and convert to AnnData objects."""
+        """Load Renge data from disk and convert to AnnData objects, excluding wildtype data."""
         # Load the Renge data files
         x_renge_path = os.path.join(self.data_path, "X_renge_d2_80.csv")
         e_renge_path = os.path.join(self.data_path, "E_renge_d2_80.csv")
@@ -224,10 +224,11 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                     ko_gene = gene 
                     break
             
-            # Add to appropriate group (None for wildtype)
-            if ko_gene not in ko_groups:
-                ko_groups[ko_gene] = []
-            ko_groups[ko_gene].append(idx)
+            # Only add to groups if it's a knockout (not wildtype)
+            if ko_gene is not None:
+                if ko_gene not in ko_groups:
+                    ko_groups[ko_gene] = []
+                ko_groups[ko_gene].append(idx)
         
         # Create separate AnnData objects for each knockout condition
         self.adatas = []
@@ -256,7 +257,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
 
             self.adatas.append(adata)
             self.kos.append(ko_gene)
-            self.ko_indices.append(None if ko_gene is None else self.gene_to_index[ko_gene])
+            self.ko_indices.append(self.gene_to_index[ko_gene])  # ko_gene is never None here
 
     def _setup_renge_data(self):
         """Load Renge data from disk and use the hipsc AnnData object."""
