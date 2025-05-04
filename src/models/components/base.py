@@ -212,6 +212,8 @@ class MLPODEFKO(nn.Module):
         self.to(self.device)
 
     def forward(self, t, x, dataset_idx=None):  # [n, 1, d] -> [n, 1, d]
+        x = x.to(self.device)
+        t = t.to(self.device)
         if not self.time_invariant:
             x = torch.cat((x, t), dim=-1)
         if dataset_idx is not None and self.knockout_masks is not None:
