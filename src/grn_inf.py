@@ -20,7 +20,7 @@ DEFAULT_N_STEPS = 15000
 DEFAULT_BATCH_SIZE = 128
 DEFAULT_LR = 3e-3
 DEFAULT_ALPHA = 0.1
-DEFAULT_REG = 5e-8
+DEFAULT_REG = 5e-6
 DEFAULT_CORRECTION_REG = 1e-3
 DEFAULT_GL_REG = 0.04
 DEFAULT_KNOCKOUT_HIDDEN = 100
@@ -188,7 +188,7 @@ def main(args):
         # For synthetic data, use matrices directly
         A_true = true_matrix.values
     
-    plot_auprs(W_v, A_estim, A_true)
+    plot_auprs(W_v, A_estim, A_true, mask_diagonal=False)
     log_causal_graph_matrices(A_estim, W_v, A_true)
 
 
