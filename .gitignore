@@ -157,6 +157,7 @@ lightning_logs/
 
 # leave_one_out results
 loo_results/
+loko_results/
 .cursor/rules/gemini-rules.mdc
 .conda/
 results/
