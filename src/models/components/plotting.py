@@ -463,13 +463,22 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
     return A_est.detach().cpu().numpy().T
 
 
-def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0):
-    fig, axs = plt.subplots(1, 2, figsize=(12, 5))  # Create a figure explicitly
+def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0, mask_diagonal=True):
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
 
-    y_true = np.abs(np.sign(maskdiag(true_graph)).astype(int).flatten())
+    if mask_diagonal:
+        masked_true_graph = maskdiag(true_graph)
+        masked_jacobian = maskdiag(jacobian)
+        masked_causal_graph = maskdiag(causal_graph)
+    else:
+        masked_true_graph = true_graph
+        masked_jacobian = jacobian
+        masked_causal_graph = causal_graph
+
+    y_true = np.abs(np.sign(masked_true_graph).astype(int).flatten())
 
     # --- Jacobian-based ---
-    y_pred = np.abs(maskdiag(jacobian).flatten())
+    y_pred = np.abs(masked_jacobian.flatten())
     prec, rec, _ = precision_recall_curve(y_true, y_pred)
     avg_prec = average_precision_score(y_true, y_pred)
 
@@ -477,13 +486,13 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0):
     axs[0].set_xlabel("Recall")
     axs[0].set_ylabel("Precision")
     axs[0].set_title(
-        f"Precision-Recall Curve (Jacobian)\nAUPR ratio = {avg_prec / np.mean(np.abs(true_graph) > 0):.2f}"
+        f"Precision-Recall Curve (Jacobian)\nAUPR ratio = {avg_prec / np.mean(np.abs(masked_true_graph) > 0):.2f}"
     )
     axs[0].legend()
     axs[0].grid(True)
 
     # --- MLPODEF-based ---
-    y_pred_mlp = np.abs(maskdiag(causal_graph).flatten())
+    y_pred_mlp = np.abs(masked_causal_graph.flatten())
     prec, rec, _ = precision_recall_curve(y_true, y_pred_mlp)
     avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
 
@@ -491,7 +500,7 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0):
     axs[1].set_xlabel("Recall")
     axs[1].set_ylabel("Precision")
     axs[1].set_title(
-        f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp / np.mean(np.abs(true_graph) > 0):.2f}"
+        f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp / np.mean(np.abs(masked_true_graph) > 0):.2f}"
     )
     axs[1].legend()
     axs[1].grid(True)
@@ -506,7 +515,7 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0):
         plt.show()
     
     print("AP: ", avg_prec)
-    print("AUPR ratio: ", avg_prec / np.mean(np.abs(true_graph) > 0))
+    print("AUPR ratio: ", avg_prec / np.mean(np.abs(masked_true_graph) > 0))
 
 
 def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0):
