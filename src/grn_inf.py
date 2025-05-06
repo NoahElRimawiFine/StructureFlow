@@ -165,8 +165,8 @@ def main(args):
     
     # Special handling for Renge dataset to align gene sets
     if DATASET_TYPE == "Renge":
-        A_estim = A_estim.T
-        W_v = W_v.T
+        # A_estim = A_estim.T
+        # W_v = W_v.T
         # Get gene names from the dataset
         gene_names = datamodule.adatas[0].var_names
         

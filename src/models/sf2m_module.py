@@ -62,7 +62,7 @@ class SF2MLitModule(LightningModule):
         optimizer=Any,
         enable_epoch_end_hook: bool = True,
         use_mlp_baseline: bool = False,
-        use_correction_mlp: bool = True,
+        use_correction_mlp: bool = True, 
     ):
         """Initializes the sf2m_ngm model and loads data.
 
