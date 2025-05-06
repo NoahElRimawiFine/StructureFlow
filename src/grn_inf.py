@@ -16,13 +16,13 @@ from src.models.components.plotting import compute_global_jacobian, plot_auprs, 
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Renge"
 DEFAULT_MODEL_TYPE = "sf2m"
-DEFAULT_N_STEPS = 15000
-DEFAULT_BATCH_SIZE = 64
-DEFAULT_LR = 3e-3
-DEFAULT_ALPHA = 0.1
-DEFAULT_REG = 5e-7
+DEFAULT_N_STEPS = 10000
+DEFAULT_BATCH_SIZE = 128
+DEFAULT_LR = 6e-2
+DEFAULT_ALPHA = 0.9
+DEFAULT_REG = 1e-8
 DEFAULT_CORRECTION_REG = 1e-3
-DEFAULT_GL_REG = 0.04
+DEFAULT_GL_REG = 4e-4
 DEFAULT_KNOCKOUT_HIDDEN = 256
 DEFAULT_SCORE_HIDDEN = [100, 100]
 DEFAULT_CORRECTION_HIDDEN = [64, 64]
@@ -165,6 +165,8 @@ def main(args):
     
     # Special handling for Renge dataset to align gene sets
     if DATASET_TYPE == "Renge":
+        A_estim = A_estim.T
+        W_v = W_v.T
         # Get gene names from the dataset
         gene_names = datamodule.adatas[0].var_names
         
@@ -187,9 +189,9 @@ def main(args):
     else:
         # For synthetic data, use matrices directly
         A_true = true_matrix.values
-    
+        
     plot_auprs(W_v, A_estim, A_true, mask_diagonal=False)
-    log_causal_graph_matrices(A_estim, W_v, A_true)
+    log_causal_graph_matrices(A_estim, W_v, A_true, mask_diagonal=False)
 
 
 if __name__ == "__main__":

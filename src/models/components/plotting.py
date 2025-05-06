@@ -514,27 +514,32 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0, m
     else:
         plt.show()
     
-    print("AP: ", avg_prec)
-    print("AUPR ratio: ", avg_prec / np.mean(np.abs(masked_true_graph) > 0))
+    print("AP: ", avg_prec_mlp)
+    print("AUPR ratio: ", avg_prec_mlp / np.mean(np.abs(masked_true_graph) > 0))
 
 
-def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0):
+def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0, mask_diagonal=True):
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
 
+    # Apply masking based on parameter
+    A_estim_plot = maskdiag(A_estim) if mask_diagonal else A_estim
+    W_v_plot = maskdiag(W_v) if mask_diagonal else W_v
+    A_true_plot = maskdiag(A_true) if mask_diagonal else A_true
+
     # --- A_estim ---
-    im1 = axs[0].imshow(maskdiag(A_estim), vmin=-0.5, vmax=0.5, cmap="RdBu_r")
+    im1 = axs[0].imshow(A_estim_plot, vmin=-0.5, vmax=0.5, cmap="RdBu_r")
     axs[0].invert_yaxis()
     axs[0].set_title("A_estim (from Jacobian)")
     fig.colorbar(im1, ax=axs[0])
 
     # --- W_v ---
-    im2 = axs[1].imshow(maskdiag(W_v), cmap="Reds")
+    im2 = axs[1].imshow(W_v_plot, cmap="Reds")
     axs[1].invert_yaxis()
     axs[1].set_title("Causal Graph (from MLPODEF)")
     fig.colorbar(im2, ax=axs[1])
 
     # --- A_true ---
-    im3 = axs[2].imshow(maskdiag(A_true), vmin=-1, vmax=1, cmap="RdBu_r")
+    im3 = axs[2].imshow(A_true_plot, vmin=-1, vmax=1, cmap="RdBu_r")
     axs[2].invert_yaxis()
     axs[2].set_title("A_true")
     fig.colorbar(im3, ax=axs[2])
