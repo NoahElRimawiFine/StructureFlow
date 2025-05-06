@@ -33,7 +33,7 @@ class BridgeMatcher:
 
 
 class EntropicOTFM:
-    def __init__(self, x, t_idx, dt, sigma, T, dim, device):
+    def __init__(self, x, t_idx, dt, sigma, T, dim, device, held_out_time=None):
         def entropic_ot_plan(x0, x1, eps):
             C = pot.utils.euclidean_distances(x0, x1, squared=True) / 2
             p, q = torch.full((x0.shape[0],), 1 / x0.shape[0]), torch.full(
@@ -52,13 +52,16 @@ class EntropicOTFM:
         self.Ts = []
         # construct EOT plans
         for i in range(self.T - 1):
-            self.Ts.append(
-                entropic_ot_plan(
-                    self.x[self.t_idx == i, :],
-                    self.x[self.t_idx == i + 1, :],
-                    self.dt * self.sigma**2,
+            if i == self.held_out_time or i+1 == self.held_out_time:
+                continue
+            else:
+                self.Ts.append(
+                    entropic_ot_plan(
+                        self.x[self.t_idx == i, :],
+                        self.x[self.t_idx == i + 1, :],
+                        self.dt * self.sigma**2,
+                    )
                 )
-            )
 
     def sample_bridges_flows(self, batch_size=64, skip_time=None):
         _x = []

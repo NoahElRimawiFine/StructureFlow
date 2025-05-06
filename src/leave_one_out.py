@@ -208,9 +208,6 @@ def main(args):
             adata_filt = adata_orig[adata_orig.obs['t'] != held_out_time].copy()
             fold_adatas.append(adata_filt)
 
-        # --- 2.2 Create a Temporary DataModule View for this Fold ---
-        original_adatas_backup = datamodule.adatas
-        datamodule.adatas = fold_adatas
 
         # --- 2.3 Instantiate and Train Model ---
         model = None
@@ -253,6 +250,7 @@ def main(args):
                 enable_epoch_end_hook=False,
                 use_mlp_baseline=use_mlp,
                 use_correction_mlp=use_correction,
+                held_out_time=held_out_time,
             )
             
             # Train the model with Lightning
@@ -274,9 +272,6 @@ def main(args):
             print(f"Training model for {N_STEPS_PER_FOLD} steps...")
             trainer.fit(model, datamodule=datamodule)
             print("Training complete.")
-
-        # --- Restore Original Data in DataModule ---
-        datamodule.adatas = original_adatas_backup
 
         # --- 2.6 Evaluate on the Held-Out Timepoint ---
         print(f"Evaluating model on predicting t={held_out_time} from t={held_out_time-1}...")
