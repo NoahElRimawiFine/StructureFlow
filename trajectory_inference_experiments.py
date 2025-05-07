@@ -218,8 +218,7 @@ def main():
     # Configuration
     model_types = ["sf2m", "rf", "mlp_baseline"]
     dataset_types = ["Synthetic", "Curated"]
-    synthetic_datasets = ["dyn-TF", "dyn-BF", "dyn-BFC", "dyn-BFStrange", "dyn-BN8", 
-                         "dyn-CN5", "dyn-CY", "dyn-FN4", "dyn-FN8", "dyn-LI", "dyn-LL", "dyn-SW"]
+    synthetic_datasets = ["dyn-TF", "dyn-BF", "dyn-CY", "dyn-LL", "dyn-SW"]
     seeds = [1, 2, 3, 4, 5]
     
     # Create base results directory
