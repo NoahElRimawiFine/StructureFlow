@@ -16,10 +16,12 @@ class MLP(nn.Module):
         time_varying=True,
         conditional=False,
         conditional_dim=0,  # dimension of the knockout or condition
+        dropout_rate=0.0,   # Add dropout rate parameter
     ):
         super().__init__()
         self.time_varying = time_varying
         self.conditional = conditional
+        self.dropout_rate = dropout_rate
 
         input_dim = d
         if self.time_varying:
@@ -36,9 +38,11 @@ class MLP(nn.Module):
             in_size = hidden_sizes[i]
             out_size = hidden_sizes[i + 1]
             layers.append(nn.Linear(in_size, out_size))
-            # activation except for the last layer
+            # activation and dropout except for the last layer
             if i < len(hidden_sizes) - 2:
                 layers.append(activation())
+                if dropout_rate > 0:
+                    layers.append(nn.Dropout(dropout_rate))
 
         self.net = nn.Sequential(*layers)
 

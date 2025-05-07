@@ -101,10 +101,13 @@ class MLP(nn.Module):
         ],
         activation=nn.ReLU,
         time_varying=True,
+        dropout_rate=0.0,
     ):
         super().__init__()
         self.net = nn.Sequential()
         self.time_varying = time_varying
+        self.dropout_rate = dropout_rate
+        
         assert len(hidden_sizes) > 0
         hidden_sizes = copy.copy(hidden_sizes)
         if time_varying:
@@ -118,6 +121,9 @@ class MLP(nn.Module):
             )
             if i < len(hidden_sizes) - 2:
                 self.net.add_module(name=f"A{i}", module=activation())
+                if dropout_rate > 0:
+                    self.net.add_module(name=f"D{i}", module=nn.Dropout(dropout_rate))
+                    
         for m in self.net.modules():
             if isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, mean=0, std=0.1)

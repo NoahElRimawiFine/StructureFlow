@@ -492,7 +492,14 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0):
 
     # --- Logging or showing ---
     if logger is not None:
-        logger.experiment.add_figure("Causal_Graph", fig, global_step=global_step)
+        # Check if it's a wandb logger
+        if hasattr(logger.experiment, "log") and not hasattr(logger.experiment, "add_figure"):
+            # It's a wandb logger
+            import wandb
+            logger.experiment.log({"Causal_Graph": wandb.Image(fig)}, step=global_step)
+        else:
+            # Assume it's a TensorBoard logger or something compatible
+            logger.experiment.add_figure("Causal_Graph", fig, global_step=global_step)
         plt.close(fig)
     else:
         plt.show()
@@ -522,7 +529,14 @@ def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0):
     fig.tight_layout()
 
     if logger is not None:
-        logger.experiment.add_figure("Causal_Graph_Matrices", fig, global_step=global_step)
+        # Check if it's a wandb logger
+        if hasattr(logger.experiment, "log") and not hasattr(logger.experiment, "add_figure"):
+            # It's a wandb logger
+            import wandb
+            logger.experiment.log({"Causal_Graph_Matrices": wandb.Image(fig)}, step=global_step)
+        else:
+            # Assume it's a TensorBoard logger or something compatible
+            logger.experiment.add_figure("Causal_Graph_Matrices", fig, global_step=global_step)
         plt.close(fig)
     else:
         plt.show()

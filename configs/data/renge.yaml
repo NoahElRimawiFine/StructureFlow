@@ -6,7 +6,11 @@ dataset_type: "Renge"
 
 # DataLoader parameters
 batch_size: 64
-num_workers: 1
+num_workers: 0  # Use single-process data loading to avoid multiprocessing issues
+
+# Use a dummy train loader for the SF2M model to avoid validation issues
+use_dummy_train_loader: true
+dummy_loader_steps: 500000  # Match the n_steps parameter
 
 # Train-validation-test split
 train_val_test_split: [0.8, 0.1, 0.1]

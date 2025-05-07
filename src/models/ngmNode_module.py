@@ -172,7 +172,14 @@ class NGMNodeModule(LightningModule):
         fig.colorbar(cax)
 
         if self.logger is not None:
-            self.logger.experiment.add_figure("Causal_Graph", fig, global_step=self.global_step)
+            # Check if it's a wandb logger
+            if hasattr(self.logger.experiment, "log") and not hasattr(self.logger.experiment, "add_figure"):
+                # It's a wandb logger
+                import wandb
+                self.logger.experiment.log({"Causal_Graph": wandb.Image(fig)}, step=self.global_step)
+            else:
+                # Assume it's a TensorBoard logger or something compatible
+                self.logger.experiment.add_figure("Causal_Graph", fig, global_step=self.global_step)
             plt.close(fig)
         else:
             plt.show()

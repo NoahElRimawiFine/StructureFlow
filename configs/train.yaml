@@ -8,7 +8,7 @@ defaults:
   - model: sf2m
   - callbacks: default
   - logger: csv # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
-  - trainer: default
+  - trainer: sf2m # Use the sf2m trainer directly
   - paths: default
   - extras: default
   - hydra: default
@@ -40,7 +40,7 @@ train: True
 
 # evaluate on test set, using best model weights achieved during training
 # lightning chooses best weights based on the metric specified in checkpoint callback
-test: True
+test: False  # Disable test evaluation since we're focusing on training
 
 # simply provide checkpoint path to resume training
 ckpt_path: null

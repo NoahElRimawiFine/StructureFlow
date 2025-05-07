@@ -7,7 +7,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+import torchvision
 import torchsde
 from lightning.pytorch import (
     LightningDataModule,
@@ -20,6 +22,7 @@ from torch.distributions import MultivariateNormal
 from torchdyn.core import NeuralODE
 from torchvision import transforms
 from tqdm import tqdm
+import torch.distributions as dist
 
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.components.base import MLPODEFKO
@@ -59,6 +62,7 @@ class SF2MLitModule(LightningModule):
         knockout_hidden=100,
         score_hidden=[100, 100],
         correction_hidden=[64, 64],
+        dr=0.2,
         optimizer=Any,
         enable_epoch_end_hook: bool = True,
         use_mlp_baseline: bool = False,
@@ -161,11 +165,17 @@ class SF2MLitModule(LightningModule):
             time_varying=True,
             conditional=True,
             conditional_dim=self.n_genes,
+            dropout_rate=dr,
         )
 
         # Create correction network only if enabled
         if self.use_correction_mlp:
-            self.v_correction = MLP(d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True)
+            self.v_correction = MLP(
+                d=self.n_genes, 
+                hidden_sizes=correction_hidden, 
+                time_varying=True,
+                dropout_rate=dr,
+            )
         else:
             # Create a dummy module that returns zeros
             class ZeroModule(torch.nn.Module):
@@ -448,7 +458,18 @@ class SF2MLitModule(LightningModule):
             all_results = sorted(all_results, key=lambda r: r["Time"])
             df = pd.DataFrame(all_results)
             table_str = df.to_markdown(index=False)
-            self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+            
+            # Check if it's a wandb logger
+            if hasattr(self.logger.experiment, "log") and not hasattr(self.logger.experiment, "add_text"):
+                # It's a wandb logger
+                import wandb
+                self.logger.experiment.log({
+                    "Training Wasserstein Distances": wandb.Table(dataframe=df)
+                }, step=self.global_step)
+            else:
+                # Assume it's a TensorBoard logger or something compatible
+                self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+                
             # Optionally also log individual metrics:
             for row in all_results:
                 self.log(f"train/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True)
@@ -495,12 +516,39 @@ class SF2MLitModule(LightningModule):
             W_v_np = W_v_subset.values
             A_true_np = ref_network.values
             
+            # Calculate metrics for optimization
+            y_true = np.abs(np.sign(maskdiag(A_true_np)).astype(int).flatten())
+            y_pred_jacobian = np.abs(maskdiag(A_estim_np).flatten())
+            y_pred_mlp = np.abs(maskdiag(W_v_np).flatten())
+            
+            # Calculate average precision scores
+            ap_jacobian = average_precision_score(y_true, y_pred_jacobian)
+            ap_mlp = average_precision_score(y_true, y_pred_mlp)
+            
+            # Log both AP scores - IMPORTANT for Optuna optimization
+            self.log("val/ap_jacobian", ap_jacobian, on_step=False, on_epoch=True, prog_bar=True)
+            self.log("val/ap", ap_mlp, on_step=False, on_epoch=True, prog_bar=True)  # This is the metric used for optimization
+            
             # Plot with the subset matrices
             plot_auprs(W_v_np, A_estim_np, A_true_np, self.logger, self.global_step)
             log_causal_graph_matrices(A_estim_np, W_v_np, A_true_np, self.logger, self.global_step)
         else:
             # Standard handling for synthetic data
             A_true = self.true_matrix
+            
+            # Calculate metrics for optimization
+            y_true = np.abs(np.sign(maskdiag(A_true)).astype(int).flatten())
+            y_pred_jacobian = np.abs(maskdiag(A_estim).flatten())
+            y_pred_mlp = np.abs(maskdiag(W_v).flatten())
+            
+            # Calculate average precision scores
+            ap_jacobian = average_precision_score(y_true, y_pred_jacobian)
+            ap_mlp = average_precision_score(y_true, y_pred_mlp)
+            
+            # Log both AP scores - IMPORTANT for Optuna optimization
+            self.log("val/ap_jacobian", ap_jacobian, on_step=False, on_epoch=True, prog_bar=True)
+            self.log("val/ap", ap_mlp, on_step=False, on_epoch=True, prog_bar=True)  # This is the metric used for optimization
+            
             plot_auprs(W_v, A_estim, A_true, self.logger, self.global_step)
             log_causal_graph_matrices(A_estim, W_v, A_true, self.logger, self.global_step)
         
@@ -567,7 +615,18 @@ class SF2MLitModule(LightningModule):
         all_results = sorted(all_results, key=lambda r: r["Time"])
         df = pd.DataFrame(all_results)
         table_str = df.to_markdown(index=False)
-        self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+        
+        # Check if it's a wandb logger
+        if hasattr(self.logger.experiment, "log") and not hasattr(self.logger.experiment, "add_text"):
+            # It's a wandb logger
+            import wandb
+            self.logger.experiment.log({
+                "Validation Wasserstein Distances": wandb.Table(dataframe=df)
+            }, step=self.global_step)
+        else:
+            # Assume it's a TensorBoard logger or something compatible
+            self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+            
         # Optionally also log individual metrics:
         for row in all_results:
             self.log(f"val/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True)

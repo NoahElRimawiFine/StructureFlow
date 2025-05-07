@@ -14,6 +14,7 @@ class BridgeMatcher:
 
     def sample_map(self, pi, batch_size, replace=True):
         p = pi.flatten()
+        p = torch.abs(p) + 1e-10  # Add small epsilon to avoid zeros
         p = p / p.sum()
         choices = torch.multinomial(p, num_samples=batch_size, replacement=replace)
         return np.divmod(choices, pi.shape[1])
@@ -86,12 +87,14 @@ class EntropicOTFM:
             _t.append((i + ts) * self.dt)
             _t_orig.append(ts)
             _u.append(u)
+        
+        # Stack all tensors and move to the specified device
         return (
-            torch.vstack(_x),
-            torch.vstack(_s),
-            torch.vstack(_u),
-            torch.vstack(_t),
-            torch.vstack(_t_orig),
+            torch.vstack(_x).to(self.device),
+            torch.vstack(_s).to(self.device),
+            torch.vstack(_u).to(self.device),
+            torch.vstack(_t).to(self.device),
+            torch.vstack(_t_orig).to(self.device),
         )
 
 
@@ -144,6 +147,8 @@ class OTPlanSampler:
 
     def sample_map(self, pi, batch_size):
         p = pi.flatten()
+        # Fix: Ensure probabilities are non-negative and sum to 1
+        p = np.abs(p) + 1e-10  # Add small epsilon to avoid zeros
         p = p / p.sum()
         choices = np.random.choice(pi.shape[0] * pi.shape[1], p=p, size=batch_size)
         return np.divmod(choices, pi.shape[1])

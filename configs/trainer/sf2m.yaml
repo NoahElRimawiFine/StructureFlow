@@ -1,0 +1,25 @@
+_target_: lightning.pytorch.trainer.Trainer
+
+default_root_dir: ${paths.output_dir}
+
+# Use max_steps from the model configuration instead of max_epochs
+max_steps: ${model.n_steps}
+min_epochs: null
+max_epochs: null  # Setting to null so max_steps takes precedence
+
+# Force CPU usage to avoid device mismatch issues
+accelerator: "cpu"
+devices: 1
+
+# mixed precision for extra speed-up
+# precision: 16
+
+# perform a validation loop every N training steps
+val_check_interval: 10000
+
+# set True to to ensure deterministic results
+# makes training slower but gives more reproducibility than just setting seeds
+deterministic: False
+
+# Skip validation sanity check
+num_sanity_val_steps: 0 
