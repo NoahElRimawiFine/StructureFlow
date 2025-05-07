@@ -147,6 +147,7 @@ configs/local/default.yaml
 /logs/
 .env
 src/jobs/results
+checkpoints/
 
 # Aim logging
 .aim
