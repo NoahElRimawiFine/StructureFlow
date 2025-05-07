@@ -140,18 +140,20 @@ dmypy.json
 # JetBrains
 .idea/
 
-# Data & Models
-
 # Lightning-Hydra-Template
 configs/local/default.yaml
 /logs/
 .env
-src/jobs/results
+./src/jobs/results
+lightning_logs/
 
 # Aim logging
 .aim
 
 # leave_one_out results
 loo_results/
+loko_results/
 .cursor/rules/gemini-rules.mdc
 .conda/
+results/
+checkpoints/

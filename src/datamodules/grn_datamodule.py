@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset, random_split, IterableDataset, ConcatDataset
-
+import scanpy as sc
 from .components import sc_dataset as util
 
 
@@ -177,8 +177,8 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             else:
                 self.ko_indices.append(self.gene_to_index[ko])
 
-    def _setup_renge_data(self):
-        """Load Renge data from disk and convert to AnnData objects."""
+    def _setup_renge_data_old(self):
+        """Load Renge data from disk and convert to AnnData objects, excluding wildtype data."""
         # Load the Renge data files
         x_renge_path = os.path.join(self.data_path, "X_renge_d2_80.csv")
         e_renge_path = os.path.join(self.data_path, "E_renge_d2_80.csv")
@@ -194,27 +194,17 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         # Load the data
         x_renge = pd.read_csv(x_renge_path, index_col=0)
         e_renge = pd.read_csv(e_renge_path, index_col=0)
+
+        # Extract time column from X_RENGE
+        time_column = x_renge.pop('t').values
         
-        # Create the reference network matrix
+        # Get gene names (all columns except the last one from X_RENGE, and first one is cell IDs)
+        gene_names = x_renge.columns.tolist()[1:]
+        self.dim = len(gene_names)
+        
+        # Set the reference network matrix - keep original dimensions
         if has_ref_network:
-            # Handle the non-square reference network
-            # Get all unique genes from both rows and columns of ref_network
-            all_genes = list(set(list(ref_network.index) + list(ref_network.columns)))
-            
-            # Create a square matrix from the non-square reference
-            square_matrix = pd.DataFrame(
-                np.zeros((len(all_genes), len(all_genes)), int),
-                index=all_genes,
-                columns=all_genes,
-            )
-            
-            # Fill in the values from the reference network
-            for i in ref_network.index:
-                for j in ref_network.columns:
-                    if i in square_matrix.index and j in square_matrix.columns:
-                        square_matrix.loc[i, j] = ref_network.loc[i, j]
-            
-            self.true_matrix = square_matrix
+            self.true_matrix = ref_network
         else:
             # Create an empty matrix if no reference is available
             self.true_matrix = pd.DataFrame(
@@ -223,15 +213,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                 columns=gene_names,
             )
         
-        # Extract time column from X_RENGE
-        time_column = x_renge.pop('t').values
-        
-        # Get gene names (all columns except the last one from X_RENGE, and first one is cell IDs)
-        gene_names = x_renge.columns.tolist()[1:]
-        self.dim = len(gene_names)
-        
         # Create a dictionary to group cells by knockout gene
-        # e.g., ko_groups = {'gene1': [cell1, cell2], 'gene2': [cell3, cell4]}
         ko_groups = {}
         
         # For each row, determine the knockout gene (if any)
@@ -242,10 +224,11 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                     ko_gene = gene 
                     break
             
-            # Add to appropriate group (None for wildtype)
-            if ko_gene not in ko_groups:
-                ko_groups[ko_gene] = []
-            ko_groups[ko_gene].append(idx)
+            # Only add to groups if it's a knockout (not wildtype)
+            if ko_gene is not None:
+                if ko_gene not in ko_groups:
+                    ko_groups[ko_gene] = []
+                ko_groups[ko_gene].append(idx)
         
         # Create separate AnnData objects for each knockout condition
         self.adatas = []
@@ -257,12 +240,10 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         
         for ko_gene, cell_indices in ko_groups.items():
             # Extract expression data for these cells
-            # e.g., subset_expr = pd.DataFrame([[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]], index=[cell1, cell3])
             subset_expr = e_renge.loc[cell_indices]
             # Extract time data for these cells
-            # e.g., subset_time = pd.Series([0.1, 0.2, 0.3, 0.4], index=[cell1, cell3, cell4, cell7])
             subset_time = pd.Series(time_column[np.where(np.isin(x_renge.index, cell_indices))[0]], 
-                                   index=cell_indices)
+                                index=cell_indices)
             
             # Create AnnData object
             adata = ad.AnnData(X=subset_expr.values)
@@ -276,7 +257,77 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
 
             self.adatas.append(adata)
             self.kos.append(ko_gene)
-            self.ko_indices.append(None if ko_gene is None else self.gene_to_index[ko_gene])
+            self.ko_indices.append(self.gene_to_index[ko_gene])  # ko_gene is never None here
+
+    def _setup_renge_data(self):
+        """Load Renge data from disk and use the hipsc AnnData object."""
+        # Load the hipsc.h5ad file
+        hipsc_path = os.path.join(self.data_path, "hipsc.h5ad")
+        hipsc = sc.read_h5ad(hipsc_path)
+        
+        if 'gene' in hipsc.var:
+            # Create a mapping from current IDs to gene symbols
+            gene_mapping = dict(zip(hipsc.var_names, hipsc.var['gene']))
+            
+            # Create a new AnnData with gene symbols as variable names
+            gene_symbols = hipsc.var['gene'].tolist()
+            
+            # Rename the variables using the gene symbols
+            hipsc.var_names = pd.Index(gene_symbols)
+            hipsc.var.index = hipsc.var_names
+        
+        # Load the reference network if available
+        ref_network_path = os.path.join(self.data_path, "A_ref_thresh_0.csv")
+        try:
+            ref_network = pd.read_csv(ref_network_path, index_col=0)
+            has_ref_network = True
+        except FileNotFoundError:
+            has_ref_network = False
+        
+        # Set dimensions based on genes in the hipsc data
+        gene_names = hipsc.var_names.tolist()
+        self.dim = len(gene_names)
+        
+        # Set the reference network matrix
+        if has_ref_network:
+            self.true_matrix = ref_network
+        else:
+            # Create an empty matrix if no reference is available
+            self.true_matrix = pd.DataFrame(
+                np.zeros((self.dim, self.dim), int),
+                index=gene_names,
+                columns=gene_names,
+            )
+        
+        # Shift timepoints to start from 0
+        min_t = hipsc.obs['t'].min()
+        hipsc.obs['t'] = hipsc.obs['t'] - min_t
+        
+        # Convert sparse matrix to dense if needed
+        if hasattr(hipsc.X, 'toarray'):
+            hipsc.X = hipsc.X.toarray()
+        
+        # Create separate AnnData objects for each knockout condition
+        ko_groups = hipsc.obs.groupby('ko')
+        
+        self.adatas = []
+        self.kos = []
+        self.ko_indices = []
+        
+        # gene_to_index mapping
+        self.gene_to_index = {gene: idx for idx, gene in enumerate(gene_names)}
+        
+        for ko_gene, indices in ko_groups.indices.items():
+            # Extract subset for this condition
+            adata_subset = hipsc[indices].copy()
+            
+            # Handle the case where ko_gene might be NaN or a special value for wildtype
+            if pd.isna(ko_gene) or ko_gene == 'wt' or ko_gene == 'WT' or ko_gene == '':
+                ko_gene = None
+            
+            self.adatas.append(adata_subset)
+            self.kos.append(ko_gene)
+            self.ko_indices.append(None if ko_gene is None else self.gene_to_index.get(ko_gene))
 
     def get_subset_adatas(self, split: str = "train"):
         """Returns a list of AnnData objects, each containing only the cells used in the specified

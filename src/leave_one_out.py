@@ -36,8 +36,7 @@ DEFAULT_SIGMA = 1.0
 DEFAULT_N_TIMES_SIM = 100
 DEFAULT_DEVICE = "cpu"
 DEFAULT_SEED = 42
-DEFAULT_RESULTS_DIR = "loo_results"
-DEFAULT_MODEL_TYPE = "sf2m"
+DEFAULT_RESULTS_DIR = "loo_results_temp"
 DEFAULT_USE_CORRECTION_MLP = True
 
 
@@ -218,7 +217,7 @@ def main(args):
         if MODEL_TYPE == "rf":
             print("Using Reference Fitting model...")
             # Initialize RF model
-            model = ReferenceFittingModule(use_cuda=(DEVICE == "cuda"))
+            model = ReferenceFittingModule(use_cuda=(DEVICE == "cuda"), iter=N_STEPS_PER_FOLD)
             
             # Fit the model with holdout time (RF handles data filtering internally)
             print(f"Fitting RF model with holdout time {held_out_time}...")
