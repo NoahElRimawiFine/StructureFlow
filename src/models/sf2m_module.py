@@ -62,8 +62,7 @@ class SF2MLitModule(LightningModule):
         optimizer=Any,
         enable_epoch_end_hook: bool = True,
         use_mlp_baseline: bool = False,
-        use_correction_mlp: bool = True,
-        held_out_time: int = None,
+        use_correction_mlp: bool = True, 
     ):
         """Initializes the sf2m_ngm model and loads data.
 
@@ -103,9 +102,6 @@ class SF2MLitModule(LightningModule):
         self.save_hyperparameters()
 
         self.enable_epoch_end_hook = enable_epoch_end_hook
-
-        # held out time
-        self.held_out_time = held_out_time
 
         # -----------------------
         # 1. Load the data
@@ -152,11 +148,11 @@ class SF2MLitModule(LightningModule):
 
         if self.use_mlp_baseline:
             self.func_v = MLPFlow(
-                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
+                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks, device=device
             )
         else:
             self.func_v = MLPODEFKO(
-                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
+                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks, device=device
             )
 
         self.score_net = CONDMLP(
@@ -165,6 +161,7 @@ class SF2MLitModule(LightningModule):
             time_varying=True,
             conditional=True,
             conditional_dim=self.n_genes,
+            device=device
         )
 
         # Create correction network only if enabled
@@ -225,7 +222,6 @@ class SF2MLitModule(LightningModule):
                 T=T,
                 dim=x_tensor.shape[1],
                 device=self.device,
-                held_out_time=self.held_out_time
             )
             otfms.append(model)
         return otfms
@@ -262,33 +258,39 @@ class SF2MLitModule(LightningModule):
 
         # Sample bridging flows
         _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
-            batch_size=self.batch_size, skip_time=self.held_out_time
+            batch_size=self.batch_size, skip_time=None
         )
+        _x = _x.to(self.device)
+        _s = _s.to(self.device)
+        _u = _u.to(self.device)
+        _t = _t.to(self.device)
+        _t_orig = _t_orig.to(self.device)
 
         optimizer.zero_grad()
 
         # Prepare inputs
         s_input = _x.unsqueeze(1)
-        v_input = _x.unsqueeze(1)
-        t_input = _t.unsqueeze(1)
+        v_input = _x.unsqueeze(1).to(self.device)
+        t_input = _t.unsqueeze(1).to(self.device)
         B = _x.shape[0]
 
         # Expand conditional vectors to match batch size
         cond_expanded = cond_vector.repeat(B // cond_vector.shape[0] + 1, 1)[:B]
+        cond_expanded = cond_expanded.to(self.device)
 
         # Score net output
-        s_fit = self.score_net(_t, _x, cond_expanded).squeeze(1)
+        s_fit = self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded).squeeze(1)
 
         # Flow net output, with or without correction
         if self.global_step <= 500 or not self.use_correction_mlp:
             # Warmup phase or no correction
             v_fit = self.func_v(t_input, v_input).squeeze(1) - (
                 model.sigma**2 / 2
-            ) * self.score_net(_t, _x, cond_expanded)
+            ) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
         else:
             # Full training phase with correction
-            v_fit = self.func_v(t_input, v_input).squeeze(1) + self.v_correction(_t, _x)
-            v_fit = v_fit - (model.sigma**2 / 2) * self.score_net(_t, _x, cond_expanded)
+            v_fit = self.func_v(t_input, v_input).squeeze(1) + self.v_correction(_t.to(self.device), _x.to(self.device))
+            v_fit = v_fit - (model.sigma**2 / 2) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
 
         # Losses
         L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
@@ -453,7 +455,8 @@ class SF2MLitModule(LightningModule):
             all_results = sorted(all_results, key=lambda r: r["Time"])
             df = pd.DataFrame(all_results)
             table_str = df.to_markdown(index=False)
-            self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+            if self.logger is not None:
+                self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
             # Optionally also log individual metrics:
             for row in all_results:
                 self.log(f"train/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True)
@@ -572,7 +575,8 @@ class SF2MLitModule(LightningModule):
         all_results = sorted(all_results, key=lambda r: r["Time"])
         df = pd.DataFrame(all_results)
         table_str = df.to_markdown(index=False)
-        self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+        if self.logger is not None:
+            self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
         # Optionally also log individual metrics:
         for row in all_results:
             self.log(f"val/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True)

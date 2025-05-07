@@ -411,7 +411,9 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
 
     Returns a [d, d] numpy array representing an average Jacobian.
     """
-
+    # Move model to the specified device if it's not already there
+    v = v.to(device)
+    
     all_x_list = []
     for ds_idx, adata in enumerate(adatas):
         x0 = adata.X[adata.obs["t"] == 0]
@@ -423,45 +425,60 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
     if X_all.shape[0] == 0:
         return None
 
+    # Move data to device once
     X_all_torch = torch.from_numpy(X_all).float().to(device)
+    t_val = torch.tensor(0.0, device=device)
 
     def get_flow(t, x):
+        # No need to move to device again as input tensors are already on the right device
         x_input = x.unsqueeze(0).unsqueeze(0)
         t_input = t.unsqueeze(0).unsqueeze(0)
         return v(t_input, x_input).squeeze(0).squeeze(0)
 
-    # Or loop over multiple times if the model is time-varying
-    t_val = torch.tensor(0.0).to(device)
-
+    # Move the function to device context to ensure all intermediates stay on device
     Ju = torch.func.jacrev(get_flow, argnums=1)
 
     Js = []
-
     batch_size = 256
-    for start in range(0, X_all_torch.shape[0], batch_size):
-        end = start + batch_size
-        batch_x = X_all_torch[start:end]
-
-        J_local = torch.vmap(lambda x: Ju(t_val, x))(batch_x)
-        J_avg = J_local.mean(dim=0)
-        Js.append(J_avg)
+    
+    # Using a context manager to ensure all operations happen on the specified device
+    with torch.device(device):
+        for start in range(0, X_all_torch.shape[0], batch_size):
+            end = start + batch_size
+            batch_x = X_all_torch[start:end]
+            
+            # Using a lambda that ensures inputs stay on device
+            J_local = torch.vmap(lambda x: Ju(t_val, x))(batch_x)
+            J_avg = J_local.mean(dim=0)
+            Js.append(J_avg)
 
     if len(Js) == 0:
         return None
+        
+    # Stack and compute mean, ensuring it stays on device
     J_final = torch.stack(Js, dim=0).mean(dim=0)
-
     A_est = J_final
 
+    # Only move to CPU at the very end
     return A_est.detach().cpu().numpy().T
 
 
-def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0):
-    fig, axs = plt.subplots(1, 2, figsize=(12, 5))  # Create a figure explicitly
+def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0, mask_diagonal=True):
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
 
-    y_true = np.abs(np.sign(maskdiag(true_graph)).astype(int).flatten())
+    if mask_diagonal:
+        masked_true_graph = maskdiag(true_graph)
+        masked_jacobian = maskdiag(jacobian)
+        masked_causal_graph = maskdiag(causal_graph)
+    else:
+        masked_true_graph = true_graph
+        masked_jacobian = jacobian
+        masked_causal_graph = causal_graph
+
+    y_true = np.abs(np.sign(masked_true_graph).astype(int).flatten())
 
     # --- Jacobian-based ---
-    y_pred = np.abs(maskdiag(jacobian).flatten())
+    y_pred = np.abs(masked_jacobian.flatten())
     prec, rec, _ = precision_recall_curve(y_true, y_pred)
     avg_prec = average_precision_score(y_true, y_pred)
 
@@ -469,13 +486,13 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0):
     axs[0].set_xlabel("Recall")
     axs[0].set_ylabel("Precision")
     axs[0].set_title(
-        f"Precision-Recall Curve (Jacobian)\nAUPR ratio = {avg_prec / np.mean(np.abs(true_graph) > 0):.2f}"
+        f"Precision-Recall Curve (Jacobian)\nAUPR ratio = {avg_prec / np.mean(np.abs(masked_true_graph) > 0):.2f}"
     )
     axs[0].legend()
     axs[0].grid(True)
 
     # --- MLPODEF-based ---
-    y_pred_mlp = np.abs(maskdiag(causal_graph).flatten())
+    y_pred_mlp = np.abs(masked_causal_graph.flatten())
     prec, rec, _ = precision_recall_curve(y_true, y_pred_mlp)
     avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
 
@@ -483,7 +500,7 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0):
     axs[1].set_xlabel("Recall")
     axs[1].set_ylabel("Precision")
     axs[1].set_title(
-        f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp / np.mean(np.abs(true_graph) > 0):.2f}"
+        f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp / np.mean(np.abs(masked_true_graph) > 0):.2f}"
     )
     axs[1].legend()
     axs[1].grid(True)
@@ -496,25 +513,33 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0):
         plt.close(fig)
     else:
         plt.show()
+    
+    print("AP: ", avg_prec_mlp)
+    print("AUPR ratio: ", avg_prec_mlp / np.mean(np.abs(masked_true_graph) > 0))
 
 
-def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0):
+def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0, mask_diagonal=True):
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
 
+    # Apply masking based on parameter
+    A_estim_plot = maskdiag(A_estim) if mask_diagonal else A_estim
+    W_v_plot = maskdiag(W_v) if mask_diagonal else W_v
+    A_true_plot = maskdiag(A_true) if mask_diagonal else A_true
+
     # --- A_estim ---
-    im1 = axs[0].imshow(maskdiag(A_estim), vmin=-0.5, vmax=0.5, cmap="RdBu_r")
+    im1 = axs[0].imshow(A_estim_plot, vmin=-0.5, vmax=0.5, cmap="RdBu_r")
     axs[0].invert_yaxis()
     axs[0].set_title("A_estim (from Jacobian)")
     fig.colorbar(im1, ax=axs[0])
 
     # --- W_v ---
-    im2 = axs[1].imshow(maskdiag(W_v), cmap="Reds")
+    im2 = axs[1].imshow(W_v_plot, cmap="Reds")
     axs[1].invert_yaxis()
     axs[1].set_title("Causal Graph (from MLPODEF)")
     fig.colorbar(im2, ax=axs[1])
 
     # --- A_true ---
-    im3 = axs[2].imshow(maskdiag(A_true), vmin=-1, vmax=1, cmap="RdBu_r")
+    im3 = axs[2].imshow(A_true_plot, vmin=-1, vmax=1, cmap="RdBu_r")
     axs[2].invert_yaxis()
     axs[2].set_title("A_true")
     fig.colorbar(im3, ax=axs[2])
