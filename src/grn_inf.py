@@ -70,7 +70,6 @@ def main(args):
         dataset_type=DATASET_TYPE,
         batch_size=BATCH_SIZE,
         num_workers=0,
-        log_transform=LOG_TRANSFORM,
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
