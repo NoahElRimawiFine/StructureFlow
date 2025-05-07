@@ -179,7 +179,7 @@ def main(args):
         batch_size=BATCH_SIZE,
         use_dummy_train_loader=True,
         dummy_loader_steps=N_STEPS_PER_FOLD,
-        num_workers=0,
+        num_workers=20,
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
