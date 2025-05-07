@@ -92,7 +92,7 @@ def main(args):
     if MODEL_TYPE == "rf":
         print("Using Reference Fitting model...")
         # Initialize RF model
-        model = ReferenceFittingModule(use_cuda=(DEVICE == "cuda"), iter=N_STEPS)
+        model = ReferenceFittingModule(use_cuda=(DEVICE == "cuda"))
         
         # Fit the model
         print("Fitting RF model...")
