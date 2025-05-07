@@ -62,7 +62,8 @@ class SF2MLitModule(LightningModule):
         optimizer=Any,
         enable_epoch_end_hook: bool = True,
         use_mlp_baseline: bool = False,
-        use_correction_mlp: bool = True, 
+        use_correction_mlp: bool = True,
+        held_out_time: int = None,
     ):
         """Initializes the sf2m_ngm model and loads data.
 
@@ -102,6 +103,9 @@ class SF2MLitModule(LightningModule):
         self.save_hyperparameters()
 
         self.enable_epoch_end_hook = enable_epoch_end_hook
+
+        # held out time
+        self.held_out_time = held_out_time
 
         # -----------------------
         # 1. Load the data
@@ -222,6 +226,7 @@ class SF2MLitModule(LightningModule):
                 T=T,
                 dim=x_tensor.shape[1],
                 device=self.device,
+                held_out_time=self.held_out_time
             )
             otfms.append(model)
         return otfms
@@ -258,7 +263,7 @@ class SF2MLitModule(LightningModule):
 
         # Sample bridging flows
         _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
-            batch_size=self.batch_size, skip_time=None
+            batch_size=self.batch_size, skip_time=self.held_out_time
         )
         _x = _x.to(self.device)
         _s = _s.to(self.device)

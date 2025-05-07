@@ -26,14 +26,14 @@ class BridgeMatcher:
         # Sample Brownian bridges between paired entries of [x0, x1] at times ts \in [0, 1].
         means = (1 - ts) * x0 + ts * x1
         vars = (sigma**2) * ts * (1 - ts)
-        x = means + torch.sqrt(vars.clamp_min(1e-4)) * torch.randn_like(x0)
-        s = (-1 / vars.clamp_min(1e-4)) * (x - means)
-        u = (1 - 2 * ts) / (2 * ts * (1 - ts) + 1e-4) * (x - means) + x1 - x0
+        x = means + torch.sqrt(vars.clamp_min(1e-8)) * torch.randn_like(x0)
+        s = (-1 / vars.clamp_min(1e-8)) * (x - means)
+        u = (1 - 2 * ts) / (2 * ts * (1 - ts) + 1e-8) * (x - means) + x1 - x0
         return means, vars, x, s, u
 
 
 class EntropicOTFM:
-    def __init__(self, x, t_idx, dt, sigma, T, dim, device):
+    def __init__(self, x, t_idx, dt, sigma, T, dim, device, held_out_time=None):
         def entropic_ot_plan(x0, x1, eps):
             C = pot.utils.euclidean_distances(x0, x1, squared=True) / 2
             p, q = torch.full((x0.shape[0],), 1 / x0.shape[0]), torch.full(
@@ -50,15 +50,30 @@ class EntropicOTFM:
         self.dim = dim
         self.device = device
         self.Ts = []
+        self.held_out_time = held_out_time
+        self.has_bridge_over_held_out = False
+        
         # construct EOT plans
         for i in range(self.T - 1):
-            self.Ts.append(
-                entropic_ot_plan(
-                    self.x[self.t_idx == i, :],
-                    self.x[self.t_idx == i + 1, :],
-                    self.dt * self.sigma**2,
+            if self.held_out_time is not None and (i == self.held_out_time or i+1 == self.held_out_time):
+                self.Ts.append(None)
+                
+                # Create a bridge over the held-out time if it's the first encounter
+                if i == self.held_out_time and not self.has_bridge_over_held_out:
+                    self.bridge_over_held_out = entropic_ot_plan(
+                        self.x[self.t_idx == i-1, :],
+                        self.x[self.t_idx == i+1, :],
+                        2 * self.dt * self.sigma**2,
+                    )
+                    self.has_bridge_over_held_out = True
+            else:
+                self.Ts.append(
+                    entropic_ot_plan(
+                        self.x[self.t_idx == i, :],
+                        self.x[self.t_idx == i + 1, :],
+                        self.dt * self.sigma**2,
+                    )
                 )
-            )
 
     def sample_bridges_flows(self, batch_size=64, skip_time=None):
         _x = []
@@ -66,26 +81,49 @@ class EntropicOTFM:
         _t_orig = []
         _s = []
         _u = []
-        for i in range(self.T - 1):
+        i = 0
+        while i < self.T - 1:
             if skip_time is not None and (i == skip_time or i + 1 == skip_time):
-                continue
-
-            with torch.no_grad():
-                x0, x1 = self.bm.sample_plan(
-                    self.x[self.t_idx == i, :],
-                    self.x[self.t_idx == i + 1, :],
-                    self.Ts[i],
-                    batch_size,
+                if i == skip_time and self.has_bridge_over_held_out:
+                    # Use the bridge spanning the held-out timepoint
+                    with torch.no_grad():
+                        x0, x1 = self.bm.sample_plan(
+                            self.x[self.t_idx == i-1, :],
+                            self.x[self.t_idx == i+1, :],
+                            self.bridge_over_held_out,
+                            batch_size,
+                        )
+                    ts = torch.rand_like(x0[:, :1])
+                    _, _, x, s, u = self.bm.sample_bridge_and_flow(
+                        x0, x1, ts, (2 * self.sigma**2 * self.dt) ** 0.5
+                    )
+                    _x.append(x)
+                    _s.append(s)
+                    _t.append((i-1 + ts*2) * self.dt)  # Scale ts to span 2 timesteps
+                    _t_orig.append(ts)
+                    _u.append(u)
+                    i += 2  # Skip the next iteration as we've handled it
+                else:
+                    i += 1
+            else:
+                with torch.no_grad():
+                    x0, x1 = self.bm.sample_plan(
+                        self.x[self.t_idx == i, :],
+                        self.x[self.t_idx == i + 1, :],
+                        self.Ts[i],
+                        batch_size,
+                    )
+                ts = torch.rand_like(x0[:, :1])
+                _, _, x, s, u = self.bm.sample_bridge_and_flow(
+                    x0, x1, ts, (self.sigma**2 * self.dt) ** 0.5
                 )
-            ts = torch.rand_like(x0[:, :1])
-            _, _, x, s, u = self.bm.sample_bridge_and_flow(
-                x0, x1, ts, (self.sigma**2 * self.dt) ** 0.5
-            )
-            _x.append(x)
-            _s.append(s)
-            _t.append((i + ts) * self.dt)
-            _t_orig.append(ts)
-            _u.append(u)
+                _x.append(x)
+                _s.append(s)
+                _t.append((i + ts) * self.dt)
+                _t_orig.append(ts)
+                _u.append(u)
+                i += 1
+            
         return (
             torch.vstack(_x),
             torch.vstack(_s),
@@ -93,7 +131,6 @@ class EntropicOTFM:
             torch.vstack(_t),
             torch.vstack(_t_orig),
         )
-
 
 class OTPlanSampler:
     """OTPlanSampler implements sampling coordinates according to an squared L2 OT plan with
