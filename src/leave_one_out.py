@@ -20,10 +20,10 @@ from src.models.components.solver import mmd_squared, simulate_trajectory, wasse
 
 # Default configuration values (will be overridden by command line arguments)
 DEFAULT_DATA_PATH = "data/"
-DEFAULT_DATASET_TYPE = "Renge"
-DEFAULT_MODEL_TYPE = "sf2m"
-DEFAULT_N_STEPS_PER_FOLD = 0
-DEFAULT_BATCH_SIZE = 128
+DEFAULT_DATASET_TYPE = "Synthetic"
+DEFAULT_DATASET = "dyn-TF"
+DEFAULT_N_STEPS_PER_FOLD = 15000
+DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
 DEFAULT_ALPHA = 0.1
 DEFAULT_REG = 5e-6
@@ -34,7 +34,7 @@ DEFAULT_SCORE_HIDDEN = [100, 100]
 DEFAULT_CORRECTION_HIDDEN = [64, 64]
 DEFAULT_SIGMA = 1.0
 DEFAULT_N_TIMES_SIM = 100
-DEFAULT_DEVICE = "cpu"
+DEFAULT_DEVICE = "gpu:2"
 DEFAULT_SEED = 42
 DEFAULT_RESULTS_DIR = "loo_results_temp"
 DEFAULT_USE_CORRECTION_MLP = True
@@ -141,6 +141,7 @@ def main(args):
     # Extract configuration from arguments
     DATA_PATH = args.data_path
     DATASET_TYPE = args.dataset_type
+    DATASET = args.dataset
     N_STEPS_PER_FOLD = args.n_steps_per_fold
     BATCH_SIZE = args.batch_size
     LR = args.lr
@@ -162,9 +163,9 @@ def main(args):
     # Create results directory with model type and seed info
     RESULTS_DIR = os.path.join(
         RESULTS_DIR, 
-        f"{DATASET_TYPE}_{MODEL_TYPE}_seed{SEED}"
+        f"{DATASET_TYPE}_{MODEL_TYPE}_{'_' + DATASET if DATASET_TYPE == 'Synthetic' else ''}_seed{SEED}"
     )
-    
+
     seed_everything(SEED, workers=True)
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
@@ -173,10 +174,11 @@ def main(args):
     datamodule = TrajectoryStructureDataModule(
         data_path=DATA_PATH,
         dataset_type=DATASET_TYPE,
+        dataset=DATASET,
         batch_size=BATCH_SIZE,
         use_dummy_train_loader=True,
         dummy_loader_steps=N_STEPS_PER_FOLD,
-        num_workers=0,
+        num_workers=20,
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
@@ -518,7 +520,8 @@ if __name__ == "__main__":
     # Data parameters
     parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH, help="Path to data directory")
     parser.add_argument("--dataset_type", type=str, default=DEFAULT_DATASET_TYPE, choices=["Synthetic", "Curated"], help="Type of dataset to use")
-    
+    parser.add_argument("--dataset", type=str, default=DEFAULT_DATASET, help="Dataset name (only used for Synthetic dataset_type)")
+
     # Model parameters
     parser.add_argument("--model_type", type=str, default=DEFAULT_MODEL_TYPE, choices=["sf2m", "rf", "mlp_baseline"], help="Type of model to use")
     parser.add_argument("--use_correction_mlp", action="store_true", default=DEFAULT_USE_CORRECTION_MLP, help="Whether to use correction MLP for SF2M")
