@@ -21,6 +21,7 @@ from src.models.components.solver import mmd_squared, simulate_trajectory, wasse
 # Default configuration values (will be overridden by command line arguments)
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Synthetic"
+DEFAULT_DATASET = "dyn-TF"
 DEFAULT_N_STEPS_PER_FOLD = 15000
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
@@ -141,6 +142,7 @@ def main(args):
     # Extract configuration from arguments
     DATA_PATH = args.data_path
     DATASET_TYPE = args.dataset_type
+    DATASET = args.dataset
     N_STEPS_PER_FOLD = args.n_steps_per_fold
     BATCH_SIZE = args.batch_size
     LR = args.lr
@@ -162,9 +164,9 @@ def main(args):
     # Create results directory with model type and seed info
     RESULTS_DIR = os.path.join(
         RESULTS_DIR, 
-        f"{DATASET_TYPE}_{MODEL_TYPE}_seed{SEED}"
+        f"{DATASET_TYPE}_{MODEL_TYPE}_{'_' + DATASET if DATASET_TYPE == 'Synthetic' else ''}_seed{SEED}"
     )
-    
+
     seed_everything(SEED, workers=True)
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
@@ -173,6 +175,7 @@ def main(args):
     datamodule = TrajectoryStructureDataModule(
         data_path=DATA_PATH,
         dataset_type=DATASET_TYPE,
+        dataset=DATASET,
         batch_size=BATCH_SIZE,
         use_dummy_train_loader=True,
         dummy_loader_steps=N_STEPS_PER_FOLD,
@@ -518,7 +521,8 @@ if __name__ == "__main__":
     # Data parameters
     parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH, help="Path to data directory")
     parser.add_argument("--dataset_type", type=str, default=DEFAULT_DATASET_TYPE, choices=["Synthetic", "Curated"], help="Type of dataset to use")
-    
+    parser.add_argument("--dataset", type=str, default=DEFAULT_DATASET, help="Dataset name (only used for Synthetic dataset_type)")
+
     # Model parameters
     parser.add_argument("--model_type", type=str, default=DEFAULT_MODEL_TYPE, choices=["sf2m", "rf", "mlp_baseline"], help="Type of model to use")
     parser.add_argument("--use_correction_mlp", action="store_true", default=DEFAULT_USE_CORRECTION_MLP, help="Whether to use correction MLP for SF2M")
