@@ -34,7 +34,7 @@ DEFAULT_SCORE_HIDDEN = [100, 100]
 DEFAULT_CORRECTION_HIDDEN = [64, 64]
 DEFAULT_SIGMA = 1.0
 DEFAULT_N_TIMES_SIM = 100
-DEFAULT_DEVICE = "gpu:2"
+DEFAULT_DEVICE = "cpu"
 DEFAULT_SEED = 42
 DEFAULT_RESULTS_DIR = "loo_results"
 DEFAULT_MODEL_TYPE = "sf2m"
@@ -460,18 +460,18 @@ def main(args):
                 "avg_mmd2_sde": np.nan,
             })
 
-        if MODEL_TYPE == "sf2m" and held_out_time == T_max:  # Only for SF2M            
-            with torch.no_grad():
-                A_estim = compute_global_jacobian(model.func_v, datamodule.adatas, dt=DT_data, device="cpu")
+        # if MODEL_TYPE == "sf2m" and held_out_time == T_max:  # Only for SF2M            
+        #     with torch.no_grad():
+        #         A_estim = compute_global_jacobian(model.func_v, datamodule.adatas, dt=DT_data, device="cpu")
             
-            # Get the causal graph from the model
-            W_v = model.func_v.causal_graph(w_threshold=0.0).T
+        #     # Get the causal graph from the model
+        #     W_v = model.func_v.causal_graph(w_threshold=0.0).T
             
-            # Get the ground truth matrix
-            A_true = model.true_matrix
-            # Also display AUPR plot
-            plot_auprs(W_v, A_estim, A_true)
-            log_causal_graph_matrices(A_estim, W_v, A_true)
+        #     # Get the ground truth matrix
+        #     A_true = model.true_matrix
+        #     # Also display AUPR plot
+        #     plot_auprs(W_v, A_estim, A_true)
+        #     log_causal_graph_matrices(A_estim, W_v, A_true)
 
     # --- 3. Final Reporting ---
     print(f"\n===== Leave-One-Out Cross-Validation Summary ({MODEL_TYPE}) =====")
