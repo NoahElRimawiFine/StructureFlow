@@ -14,23 +14,23 @@ from src.models.components.plotting import compute_global_jacobian, plot_auprs, 
 
 # Default parameters
 DEFAULT_DATA_PATH = "data/"
-DEFAULT_DATASET_TYPE = "Renge"
+DEFAULT_DATASET_TYPE = "Synthetic"
 DEFAULT_MODEL_TYPE = "sf2m"
-DEFAULT_N_STEPS = 10000
-DEFAULT_BATCH_SIZE = 128
-DEFAULT_LR = 6e-2
-DEFAULT_ALPHA = 0.9
-DEFAULT_REG = 1e-8
+DEFAULT_N_STEPS = 15000
+DEFAULT_BATCH_SIZE = 64
+DEFAULT_LR = 3e-3
+DEFAULT_ALPHA = 0.1
+DEFAULT_REG = 5e-6
 DEFAULT_CORRECTION_REG = 1e-3
-DEFAULT_GL_REG = 4e-4
-DEFAULT_KNOCKOUT_HIDDEN = 256
+DEFAULT_GL_REG = 0.04
+DEFAULT_KNOCKOUT_HIDDEN = 100
 DEFAULT_SCORE_HIDDEN = [100, 100]
 DEFAULT_CORRECTION_HIDDEN = [64, 64]
 DEFAULT_SIGMA = 1.0 
 DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 DEFAULT_SEED = 42
 DEFAULT_RESULTS_DIR = "results"
-DEFAULT_USE_CORRECTION_MLP = False
+DEFAULT_USE_CORRECTION_MLP = True
 
 def main(args):
     # Extract configuration from arguments
@@ -190,8 +190,8 @@ def main(args):
         # For synthetic data, use matrices directly
         A_true = true_matrix.values
         
-    plot_auprs(W_v, A_estim, A_true, mask_diagonal=False)
-    log_causal_graph_matrices(A_estim, W_v, A_true, mask_diagonal=False)
+    plot_auprs(W_v, A_estim, A_true, mask_diagonal=True if DATASET_TYPE != "Renge" else False)
+    log_causal_graph_matrices(A_estim, W_v, A_true, mask_diagonal=True if DATASET_TYPE != "Renge" else False)
 
 
 if __name__ == "__main__":
