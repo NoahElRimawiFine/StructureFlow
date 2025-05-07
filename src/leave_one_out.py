@@ -258,13 +258,13 @@ def main(args):
             
             # Train the model with Lightning
             print("Setting up Trainer...")
-            fold_logger = TensorBoardLogger(RESULTS_DIR, name=fold_name)
+            # fold_logger = TensorBoardLogger(RESULTS_DIR, name=fold_name)
             trainer = Trainer(
                 max_epochs=-1,
                 max_steps=N_STEPS_PER_FOLD,
                 accelerator="cpu" if DEVICE == "cpu" else "gpu",
                 devices=1,
-                logger=fold_logger,
+                logger=False,
                 enable_checkpointing=False,
                 enable_progress_bar=True,
                 log_every_n_steps=N_STEPS_PER_FOLD + 1,
