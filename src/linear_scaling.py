@@ -2,9 +2,9 @@ import time
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
-from adjustText import adjust_text
 from tqdm import tqdm
 import pandas as pd
+import os
 
 import torch
 from torch._functorch.eager_transforms import jacrev
@@ -17,8 +17,31 @@ import fm
 from models.components.base import MLPODEF
 from geomloss import SamplesLoss
 
-DEVICE = torch.device("mps")
-torch.set_default_dtype(torch.float32)
+# Create results directory if it doesn't exist
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+# Specify the GPU index if CUDA is available (e.g., 0, 1, etc.)
+# If CUDA_VISIBLE_DEVICES is set in the environment, PyTorch will respect that setting.
+# This variable provides an in-script way to select a specific GPU.
+_TARGET_CUDA_GPU_ID = 2  # <--- Set your desired GPU ID here
+
+if torch.cuda.is_available():
+    if _TARGET_CUDA_GPU_ID >= torch.cuda.device_count():
+        print(
+            f"Warning: CUDA GPU ID {_TARGET_CUDA_GPU_ID} is invalid. "
+            f"Available GPUs: {torch.cuda.device_count()}. Defaulting to GPU 0."
+        )
+        _TARGET_CUDA_GPU_ID = 0
+    DEVICE = torch.device(f"cuda:{_TARGET_CUDA_GPU_ID}")
+    print(
+        f"PyTorch using CUDA device: {torch.cuda.get_device_name(_TARGET_CUDA_GPU_ID)} (cuda:{_TARGET_CUDA_GPU_ID})"
+    )
+else:
+    DEVICE = torch.device("cpu")
+    print(f"PyTorch using device: {DEVICE}")
+
+# torch.set_default_dtype(torch.float32)
 
 def prepare_time_binned_data(adata, time_column='t'):
     """
@@ -181,7 +204,7 @@ def train_random_discrete_time_ode(
         x0 = x0.unsqueeze(1)
         z0 = x0
 
-        # Integrate ODE on CPU, faster than MPS
+        # Integrate ODE on CPU (chosen for this operation, may be faster than GPU integration for small systems)
         z0_cpu = z0.cpu()
         t_cpu = t.cpu()
         func_cpu = func.cpu()
@@ -189,7 +212,7 @@ def train_random_discrete_time_ode(
         z_pred = z_pred_cpu.to(device)
         z_pred = z_pred[-1].squeeze(1)
 
-        # Train on GPU (MPS)
+        # Train on GPU (using DEVICE setting)
         loss = sinkhorn_loss(z_pred, x1)
         if l2_reg != 0:
             loss += l2_reg * func.l2_reg()
@@ -392,7 +415,6 @@ def main():
         _, _, _, avg_prec_disc_jacob = jacobian_inference(A_estim_disc, y_true_disc)
         jacob_aupr_disc.append(avg_prec_disc_jacob)
 
-
         # ---- NGM-SF2M Training ----
         ngm_sf2m_start_time = time.time()
         A_estim_ngm, W_v_ngm, y_true_ngm = train_ngm_sf2m(A_true, xs, n, sigma)
@@ -403,10 +425,10 @@ def main():
         causal_graph_aupr_ngm.append(avg_prec_ngm_causal)
         _, _, _, avg_prec_ngm_jacob = jacobian_inference(A_estim_ngm, y_true_ngm)
         jacob_aupr_ngm.append(avg_prec_ngm_jacob)
-        
 
     print("Training complete.")
 
+    # Save results to CSV in results directory
     results_df = pd.DataFrame({
         "Number of Variables (n)": ns,
         "NGM-SF2M Time (s)": ngm_sf2m_times,
@@ -415,16 +437,15 @@ def main():
         "NGM-NODE Causal Graph AUPR": causal_graph_aupr_disc
     })
     
-    results_df.to_csv("results.csv", index=False)
-    print("Saved numerical results to 'results.csv'.")
+    results_path = os.path.join(RESULTS_DIR, "results.csv")
+    results_df.to_csv(results_path, index=False)
+    print(f"Saved numerical results to '{results_path}'")
 
-    # Plotting: Compare AUPR and training times for NGM-SF2M vs. Discrete-Time ODE.
+    # Create and save plot instead of displaying
     fig, ax1 = plt.subplots(figsize=(3, 3))
     ax2 = ax1.twinx()
 
     # Plot AUPR values
-    # ax1.plot(ns, jacob_aupr_ngm, 'o-', color='blue', label='NGM-SF2M Jacobian AUPR')
-    # ax1.plot(ns, jacob_aupr_disc, 'o--', color='cyan', label='Discrete ODE Jacobian AUPR')
     ax1.plot(ns, causal_graph_aupr_ngm, 's-', color='salmon', label='NGM-SF2M Causal Graph AUPR')
     ax1.plot(ns, causal_graph_aupr_disc, 's--', color='lightblue', label='NGM-NODE Causal Graph AUPR')
     ax1.set_xlabel("Number of Variables (n)", fontsize=12)
@@ -437,25 +458,19 @@ def main():
     ax2.plot(ns, discrete_ode_times, 'v-', color='blue', linestyle='--', label='NGM-NODE Time (s)')
     ax2.set_ylabel("Time (seconds)", fontsize=12)
     
-    # Combine legends from both axes.
+    # Combine legends from both axes
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper center')
 
-    # # Add direct text labels near the end of each curve
-    # texts = []
-    # texts.append(ax1.text(ns[-1], causal_graph_aupr_ngm[-1], "NGM-SF2M Causal Graph AUPR", fontsize=10, color='green', va='bottom'))
-    # texts.append(ax1.text(ns[-1], causal_graph_aupr_disc[-1], "NGM-NODE Causal Graph AUPR", fontsize=10, color='lime', va='bottom'))
-
-    # texts.append(ax2.text(ns[-1], ngm_sf2m_times[-1], "NGM-SF2M Time (s)", fontsize=10, color='black', va='bottom'))
-    # texts.append(ax2.text(ns[-1], discrete_ode_times[-1], "NGM-NODE Time (s)", fontsize=10, color='red', va='bottom'))
-
-    # # Adjust labels to avoid overlaps
-    # adjust_text(texts)
-
     plt.title("AUPR and Training Time vs. Number of Variables", fontsize=14)
     plt.tight_layout()
-    plt.show()
+    
+    # Save plot instead of showing it
+    plot_path = os.path.join(RESULTS_DIR, "scaling_results.png")
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved plot to '{plot_path}'")
 
 if __name__ == "__main__":
     main()

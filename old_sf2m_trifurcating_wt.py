@@ -1,6 +1,5 @@
 import pandas as pd
 import scprep as sc
-import phate
 import numpy as np
 import seaborn as sns
 import scprep
@@ -9,123 +8,153 @@ import os
 import matplotlib.pyplot as plt
 from torchdiffeq import odeint
 from copy import deepcopy
-
-def plot(simdir):
-    
-    simulation_dir = os.path.join(simdir, "simulations")
-    n_cells = len([s for s in os.listdir(simulation_dir) if s.endswith(".csv")])
-    dfs = [0] * n_cells
-    for f in os.listdir(simulation_dir):
-        if not f.endswith("csv"):
-            continue
-        i = int(f.split(".")[0][1:])
-        dfs[i] = pd.read_csv(os.path.join(simulation_dir, f), index_col=0)
-    ref_net = pd.read_csv(os.path.join(simdir, "refNetwork.csv"))
-    n_genes = dfs[0].shape[0]
-    genes = [f"g{i+1}" for i in range(n_genes)]
-
-    data = []
-    for df in dfs:
-        data.append(df.values)
-    data = np.array(data)
-
-    #print(data.shape)
-    data = np.swapaxes(data, 1, 2)
-    
-    # cells x time x genes
-    data = data[:, ::9, :]
-    data = data[:, 1:, :]
-
-
-    A = np.zeros((n_genes, n_genes))
-    for i, row in ref_net.iterrows():
-        gene1 = int(row["Gene1"][1:]) # - 1 if gene names don't start at zero
-        gene2 = int(row["Gene2"][1:]) # - 1 if gene names don't start at zero
-        rel = 1 if row["Type"] == "+" else -1
-        A[gene1, gene2] = rel
-
-    return data, np.abs(A)
-
-datas_train, datas_val = [], []
-graphs_train, graphs_val = [], []
-actions_train, actions_val = [], []
-train_val_split = [0.8, 0.2]
-for path in os.listdir("Synthetic-I"):
-    p = os.path.join("Synthetic-I", path)
-    if 'TF-I-gnull' not in p:
-        continue
-    else:
-        print(p)
-        data, graph = plot(p)
-        train_len = int(data.shape[0]*train_val_split[0])
-        val_len = int(data.shape[0]*train_val_split[1])
-        print(data.shape, train_len, val_len)
-        action = np.ones((data.shape[0], data.shape[-1]))
-        if 'null' in p:
-            print("No intervention")
-            actions_train.append(action[:train_len])
-            actions_val.append(action[train_len:])
-        else:
-            if 'I-3' not in p:
-                a = int(list(filter(str.isdigit, p))[0])
-            else:
-                a = int(list(filter(str.isdigit, p))[1])
-            print("Knock-out intervention on g%d" % a)
-            action[:, a] = 0
-            actions_train.append(action[:train_len])
-            actions_val.append(action[train_len:])
-        graphs_train.append(graph)
-        graphs_val.append(graph)
-        datas_train.append(data[:train_len])
-        datas_val.append(data[train_len:])
-print("Example boolODE data:", datas_train[0].shape, datas_val[0].shape)
-true_graph = graphs_val[0]
-
-import networkx as nx
-fig, axes = plt.subplots(3,1, figsize=(4,16))
-axes = axes.flatten()
-for ax, data, graph in zip(axes, datas_train, graphs_train):
-    G = nx.from_numpy_array(graph, create_using=nx.DiGraph)
-    print(type(G))
-    nx.draw(G, ax=ax, pos=nx.circular_layout(G), arrows=True, with_labels=True)
-plt.tight_layout()
-
-from sklearn.decomposition import PCA
-fig, axes = plt.subplots(1,3, figsize=(16,4))
-axes = axes.flatten()
-pca = PCA(n_components=2)
-cells_null = datas_train[0].reshape(-1, datas_train[0].shape[-1])
-pca_embed = pca.fit_transform(cells_null)
-for ax, data, graph in zip(axes, datas_train, graphs_train):
-    cells = data.reshape(-1, data.shape[-1])
-    pca_embed = pca.transform(cells)
-    labels = np.repeat(np.arange(data.shape[1])[None,:], data.shape[0], axis=0).flatten()
-    scprep.plot.scatter2d(pca_embed, c=labels, ax=ax, ticks=False, colorbar=True)
-plt.tight_layout()
-
-fig, axes = plt.subplots(1,3, figsize=(16,4))
-axes = axes.flatten()
-pca = PCA(n_components=2)
-cells_null = datas_val[0].reshape(-1, datas_val[0].shape[-1])
-pca_embed = pca.fit_transform(cells_null)
-for ax, data, graph in zip(axes, datas_val, graphs_val):
-    cells = data.reshape(-1, data.shape[-1])
-    pca_embed = pca.transform(cells)
-    labels = np.repeat(np.arange(data.shape[1])[None,:], data.shape[0], axis=0).flatten()
-    scprep.plot.scatter2d(pca_embed, c=labels, ax=ax, ticks=False, colorbar=True)
-plt.tight_layout()
-
+import src.models.components.distribution_distances as dd 
 import math
 import time
-
-import matplotlib.pyplot as plt
-import numpy as np
 import ot as pot
 import torch
-import torchdyn
-import torch.nn.functional as F
+import torch.nn as nn 
+import torchdyn 
+import torch.nn.functional as F 
 from torchdyn.core import NeuralODE
 from torch.utils.data import Dataset, DataLoader
+from typing import List 
+
+def load_wt_tf_data_from_dyn_tf_dir(data_root_dir="data/Synthetic"):
+    network_type_fixed = "TF"
+    base_dir_path = os.path.join(data_root_dir, f"dyn-{network_type_fixed}")
+    actual_data_path = base_dir_path
+    if os.path.exists(base_dir_path) and os.path.isdir(base_dir_path):
+        potential_subdirs = []
+        for item in os.listdir(base_dir_path):
+            full_item_path = os.path.join(base_dir_path, item)
+            if os.path.isdir(full_item_path) and f"dyn-{network_type_fixed}-" in item and "-1000-1" in item:
+                potential_subdirs.append(full_item_path)
+        if potential_subdirs:
+            actual_data_path = potential_subdirs[0]
+            print(f"Loading data from specific subdirectory: {actual_data_path}")
+        else:
+            print(f"Loading data from main directory: {actual_data_path}")
+    else:
+        raise FileNotFoundError(f"Base data directory not found: {base_dir_path}")
+    expr_file_path = os.path.join(actual_data_path, "ExpressionData.csv")
+    expr_df = pd.read_csv(expr_file_path, index_col=0)
+    ref_net_file_path = os.path.join(actual_data_path, "refNetwork.csv")
+    ref_net_df = pd.read_csv(ref_net_file_path)
+    gene_names_list = expr_df.index.tolist()
+    num_genes = len(gene_names_list)
+    total_original_cells = len(expr_df.columns)
+    pseudo_time_file_path = os.path.join(actual_data_path, "PseudoTime.csv")
+    if os.path.exists(pseudo_time_file_path):
+        pseudo_time_df = pd.read_csv(pseudo_time_file_path, index_col=0)
+        cell_pseudotimes = np.max(pseudo_time_df.values, axis=1)
+        num_binned_timepoints = 25
+        min_pt, max_pt = cell_pseudotimes.min(), cell_pseudotimes.max()
+        if min_pt == max_pt: time_bin_edges = np.linspace(min_pt, max_pt + 1, num_binned_timepoints + 1)
+        else: time_bin_edges = np.linspace(min_pt, max_pt, num_binned_timepoints + 1)
+        if time_bin_edges[-1] <= max_pt: time_bin_edges[-1] = max_pt + 1e-6
+        binned_cell_indices_by_tp = [[] for _ in range(num_binned_timepoints)]
+        for cell_idx, pt_val in enumerate(cell_pseudotimes):
+            bin_assignment = np.digitize(pt_val, time_bin_edges[:-1]) - 1
+            bin_assignment = max(0, min(bin_assignment, num_binned_timepoints - 1))
+            binned_cell_indices_by_tp[bin_assignment].append(cell_idx)
+        max_cells_found_in_bin = max((len(indices) for indices in binned_cell_indices_by_tp if indices), default=0)
+        if max_cells_found_in_bin == 0:
+            cells_per_final_timepoint = min(100, total_original_cells)
+            if total_original_cells == 0: raise ValueError("No cells in ExpressionData.")
+            print(f"Warning: All pseudotime bins empty. Using {cells_per_final_timepoint} cells per timepoint.")
+        else: cells_per_final_timepoint = max_cells_found_in_bin
+        processed_expr_data = np.zeros((cells_per_final_timepoint, num_binned_timepoints, num_genes))
+        for tp_idx, list_of_cell_indices in enumerate(binned_cell_indices_by_tp):
+            current_bin_cell_indices = list(list_of_cell_indices)
+            if not current_bin_cell_indices:
+                if tp_idx > 0 and binned_cell_indices_by_tp[tp_idx - 1]: current_bin_cell_indices = list(binned_cell_indices_by_tp[tp_idx - 1])
+                elif total_original_cells > 0:
+                    num_fallback = min(cells_per_final_timepoint, total_original_cells)
+                    current_bin_cell_indices = list(np.random.choice(range(total_original_cells), num_fallback, replace=(num_fallback > total_original_cells)))
+                else: processed_expr_data[:, tp_idx, :] = 0; continue
+            num_available = len(current_bin_cell_indices)
+            if num_available == 0: processed_expr_data[:, tp_idx, :] = 0; continue
+            if num_available > cells_per_final_timepoint: final_indices_for_tp = np.random.choice(current_bin_cell_indices, cells_per_final_timepoint, replace=False)
+            elif num_available < cells_per_final_timepoint: final_indices_for_tp = np.random.choice(current_bin_cell_indices, cells_per_final_timepoint, replace=True)
+            else: final_indices_for_tp = current_bin_cell_indices
+            for i, original_cell_idx in enumerate(final_indices_for_tp): processed_expr_data[i, tp_idx, :] = expr_df.iloc[:, original_cell_idx].values
+    else:
+        print("PseudoTime.csv not found. Reshaping ExpressionData as (cells, 1, genes).")
+        processed_expr_data = expr_df.T.values.reshape(total_original_cells, 1, num_genes)
+    adj_matrix = np.zeros((num_genes, num_genes))
+    for _, row in ref_net_df.iterrows():
+        source_gene, target_gene, reg_type_str = str(row['Gene1']), str(row['Gene2']), str(row['Type'])
+        try:
+            source_idx, target_idx = gene_names_list.index(source_gene), gene_names_list.index(target_gene)
+            adj_matrix[target_idx, source_idx] = 1 if reg_type_str == "+" else -1
+        except ValueError: print(f"Warning: Gene not in names. Source: {source_gene}, Target: {target_gene}")
+    return processed_expr_data, np.abs(adj_matrix)
+
+datas_train, datas_val, graphs_train, graphs_val, actions_train, actions_val = [], [], [], [], [], []
+train_val_split = [0.8, 0.2]
+true_graph = np.array([])
+print("Loading Wildtype TF data from 'data/Synthetic/dyn-TF' using new scheme...")
+try:
+    loaded_data, loaded_graph = load_wt_tf_data_from_dyn_tf_dir()
+    if loaded_data.size == 0 or loaded_graph.size == 0: raise ValueError("Loaded data or graph is empty.")
+    train_len = int(loaded_data.shape[0] * train_val_split[0])
+    datas_train.append(loaded_data[:train_len]); datas_val.append(loaded_data[train_len:])
+    graphs_train.append(loaded_graph); graphs_val.append(loaded_graph)
+    actions_train.append(np.ones((datas_train[0].shape[0], loaded_data.shape[-1])))
+    actions_val.append(np.ones((datas_val[0].shape[0], loaded_data.shape[-1])))
+    print(f"Data processed. Train: {datas_train[0].shape}, Val: {datas_val[0].shape}")
+    true_graph = graphs_val[0]
+    if true_graph.size == 0: print("Warning: true_graph is empty.")
+except Exception as e:
+    print(f"Error in data loading: {e}. Falling back to empty datasets.")
+    datas_train, datas_val, graphs_train, graphs_val, actions_train, actions_val = [np.array([])]*2, [np.array([])]*2, [np.array([])]*2
+
+import networkx as nx
+from sklearn.decomposition import PCA 
+
+fig_graph, ax_graph = plt.subplots(1,1, figsize=(5,5))
+if graphs_train and graphs_train[0].size > 0:
+    G_display = nx.from_numpy_array(graphs_train[0], create_using=nx.DiGraph)
+    nx.draw(G_display, ax=ax_graph, pos=nx.circular_layout(G_display), arrows=True, with_labels=True)
+    ax_graph.set_title("TF Network Graph")
+else: ax_graph.text(0.5,0.5, "Graph not loaded", ha='center', va='center')
+plt.tight_layout()
+
+def plot_pca_data(ax, data_list, pca_obj, title_prefix):
+    if data_list and data_list[0].size > 0:
+        current_data = data_list[0]
+        flat_data = current_data.reshape(-1, current_data.shape[-1])
+        if flat_data.shape[0] > 1:
+            # First make sure the PCA is fitted
+            if not hasattr(pca_obj, 'components_'):
+                transformed_data = pca_obj.fit_transform(flat_data)
+                # Return the fitted PCA object
+                return pca_obj  
+            else:
+                # PCA is already fitted, just transform
+                transformed_data = pca_obj.transform(flat_data)
+            
+            labels = np.repeat(np.arange(current_data.shape[1])[None,:], current_data.shape[0], axis=0).flatten()
+            scprep.plot.scatter2d(transformed_data, c=labels, ax=ax, ticks=False, colorbar=True, legend_title="Timepoint")
+            ax.set_title(f'PCA of {title_prefix} Data (TF Wildtype)')
+            return None  # No need to return PCA object if we're just transforming
+        else: ax.text(0.5,0.5, f"Not enough {title_prefix.lower()} data for PCA", ha='center')
+    else: ax.text(0.5,0.5, f"{title_prefix} data not loaded for PCA", ha='center')
+    return None
+
+fig_pca_train, ax_pca_train = plt.subplots(1,1, figsize=(7,6))
+pca_obj_train = PCA(n_components=2)
+pca_returned = plot_pca_data(ax_pca_train, datas_train, pca_obj_train, "Training")
+if pca_returned: pca_obj_train = pca_returned # Update if it was fitted
+plt.tight_layout()
+
+fig_pca_val, ax_pca_val = plt.subplots(1,1, figsize=(7,6))
+if 'pca_obj_train' in locals() and hasattr(pca_obj_train, 'mean_'): # Check if PCA was fitted
+    plot_pca_data(ax_pca_val, datas_val, pca_obj_train, "Validation")
+else:
+    ax_pca_val.text(0.5,0.5, "PCA from training not available for validation data", ha='center')
+plt.tight_layout()
 
 class MLP(torch.nn.Module):
     def __init__(self, dim, out_dim=None, w=64, time_varying=False):
@@ -166,7 +195,7 @@ class torch_wrapper(torch.nn.Module):
         self.model = model
 
     def forward(self, t, x):
-        return model(torch.cat([x, t.repeat(x.shape[0])[:, None]], 1))
+        return self.model(torch.cat([x, t.repeat(x.shape[0])[:, None]], 1))
 
 
 def plot_trajectories(traj):
@@ -180,7 +209,6 @@ def plot_trajectories(traj):
     plt.yticks([])
     plt.show()
     
-    import src.models.components.distribution_distances as dd 
     
 def plot_pca_manifold(data, preds, ax, a=None):
     cells = data.reshape(-1, data.shape[-1])
@@ -435,7 +463,6 @@ class MLPODEF(Intervenable):
         self.fc1.reset_parameters()
         for fc in self.fc2:
             fc.reset_parameters()
-            
 
 from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -460,9 +487,7 @@ def plot_graph_heatmap(graph, ax, auc=None):
         ax.set_title(r'Pred Graph: AUC = %0.3f' % auc)
     else:
         ax.set_title(r'True Graph')
-    fig.colorbar(pcm, ax=ax) 
-    
-    
+    fig.colorbar(pcm, ax=ax)
 
 def compute_metrics(true_graph, estimated_graph):
     ### AUCROC
@@ -528,7 +553,7 @@ def validation_step(model, val_data_full, x0, x1, graph, G=None, a=None, init_ru
             #auc = compute_metrics((graph*self_loop_mask).flatten(), (G*self_loop_mask).flatten())
             self_loop_mask = ~np.eye(G.shape[-1], dtype=bool)
             df_graph_metrics = compute_metrics((graph[self_loop_mask]).flatten(), (G[self_loop_mask]).flatten())
-            dd_df = dd_df.append(df_graph_metrics)
+            dd_df = pd.concat([dd_df, df_graph_metrics], ignore_index=True)
             auc = df_graph_metrics[0].values[0]
             #dd_df.loc["AUC"] = auc
             print("SHD =", shd, "AUC =", auc)
@@ -590,7 +615,7 @@ def plot_sc_trajectories(traj, sc_boolode, a, W2, pca_full, ax):
     #ax.show()
     plt.tight_layout()
     
-# pre-process data for training and validation pipeline
+    # pre-process data for training and validation pipeline
 class TimeSeriesInterventionBifurcatingDataset(Dataset):
     def __init__(self, data, graph, action, time_step=5):
         self.graph = graph
@@ -779,8 +804,7 @@ for seed in seeds:
             pred_traj, dd_t2_values, pca, dd_df = validation_step(model=model, val_data_full=val_data, x0=x0, x1=x1, graph=true_graph, a=a, x=x, ts=ts, axes_list=axes)
             dd_metrics_df.append(dd_df)
             plot_sc_trajectories(pred_traj, val_data, a, dd_t2_values[1], pca, axes[2])
-            
-        
+
 df = pd.concat(dd_metrics_df, axis=1)
 print(df)
 df_metrics_mean_std = pd.DataFrame()
@@ -876,4 +900,3 @@ df_metrics_mean_std = pd.DataFrame()
 df_metrics_mean_std["mean"] = df.mean(axis=1)
 df_metrics_mean_std["std"] = df.std(axis=1)
 print(df_metrics_mean_std)
-

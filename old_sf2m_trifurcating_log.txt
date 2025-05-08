@@ -1,0 +1,403 @@
+Loading Wildtype TF data from 'data/Synthetic/dyn-TF' using new scheme...
+Loading data from specific subdirectory: data/Synthetic/dyn-TF/dyn-TF-1000-1
+Data processed. Train: (800, 25, 8), Val: (200, 25, 8)
+Training for seed = 1 ...
+Size of model 9416 Parameters
+1000: loss 0.045
+2000: loss 0.064
+3000: loss 0.082
+4000: loss 0.056
+5000: loss 0.062
+6000: loss 0.067
+7000: loss 0.038
+8000: loss 0.048
+9000: loss 0.049
+10000: loss 0.082
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 2 ...
+Size of model 9416 Parameters
+1000: loss 0.049
+2000: loss 0.074
+3000: loss 0.043
+4000: loss 0.041
+5000: loss 0.087
+6000: loss 0.076
+7000: loss 0.063
+8000: loss 0.058
+9000: loss 0.046
+10000: loss 0.068
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 3 ...
+Size of model 9416 Parameters
+1000: loss 0.067
+2000: loss 0.043
+3000: loss 0.034
+4000: loss 0.071
+5000: loss 0.048
+6000: loss 0.044
+7000: loss 0.054
+8000: loss 0.041
+9000: loss 0.073
+10000: loss 0.070
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 4 ...
+Size of model 9416 Parameters
+1000: loss 0.079
+2000: loss 0.050
+3000: loss 0.059
+4000: loss 0.077
+5000: loss 0.067
+6000: loss 0.066
+7000: loss 0.053
+8000: loss 0.069
+9000: loss 0.054
+10000: loss 0.085
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 5 ...
+Size of model 9416 Parameters
+1000: loss 0.055
+2000: loss 0.050
+3000: loss 0.043
+4000: loss 0.081
+5000: loss 0.046
+6000: loss 0.045
+7000: loss 0.034
+8000: loss 0.077
+9000: loss 0.048
+10000: loss 0.078
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+                          0         0         0         0         0
+t2/1-Wasserstein   0.774638  1.114129  0.815346  0.745395  0.878558
+t2/2-Wasserstein   1.008648  1.461430  1.044211  0.956617  1.092606
+t2/Linear_MMD      0.491749  0.032455  0.329311  0.112294 -0.287577
+t2/Poly_MMD       16.984253 -3.712776  4.289963 -2.011246 -3.920914
+t2/RBF_MMD         0.056206  0.077471  0.058547  0.058554  0.063659
+t2/Mean_MSE        0.015394  0.043567  0.009157  0.011957  0.028142
+t2/Mean_L2         0.124071  0.208728  0.095692  0.109350  0.167756
+t2/Mean_L1         0.116340  0.180810  0.080025  0.092357  0.149250
+t2/Median_MSE      0.047688  0.075567  0.051523  0.029808  0.021668
+t2/Median_L2       0.218376  0.274894  0.226987  0.172650  0.147202
+t2/Median_L1       0.162490  0.180665  0.181982  0.136130  0.136162
+                      mean       std
+t2/1-Wasserstein  0.865613  0.147634
+t2/2-Wasserstein  1.112702  0.201181
+t2/Linear_MMD     0.135646  0.297753
+t2/Poly_MMD       2.325856  8.846242
+t2/RBF_MMD        0.062887  0.008596
+t2/Mean_MSE       0.021643  0.014245
+t2/Mean_L2        0.141119  0.046486
+t2/Mean_L1        0.123756  0.041408
+t2/Median_MSE     0.045251  0.020970
+t2/Median_L2      0.208022  0.049722
+t2/Median_L1      0.159486  0.022656
+Training for seed = 1 ...
+Size of model 8008 Parameters
+1000: loss 0.046 AUC 0.507
+2000: loss 0.064 AUC 0.394
+3000: loss 0.082 AUC 0.425
+4000: loss 0.058 AUC 0.377
+5000: loss 0.064 AUC 0.606
+6000: loss 0.067 AUC 0.475
+7000: loss 0.039 AUC 0.496
+8000: loss 0.049 AUC 0.535
+9000: loss 0.047 AUC 0.508
+10000: loss 0.080 AUC 0.544
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+Traceback (most recent call last):
+  File "/Users/lucasnelson/sf2m-grn-hydra/old_sf2m_trifurcating_wt.py", line 892, in <module>
+    pred_traj, dd_t2_values, pca, dd_df = validation_step(model=model, val_data_full=val_data, x0=x0, x1=x1, graph=true_graph, a=a, G=G, x=x, ts=ts, axes_list=axes)
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/lucasnelson/sf2m-grn-hydra/old_sf2m_trifurcating_wt.py", line 556, in validation_step
+    dd_df = dd_df.append(df_graph_metrics)
+            ^^^^^^^^^^^^
+  File "/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/pandas/core/generic.py", line 5989, in __getattr__
+    return object.__getattribute__(self, name)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DataFrame' object has no attribute 'append'. Did you mean: '_append'?
+(sf2m) (base) lucasnelson@Lucass-MacBook-Pro sf2m-grn-hydra % cd /Users/lucasnelson/sf2m-grn-hydra && python old_sf2m_trifurcating_wt.py                                        cd /Users/lucasnelson/sf2m-grn-hydra && python old_sf2m_trifurcating_wt.py
+Loading Wildtype TF data from 'data/Synthetic/dyn-TF' using new scheme...
+Loading data from specific subdirectory: data/Synthetic/dyn-TF/dyn-TF-1000-1
+Data processed. Train: (800, 25, 8), Val: (200, 25, 8)
+Training for seed = 1 ...
+Size of model 9416 Parameters
+1000: loss 0.038
+2000: loss 0.068
+3000: loss 0.072
+4000: loss 0.037
+5000: loss 0.081
+6000: loss 0.036
+7000: loss 0.054
+8000: loss 0.059
+9000: loss 0.048
+10000: loss 0.052
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 2 ...
+Size of model 9416 Parameters
+1000: loss 0.076
+2000: loss 0.081
+3000: loss 0.076
+4000: loss 0.071
+5000: loss 0.087
+6000: loss 0.125
+7000: loss 0.048
+8000: loss 0.063
+9000: loss 0.063
+10000: loss 0.094
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 3 ...
+Size of model 9416 Parameters
+1000: loss 0.037
+2000: loss 0.039
+3000: loss 0.063
+4000: loss 0.037
+5000: loss 0.061
+6000: loss 0.041
+7000: loss 0.038
+8000: loss 0.058
+9000: loss 0.054
+10000: loss 0.057
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 4 ...
+Size of model 9416 Parameters
+1000: loss 0.064
+2000: loss 0.082
+3000: loss 0.033
+4000: loss 0.074
+5000: loss 0.044
+6000: loss 0.082
+7000: loss 0.098
+8000: loss 0.050
+9000: loss 0.040
+10000: loss 0.055
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 5 ...
+Size of model 9416 Parameters
+1000: loss 0.029
+2000: loss 0.055
+3000: loss 0.066
+4000: loss 0.056
+5000: loss 0.047
+6000: loss 0.055
+7000: loss 0.068
+8000: loss 0.094
+9000: loss 0.039
+10000: loss 0.043
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+                         0         0         0         0         0
+t2/1-Wasserstein  1.074249  1.073627  1.097032  0.979842  0.779677
+t2/2-Wasserstein  1.389972  1.365714  1.413060  1.232570  1.032767
+t2/Linear_MMD     0.558271 -0.020118  0.736526  0.081850 -0.343466
+t2/Poly_MMD       7.919998 -0.758621  8.256767 -1.861771 -7.200150
+t2/RBF_MMD        0.086292  0.079219  0.086822  0.070451  0.056136
+t2/Mean_MSE       0.036428  0.030758  0.042773  0.028154  0.007145
+t2/Mean_L2        0.190862  0.175379  0.206817  0.167790  0.084531
+t2/Mean_L1        0.148702  0.147850  0.155732  0.136173  0.071805
+t2/Median_MSE     0.028129  0.063873  0.036488  0.033923  0.037124
+t2/Median_L2      0.167716  0.252732  0.191019  0.184182  0.192675
+t2/Median_L1      0.122603  0.200681  0.137455  0.170459  0.137606
+                      mean       std
+t2/1-Wasserstein  1.000885  0.131619
+t2/2-Wasserstein  1.286817  0.158341
+t2/Linear_MMD     0.202613  0.439872
+t2/Poly_MMD       1.271245  6.684013
+t2/RBF_MMD        0.075784  0.012831
+t2/Mean_MSE       0.029052  0.013475
+t2/Mean_L2        0.165076  0.047456
+t2/Mean_L1        0.132052  0.034403
+t2/Median_MSE     0.039907  0.013860
+t2/Median_L2      0.197665  0.032327
+t2/Median_L1      0.153761  0.031536
+Training for seed = 1 ...
+Size of model 8008 Parameters
+1000: loss 0.040 AUC 0.419
+2000: loss 0.068 AUC 0.406
+3000: loss 0.072 AUC 0.424
+4000: loss 0.037 AUC 0.602
+5000: loss 0.083 AUC 0.451
+6000: loss 0.036 AUC 0.505
+7000: loss 0.054 AUC 0.449
+8000: loss 0.053 AUC 0.480
+9000: loss 0.049 AUC 0.541
+10000: loss 0.038 AUC 0.602
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+SHD = 29 AUC = 0.6018099547511312
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 2 ...
+Size of model 8008 Parameters
+1000: loss 0.078 AUC 0.329
+2000: loss 0.082 AUC 0.397
+3000: loss 0.075 AUC 0.383
+4000: loss 0.071 AUC 0.532
+5000: loss 0.085 AUC 0.520
+6000: loss 0.119 AUC 0.667
+7000: loss 0.040 AUC 0.526
+8000: loss 0.058 AUC 0.655
+9000: loss 0.051 AUC 0.522
+10000: loss 0.082 AUC 0.421
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+SHD = 29 AUC = 0.42081447963800905
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 3 ...
+Size of model 8008 Parameters
+1000: loss 0.039 AUC 0.415
+2000: loss 0.039 AUC 0.409
+3000: loss 0.063 AUC 0.348
+4000: loss 0.037 AUC 0.457
+5000: loss 0.061 AUC 0.394
+6000: loss 0.041 AUC 0.544
+7000: loss 0.036 AUC 0.670
+8000: loss 0.056 AUC 0.388
+9000: loss 0.046 AUC 0.573
+10000: loss 0.046 AUC 0.492
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+SHD = 29 AUC = 0.4917043740573152
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 4 ...
+Size of model 8008 Parameters
+1000: loss 0.066 AUC 0.382
+2000: loss 0.083 AUC 0.327
+3000: loss 0.033 AUC 0.342
+4000: loss 0.073 AUC 0.351
+5000: loss 0.043 AUC 0.504
+6000: loss 0.080 AUC 0.590
+7000: loss 0.096 AUC 0.738
+8000: loss 0.051 AUC 0.514
+9000: loss 0.033 AUC 0.318
+10000: loss 0.050 AUC 0.579
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+SHD = 29 AUC = 0.579185520361991
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+Training for seed = 5 ...
+Size of model 8008 Parameters
+1000: loss 0.030 AUC 0.508
+2000: loss 0.055 AUC 0.430
+3000: loss 0.066 AUC 0.365
+4000: loss 0.057 AUC 0.367
+5000: loss 0.048 AUC 0.551
+6000: loss 0.055 AUC 0.602
+7000: loss 0.064 AUC 0.659
+8000: loss 0.096 AUC 0.439
+9000: loss 0.038 AUC 0.563
+10000: loss 0.038 AUC 0.637
+Your vector field callable (nn.Module) should have both time `t` and state `x` as arguments, we've wrapped it for you.
+Starting traj inference ...
+... Ending traj inference
+SHD = 29 AUC = 0.6365007541478129
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+/Users/lucasnelson/miniconda3/envs/sf2m/lib/python3.11/site-packages/scprep/plot/scatter.py:430: UserWarning: `c` is a color array and cannot be used to create a legend. To interpret these values as labels instead, provide a `cmap` dictionary with label-color pairs.
+  warnings.warn(
+           0         0         0         0         0
+0   1.002790  0.987065  1.024085  0.877109  0.771871
+1   1.342936  1.318162  1.356580  1.162947  1.034134
+2   0.431628 -0.133957  0.576366 -0.108987 -0.338081
+3   5.804443 -3.383499  6.771095 -4.122322 -7.230194
+4   0.074539  0.066438  0.076777  0.056942  0.054308
+5   0.021317  0.016239  0.022962  0.005923  0.007953
+6   0.146004  0.127434  0.151533  0.076958  0.089178
+7   0.139308  0.116191  0.117757  0.071608  0.074870
+8   0.020649  0.073425  0.024004  0.026862  0.036923
+9   0.143697  0.270970  0.154933  0.163896  0.192154
+10  0.101194  0.162704  0.098435  0.099786  0.135656
+11  0.601810  0.420814  0.491704  0.579186  0.636501
+12  0.419466  0.270820  0.302836  0.356342  0.508199
+13  0.601810  0.420814  0.491704  0.579186  0.636501
+14  0.419466  0.270820  0.302836  0.356342  0.508199
+        mean       std
+0   0.932584  0.106273
+1   1.242952  0.140152
+2   0.085394  0.395652
+3  -0.432095  6.311162
+4   0.065801  0.010097
+5   0.014879  0.007695
+6   0.118221  0.033588
+7   0.103947  0.029506
+8   0.036373  0.021586
+9   0.185130  0.051228
+10  0.119555  0.028701
+11  0.546003  0.088071
+12  0.371532  0.094958
+13  0.546003  0.088071
+14  0.371532  0.094958
