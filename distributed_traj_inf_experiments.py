@@ -8,9 +8,18 @@ from datetime import datetime
 import multiprocessing as mp
 from functools import partial
 import torch
+import sys
 
-def run_experiment(dataset_type, model_type, seed, dataset=None, base_results_dir="loo_results"):
+def run_experiment(dataset_type, model_type, seed, dataset=None, base_results_dir="loo_results", log_dir="logs"):
     """Run a single experiment with specific configuration in a separate process."""
+    # Create a unique log file name for this experiment
+    log_file_name = f"{dataset_type}_{model_type}"
+    if dataset:
+        log_file_name += f"_{dataset}"
+    log_file_name += f"_seed{seed}.log"
+    log_file_path = os.path.join(log_dir, log_file_name)
+    
+    # Construct command
     cmd = [
         "python", "-m", "src.leave_one_out",
         "--dataset_type", dataset_type,
@@ -25,9 +34,36 @@ def run_experiment(dataset_type, model_type, seed, dataset=None, base_results_di
     
     # Print with process ID for better debugging
     print(f"[PID {os.getpid()}] Running: {' '.join(cmd)}")
+    print(f"[PID {os.getpid()}] Logging output to: {log_file_path}")
     
-    # Run the subprocess and capture output
-    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    # Open the log file for this experiment
+    with open(log_file_path, "w") as log_file:
+        # Write header info to log
+        log_file.write(f"=== Experiment started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        log_file.write(f"Command: {' '.join(cmd)}\n")
+        log_file.write(f"PID: {os.getpid()}\n\n")
+        log_file.flush()
+        
+        # Run the subprocess and redirect output to the log file
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1  # Line buffered
+        )
+        
+        # Stream output to log file in real-time
+        for line in process.stdout:
+            log_file.write(line)
+            log_file.flush()  # Ensure output is written immediately
+        
+        # Wait for process to complete and get return code
+        return_code = process.wait()
+        
+        # Write footer to log
+        log_file.write(f"\n=== Experiment completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        log_file.write(f"Return code: {return_code}\n")
     
     # Return success status and basic info
     return {
@@ -36,13 +72,15 @@ def run_experiment(dataset_type, model_type, seed, dataset=None, base_results_di
         "seed": seed,
         "dataset": dataset,
         "pid": os.getpid(),
-        "success": True
+        "log_file": log_file_path,
+        "success": return_code == 0,
+        "return_code": return_code
     }
 
 def worker_process_experiment(config):
     """Worker function that handles a single experiment."""
     try:
-        dataset_type, model_type, seed, dataset, base_results_dir = config
+        dataset_type, model_type, seed, dataset, base_results_dir, log_dir = config
         
         # Set different seeds for each worker process 
         worker_seed = seed + os.getpid() % 10000
@@ -56,16 +94,27 @@ def worker_process_experiment(config):
             os.environ["CUDA_VISIBLE_DEVICES"] = ""
             
         # Run the experiment
-        result = run_experiment(dataset_type, model_type, seed, dataset, base_results_dir)
+        result = run_experiment(dataset_type, model_type, seed, dataset, base_results_dir, log_dir)
         return result
     except Exception as e:
+        # Log the exception to a file
+        error_log = os.path.join(log_dir, f"error_{dataset_type}_{model_type}_seed{seed}.log")
+        with open(error_log, "w") as f:
+            f.write(f"Error at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}:\n")
+            f.write(f"Exception: {str(e)}\n\n")
+            import traceback
+            f.write(traceback.format_exc())
+        
         print(f"[PID {os.getpid()}] Error: {str(e)}")
+        print(f"[PID {os.getpid()}] Error details written to {error_log}")
+        
         return {
             "dataset_type": dataset_type,
             "model_type": model_type, 
             "seed": seed,
             "dataset": dataset,
             "pid": os.getpid(),
+            "log_file": error_log,
             "success": False,
             "error": str(e)
         }
@@ -259,9 +308,11 @@ def aggregate_results(base_results_dir, dataset_types, model_types, seeds, synth
 def main():
     parser = argparse.ArgumentParser(description="Run multiple leave-one-out experiments in parallel")
     parser.add_argument("--base_results_dir", type=str, default="loo_results", help="Base directory to save results")
+    parser.add_argument("--log_dir", type=str, default="experiment_logs", help="Directory to save log files")
     parser.add_argument("--only_aggregate", action="store_true", help="Only aggregate existing results without running new experiments")
     parser.add_argument("--max_workers", type=int, default=96, help="Maximum number of parallel workers")
     parser.add_argument("--use_gpu", action="store_true", help="Use GPU for experiments (not recommended for parallel runs)")
+    parser.add_argument("--status_file", type=str, default="experiment_status.csv", help="File to save experiment status")
     args = parser.parse_args()
     
     # Configuration
@@ -270,72 +321,144 @@ def main():
     synthetic_datasets = ["dyn-TF", "dyn-BF", "dyn-CY", "dyn-LL", "dyn-SW"]
     seeds = [1, 2, 3, 4, 5]
     
-    # Create base results directory
+    # Create base results directory and log directory
     os.makedirs(args.base_results_dir, exist_ok=True)
+    os.makedirs(args.log_dir, exist_ok=True)
     
-    # Run experiments
-    start_time = datetime.now()
-    print(f"Starting experiments at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    # Write a master log file with general progress
+    master_log = os.path.join(args.log_dir, "master.log")
     
-    if not args.only_aggregate:
-        # Create experiment configurations
-        experiment_configs = []
+    # Redirect stdout and stderr to both console and master log file
+    class Tee:
+        def __init__(self, *files):
+            self.files = files
         
-        # For Synthetic datasets
-        for dataset in synthetic_datasets:
-            for model_type in model_types:
-                for seed in seeds:
-                    experiment_configs.append(
-                        ("Synthetic", model_type, seed, dataset, args.base_results_dir)
-                    )
+        def write(self, obj):
+            for f in self.files:
+                f.write(obj)
+                f.flush()  # Ensure output is written immediately
         
-        # For Curated datasets
-        for model_type in model_types:
-            for seed in seeds:
-                experiment_configs.append(
-                    ("Curated", model_type, seed, None, args.base_results_dir)
-                )
+        def flush(self):
+            for f in self.files:
+                f.flush()
+    
+    # Open the master log file
+    with open(master_log, "w") as master_log_file:
+        # Redirect stdout and stderr to both console and master log
+        original_stdout = sys.stdout
+        sys.stdout = Tee(sys.stdout, master_log_file)
+        original_stderr = sys.stderr
+        sys.stderr = Tee(sys.stderr, master_log_file)
         
-        print(f"Total experiments to run: {len(experiment_configs)}")
-        print(f"Using up to {args.max_workers} parallel processes")
-        
-        # Set a method that works with CUDA
-        mp_context = mp.get_context('spawn')  # 'spawn' is required for CUDA compatibility
-        
-        # Run experiments in parallel
-        with mp_context.Pool(processes=args.max_workers) as pool:
-            results = []
-            # Use imap to get results as they complete
-            for i, result in enumerate(pool.imap_unordered(worker_process_experiment, experiment_configs)):
-                results.append(result)
-                completed = i + 1
-                print(f"Completed {completed}/{len(experiment_configs)} experiments")
+        try:
+            # Run experiments
+            start_time = datetime.now()
+            print(f"Starting experiments at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            if not args.only_aggregate:
+                # Create experiment configurations
+                experiment_configs = []
                 
-                # Calculate progress metrics
-                elapsed = datetime.now() - start_time
-                avg_time_per_exp = elapsed / completed
-                remaining = len(experiment_configs) - completed
-                est_remaining_time = avg_time_per_exp * remaining
+                # For Synthetic datasets
+                for dataset in synthetic_datasets:
+                    for model_type in model_types:
+                        for seed in seeds:
+                            experiment_configs.append(
+                                ("Synthetic", model_type, seed, dataset, args.base_results_dir, args.log_dir)
+                            )
                 
-                print(f"Progress: {completed}/{len(experiment_configs)}")
-                print(f"Elapsed time: {elapsed}")
-                print(f"Estimated time remaining: {est_remaining_time}")
+                # For Curated datasets
+                for model_type in model_types:
+                    for seed in seeds:
+                        experiment_configs.append(
+                            ("Curated", model_type, seed, None, args.base_results_dir, args.log_dir)
+                        )
                 
-                # Report any failures
-                if not result.get("success", False):
-                    print(f"⚠️ Experiment failed: {result}")
+                print(f"Total experiments to run: {len(experiment_configs)}")
+                print(f"Using up to {args.max_workers} parallel processes")
+                
+                # Set a method that works with CUDA
+                mp_context = mp.get_context('spawn')  # 'spawn' is required for CUDA compatibility
+                
+                # Create status table
+                status_data = []
+                for config in experiment_configs:
+                    dataset_type, model_type, seed, dataset, _, _ = config
+                    status_data.append({
+                        "dataset_type": dataset_type,
+                        "model_type": model_type,
+                        "seed": seed,
+                        "dataset": dataset,
+                        "status": "Pending",
+                        "pid": None,
+                        "log_file": None,
+                        "start_time": None,
+                        "end_time": None,
+                        "runtime": None
+                    })
+                status_df = pd.DataFrame(status_data)
+                status_df.to_csv(args.status_file, index=False)
+                print(f"Created status file: {args.status_file}")
+                
+                # Run experiments in parallel
+                with mp_context.Pool(processes=args.max_workers) as pool:
+                    results = []
+                    # Use imap to get results as they complete
+                    for i, result in enumerate(pool.imap_unordered(worker_process_experiment, experiment_configs)):
+                        results.append(result)
+                        completed = i + 1
+                        
+                        # Update status file
+                        idx = next((i for i, row in status_df.iterrows() if 
+                            row["dataset_type"] == result["dataset_type"] and
+                            row["model_type"] == result["model_type"] and
+                            row["seed"] == result["seed"] and
+                            (row["dataset"] == result["dataset"] or 
+                            (row["dataset"] is None and result["dataset"] is None))), None)
+                        
+                        if idx is not None:
+                            status_df.at[idx, "status"] = "Success" if result["success"] else "Failed"
+                            status_df.at[idx, "pid"] = result["pid"]
+                            status_df.at[idx, "log_file"] = result["log_file"]
+                            status_df.at[idx, "end_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            status_df.to_csv(args.status_file, index=False)
+                        
+                        # Print progress
+                        print(f"Completed {completed}/{len(experiment_configs)} experiments")
+                        print(f"Latest: {result['dataset_type']} {result['model_type']} seed={result['seed']} dataset={result['dataset']}")
+                        print(f"Status: {'Success' if result['success'] else 'Failed'}")
+                        print(f"Log file: {result['log_file']}")
+                        
+                        # Calculate progress metrics
+                        elapsed = datetime.now() - start_time
+                        avg_time_per_exp = elapsed / completed
+                        remaining = len(experiment_configs) - completed
+                        est_remaining_time = avg_time_per_exp * remaining
+                        
+                        print(f"Progress: {completed}/{len(experiment_configs)}")
+                        print(f"Elapsed time: {elapsed}")
+                        print(f"Estimated time remaining: {est_remaining_time}")
+                        
+                        # Report any failures
+                        if not result.get("success", False):
+                            print(f"⚠️ Experiment failed: {result}")
+                
+                # Create a summary of experiment results
+                success_count = sum(1 for r in results if r.get("success", False))
+                print(f"\nExperiments completed: {success_count}/{len(experiment_configs)} successful")
+            
+            # Aggregate results
+            aggregate_results(args.base_results_dir, dataset_types, model_types, seeds, synthetic_datasets)
+            
+            # Calculate total runtime
+            total_runtime = datetime.now() - start_time
+            print(f"\nTotal runtime: {total_runtime}")
+            print("All experiments completed successfully.")
         
-        # Create a summary of experiment results
-        success_count = sum(1 for r in results if r.get("success", False))
-        print(f"\nExperiments completed: {success_count}/{len(experiment_configs)} successful")
-    
-    # Aggregate results
-    aggregate_results(args.base_results_dir, dataset_types, model_types, seeds, synthetic_datasets)
-    
-    # Calculate total runtime
-    total_runtime = datetime.now() - start_time
-    print(f"\nTotal runtime: {total_runtime}")
-    print("All experiments completed successfully.")
+        finally:
+            # Restore original stdout and stderr
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
 
 if __name__ == "__main__":
     # Set start method for all multiprocessing
