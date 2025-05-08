@@ -180,7 +180,7 @@ def main(args):
         use_dummy_train_loader=True,
         train_val_test_split=(1, 0, 0),
         dummy_loader_steps=N_STEPS_PER_FOLD,
-        num_workers=0,
+        num_workers=11,
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
