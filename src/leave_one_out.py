@@ -35,7 +35,7 @@ DEFAULT_SCORE_HIDDEN = [100, 100]
 DEFAULT_CORRECTION_HIDDEN = [64, 64]
 DEFAULT_SIGMA = 1.0
 DEFAULT_N_TIMES_SIM = 100
-DEFAULT_DEVICE = "cpu"
+DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 DEFAULT_SEED = 42
 DEFAULT_RESULTS_DIR = "loo_results"
 DEFAULT_USE_CORRECTION_MLP = True
@@ -180,7 +180,7 @@ def main(args):
         use_dummy_train_loader=True,
         train_val_test_split=(1, 0, 0),
         dummy_loader_steps=N_STEPS_PER_FOLD,
-        num_workers=1,
+        num_workers=11,
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
