@@ -22,6 +22,7 @@ from src.models.components.solver import mmd_squared, simulate_trajectory, wasse
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Synthetic"
 DEFAULT_DATASET = "dyn-TF"
+DEFAULT_MODEL_TYPE = "sf2m"
 DEFAULT_N_STEPS_PER_FOLD = 15000
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
@@ -37,7 +38,6 @@ DEFAULT_N_TIMES_SIM = 100
 DEFAULT_DEVICE = "cpu"
 DEFAULT_SEED = 42
 DEFAULT_RESULTS_DIR = "loo_results"
-DEFAULT_MODEL_TYPE = "sf2m"
 DEFAULT_USE_CORRECTION_MLP = True
 
 
@@ -178,8 +178,9 @@ def main(args):
         dataset=DATASET,
         batch_size=BATCH_SIZE,
         use_dummy_train_loader=True,
+        train_val_test_split=(1, 0, 0),
         dummy_loader_steps=N_STEPS_PER_FOLD,
-        num_workers=20,
+        num_workers=0,
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")

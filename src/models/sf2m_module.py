@@ -63,6 +63,7 @@ class SF2MLitModule(LightningModule):
         enable_epoch_end_hook: bool = True,
         use_mlp_baseline: bool = False,
         use_correction_mlp: bool = True, 
+        held_out_time: int = None,
     ):
         """Initializes the sf2m_ngm model and loads data.
 
@@ -102,6 +103,9 @@ class SF2MLitModule(LightningModule):
         self.save_hyperparameters()
 
         self.enable_epoch_end_hook = enable_epoch_end_hook
+
+        # held out time
+        self.held_out_time = held_out_time
 
         # -----------------------
         # 1. Load the data
@@ -179,7 +183,7 @@ class SF2MLitModule(LightningModule):
         # -----------------------
         # 5. Build OTFMs
         # -----------------------
-        self.otfms = self.build_entropic_otfms(self.adatas, T=self.T, sigma=self.sigma, dt=self.dt)
+        self.otfms = self.build_entropic_otfms(self.adatas, T=self.T, sigma=self.sigma, dt=self.dt, held_out_time=self.held_out_time)
 
         # -----------------------
         # 6. Setup optimizer
@@ -208,7 +212,7 @@ class SF2MLitModule(LightningModule):
             mask[g, g] = 1.0
             return mask
 
-    def build_entropic_otfms(self, adatas, T, sigma, dt):
+    def build_entropic_otfms(self, adatas, T, sigma, dt, held_out_time=None):
         """Returns a list of EntropicOTFM objects, one per dataset."""
         otfms = []
         for i, adata in enumerate(adatas):
@@ -222,6 +226,7 @@ class SF2MLitModule(LightningModule):
                 T=T,
                 dim=x_tensor.shape[1],
                 device=self.device,
+                held_out_time=held_out_time,
             )
             otfms.append(model)
         return otfms
@@ -248,55 +253,114 @@ class SF2MLitModule(LightningModule):
     # Core training loop
     # -------------------------------------------------------------------------
     def training_step(self, *args, **kwargs):
-        """Combine flow matching + score matching with multiple datasets."""
         optimizer = self.optimizers()
+        MIX_BATCHES = True
 
-        # Randomly pick which dataset to train on
-        ds_idx = np.random.randint(0, len(self.adatas))
-        model = self.otfms[ds_idx]
-        cond_vector = self.conditionals[ds_idx].to(self.device)
+        if not MIX_BATCHES:
+            # Randomly pick which dataset to train on
+            ds_idx = np.random.randint(0, len(self.adatas))
+            model = self.otfms[ds_idx]
+            cond_vector = self.conditionals[ds_idx].to(self.device)
 
-        # Sample bridging flows
-        _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
-            batch_size=self.batch_size, skip_time=None
-        )
-        _x = _x.to(self.device)
-        _s = _s.to(self.device)
-        _u = _u.to(self.device)
-        _t = _t.to(self.device)
-        _t_orig = _t_orig.to(self.device)
+            # Sample bridging flows
+            _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
+                batch_size=self.batch_size, skip_time=None
+            )
+            _x = _x.to(self.device)
+            _s = _s.to(self.device)
+            _u = _u.to(self.device)
+            _t = _t.to(self.device)
+            _t_orig = _t_orig.to(self.device)
 
+            B = _x.shape[0]
+
+            # Expand conditional vectors to match batch size
+            cond_expanded = cond_vector.repeat(B // cond_vector.shape[0] + 1, 1)[:B]
+            cond_expanded = cond_expanded.to(self.device)
+
+        else:
+            # Instead of picking one dataset, sample from each dataset
+            all_x, all_s, all_u, all_t, all_t_orig = [], [], [], [], []
+            all_cond_vectors = []
+            
+            # Determine equal batch sizes for each dataset
+            n_datasets = len(self.adatas)
+            base_batch_size = self.batch_size // n_datasets
+            remainder = self.batch_size % n_datasets
+            
+            # Create batch sizes list with equal distribution
+            batch_sizes = [base_batch_size] * n_datasets
+            
+            # Distribute remainder randomly
+            if remainder > 0:
+                indices = torch.randperm(n_datasets)[:remainder]
+                for idx in indices:
+                    batch_sizes[idx] += 1
+            
+            # Sample from each dataset
+            for ds_idx in range(n_datasets):
+                model = self.otfms[ds_idx]
+                cond_vector = self.conditionals[ds_idx].to(self.device)
+                
+                # Sample bridges flows with dataset-specific batch size
+                x, s, u, t, t_orig = model.sample_bridges_flows(
+                    batch_size=batch_sizes[ds_idx], skip_time=self.held_out_time
+                )
+                
+                # The actual data size returned is larger than requested batch_size due to timepoints
+                actual_batch_size = x.shape[0]
+                
+                all_x.append(x.to(self.device))
+                all_s.append(s.to(self.device))
+                all_u.append(u.to(self.device))
+                all_t.append(t.to(self.device))
+                all_t_orig.append(t_orig.to(self.device))
+                
+                # Expand conditional vectors to match the actual data size returned
+                cond_expanded = cond_vector.repeat(actual_batch_size // cond_vector.shape[0] + 1, 1)[:actual_batch_size]
+                all_cond_vectors.append(cond_expanded.to(self.device))
+            
+            # Combine all samples using vstack
+            _x = torch.vstack(all_x)
+            _s = torch.vstack(all_s)
+            _u = torch.vstack(all_u)
+            _t = torch.vstack(all_t)
+            _t_orig = torch.vstack(all_t_orig)
+            cond_expanded = torch.vstack(all_cond_vectors)
+
+            B = _x.shape[0]
+        
         optimizer.zero_grad()
 
         # Prepare inputs
-        s_input = _x.unsqueeze(1)
         v_input = _x.unsqueeze(1).to(self.device)
         t_input = _t.unsqueeze(1).to(self.device)
-        B = _x.shape[0]
-
-        # Expand conditional vectors to match batch size
-        cond_expanded = cond_vector.repeat(B // cond_vector.shape[0] + 1, 1)[:B]
-        cond_expanded = cond_expanded.to(self.device)
 
         # Score net output
         s_fit = self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded).squeeze(1)
 
+        sigma_value = self.sigma
+        
         # Flow net output, with or without correction
         if self.global_step <= 500 or not self.use_correction_mlp:
             # Warmup phase or no correction
             v_fit = self.func_v(t_input, v_input).squeeze(1) - (
-                model.sigma**2 / 2
+                sigma_value**2 / 2
             ) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
         else:
             # Full training phase with correction
             v_fit = self.func_v(t_input, v_input).squeeze(1) + self.v_correction(_t.to(self.device), _x.to(self.device))
-            v_fit = v_fit - (model.sigma**2 / 2) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
+            v_fit = v_fit - (sigma_value**2 / 2) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
 
         # Losses
         L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
+        
+        # Use the dt from the first model
+        dt_value = self.dt
+        
         L_flow = torch.mean(
-            (_t_orig * (1 - _t_orig)) * (v_fit * model.dt - _u) ** 2
-        )  # weighting by (_t_orig * (1 - _t_orig))
+            (_t_orig * (1 - _t_orig)) * (v_fit * dt_value - _u) ** 2
+        )
         L_reg = self.func_v.l2_reg() + self.func_v.fc1_reg()
         
         # Only apply correction regularization if we're using the correction network
@@ -323,7 +387,7 @@ class SF2MLitModule(LightningModule):
 
         if self.global_step % 100 == 0:
             print(
-                f"Step={self.global_step}, ds={ds_idx}, "
+                f"Step={self.global_step}, "
                 f"L_score={L_score.item():.4f}, L_flow={L_flow.item():.4f}, "
                 f"Reg(Flow)={L_reg.item():.4f}, Reg(Corr)={L_reg_correction.item():.4f}"
             )

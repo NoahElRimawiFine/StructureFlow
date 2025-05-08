@@ -68,7 +68,10 @@ def main(args):
         data_path=DATA_PATH,
         dataset_type=DATASET_TYPE,
         batch_size=BATCH_SIZE,
-        num_workers=0,
+        use_dummy_train_loader=True,
+        dummy_loader_steps=N_STEPS,
+        num_workers=20,
+        train_val_test_split=(1, 0, 0),
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
@@ -100,7 +103,7 @@ def main(args):
         
         # No Lightning Trainer used for RF
         print("RF model fitting complete.")
-        
+
     else:  # "sf2m" or "mlp_baseline"
         # Configure correct flags based on MODEL_TYPE
         use_mlp = MODEL_TYPE == "mlp_baseline"
@@ -136,7 +139,7 @@ def main(args):
             accelerator="cpu" if DEVICE == "cpu" else "gpu",
             devices=1,
             logger=False,
-            enable_checkpointing=True,
+            enable_checkpointing=False,
             enable_progress_bar=True,
             log_every_n_steps=100,
         )
