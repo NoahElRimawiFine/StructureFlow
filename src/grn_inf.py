@@ -68,8 +68,8 @@ def main(args):
         data_path=DATA_PATH,
         dataset_type=DATASET_TYPE,
         batch_size=BATCH_SIZE,
-        # use_dummy_train_loader=True,
-        # dummy_loader_steps=N_STEPS,
+        use_dummy_train_loader=True,
+        dummy_loader_steps=N_STEPS,
         num_workers=20,
         train_val_test_split=(1, 0, 0),
     )
