@@ -21,7 +21,7 @@ from torch.utils.data import Dataset, DataLoader
 from typing import List 
 
 def load_wt_tf_data_from_dyn_tf_dir(data_root_dir="data/Synthetic"):
-    network_type_fixed = "TF"
+    network_type_fixed = "BF"
     base_dir_path = os.path.join(data_root_dir, f"dyn-{network_type_fixed}")
     actual_data_path = base_dir_path
     if os.path.exists(base_dir_path) and os.path.isdir(base_dir_path):

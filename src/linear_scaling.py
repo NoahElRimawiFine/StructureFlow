@@ -384,7 +384,7 @@ def train_ngm_sf2m(A_true, xs, n, sigma, N=500, T=5, t1=2.5):
 
 
 def main():
-    ns = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 500, 1000]
+    ns = [10, 20] # , 30, 40, 50, 60, 70, 80, 90, 100, 250]
     ngm_sf2m_times = []
     discrete_ode_times = []
     jacob_aupr_ngm = []
