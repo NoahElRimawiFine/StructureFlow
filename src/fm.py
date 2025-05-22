@@ -167,11 +167,7 @@ class BridgeMatcher:
 
 class EntropicOTFM:
     def __init__(self, x, t_idx, dt, sigma, T, dim, device):
-        # Inner helper function for Entropic OT plan calculation
         def entropic_ot_plan(x0_tensor, x1_tensor, eps_val):
-            # x0_tensor, x1_tensor are PyTorch tensors (can be on any device)
-            
-            # Move to CPU and convert to NumPy for POT's euclidean_distances and sinkhorn
             x0_np = x0_tensor.cpu().numpy()
             x1_np = x1_tensor.cpu().numpy()
 
@@ -182,17 +178,12 @@ class EntropicOTFM:
             C_np = ot.utils.euclidean_distances(x0_np, x1_np, squared=True) / 2.0
             C_np = np.ascontiguousarray(C_np, dtype=np.float64)
 
-            # Define a large float value compatible with float32 for replacements
-            # Using float32 max, as the final plan is float32.
             large_float_replacement = float(np.finfo(np.float32).max / (x0_np.shape[0] * x1_np.shape[0] + 1e-9)) if (x0_np.shape[0] * x1_np.shape[0] > 0) else float(np.finfo(np.float32).max)
             
-            # Clean C_np: handle NaNs and Infs
             C_np = np.nan_to_num(C_np, nan=large_float_replacement, 
                                  posinf=large_float_replacement, 
-                                 neginf=0.0) # Assuming costs are non-negative, replace neginf with 0
+                                 neginf=0.0)
             
-            # Clip to ensure values are within a very large, but float32 representable, positive range if C_np must be positive
-            # If C_np can be 0, then min_val_clip should be 0.
             min_val_clip = 0.0
             max_val_clip = float(np.finfo(np.float32).max)
             C_np = np.clip(C_np, min_val_clip, max_val_clip)
@@ -224,15 +215,15 @@ class EntropicOTFM:
         self.dt = dt
         self.T = T
         self.dim = dim
-        self.device = device # Target device for the model, e.g., CUDA
+        self.device = device
         self.Ts = []
         # construct EOT plans
         for i in range(self.T - 1):
             self.Ts.append(
-                entropic_ot_plan( # Call to the modified nested function
+                entropic_ot_plan(
                     self.x[self.t_idx == i, :],
                     self.x[self.t_idx == i + 1, :],
-                    self.dt * self.sigma**2, # eps value for sinkhorn
+                    self.dt * self.sigma**2,
                 )
             )
 
