@@ -26,7 +26,6 @@ from src.models.components.base import MLPODEFKO
 from src.models.components.cond_mlp import MLP as CONDMLP, MLPFlow
 from src.models.components.simple_mlp import MLP
 
-from .components.distribution_distances import compute_distribution_distances
 from .components.optimal_transport import EntropicOTFM
 from .components.plotting import (
     compute_global_jacobian,
@@ -62,7 +61,9 @@ class SF2MLitModule(LightningModule):
         optimizer=Any,
         enable_epoch_end_hook: bool = True,
         use_mlp_baseline: bool = False,
-        use_correction_mlp: bool = True, 
+        use_correction_mlp: bool = True,
+        held_out_time: int = None,
+        leave_ko_out_idx: int = None,
     ):
         """Initializes the sf2m_ngm model and loads data.
 
@@ -102,6 +103,10 @@ class SF2MLitModule(LightningModule):
         self.save_hyperparameters()
 
         self.enable_epoch_end_hook = enable_epoch_end_hook
+
+        # held out time
+        self.held_out_time = held_out_time
+        self.leave_ko_out_idx = leave_ko_out_idx
 
         # -----------------------
         # 1. Load the data
@@ -148,11 +153,19 @@ class SF2MLitModule(LightningModule):
 
         if self.use_mlp_baseline:
             self.func_v = MLPFlow(
-                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks, device=device
+                dims=self.dims,
+                GL_reg=GL_reg,
+                bias=True,
+                knockout_masks=self.knockout_masks,
+                device=device,
             )
         else:
             self.func_v = MLPODEFKO(
-                dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks, device=device
+                dims=self.dims,
+                GL_reg=GL_reg,
+                bias=True,
+                knockout_masks=self.knockout_masks,
+                device=device,
             )
 
         self.score_net = CONDMLP(
@@ -161,25 +174,35 @@ class SF2MLitModule(LightningModule):
             time_varying=True,
             conditional=True,
             conditional_dim=self.n_genes,
-            device=device
+            device=device,
         )
 
         # Create correction network only if enabled
         if self.use_correction_mlp:
-            self.v_correction = MLP(d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True)
+            self.v_correction = MLP(
+                d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True
+            )
         else:
             # Create a dummy module that returns zeros
             class ZeroModule(torch.nn.Module):
-                def __init__(self): 
+                def __init__(self):
                     super().__init__()
-                def forward(self, t, x): 
+
+                def forward(self, t, x):
                     return torch.zeros_like(x)
+
             self.v_correction = ZeroModule()
 
         # -----------------------
         # 5. Build OTFMs
         # -----------------------
-        self.otfms = self.build_entropic_otfms(self.adatas, T=self.T, sigma=self.sigma, dt=self.dt)
+        self.otfms = self.build_entropic_otfms(
+            self.adatas,
+            T=self.T,
+            sigma=self.sigma,
+            dt=self.dt,
+            held_out_time=self.held_out_time,
+        )
 
         # -----------------------
         # 6. Setup optimizer
@@ -208,7 +231,7 @@ class SF2MLitModule(LightningModule):
             mask[g, g] = 1.0
             return mask
 
-    def build_entropic_otfms(self, adatas, T, sigma, dt):
+    def build_entropic_otfms(self, adatas, T, sigma, dt, held_out_time=None):
         """Returns a list of EntropicOTFM objects, one per dataset."""
         otfms = []
         for i, adata in enumerate(adatas):
@@ -222,8 +245,10 @@ class SF2MLitModule(LightningModule):
                 T=T,
                 dim=x_tensor.shape[1],
                 device=self.device,
+                held_out_time=held_out_time,
             )
             otfms.append(model)
+
         return otfms
 
     def proximal(self, w, dims, lam=0.1, eta=0.1):
@@ -248,57 +273,128 @@ class SF2MLitModule(LightningModule):
     # Core training loop
     # -------------------------------------------------------------------------
     def training_step(self, *args, **kwargs):
-        """Combine flow matching + score matching with multiple datasets."""
         optimizer = self.optimizers()
+        MIX_BATCHES = False
 
-        # Randomly pick which dataset to train on
-        ds_idx = np.random.randint(0, len(self.adatas))
-        model = self.otfms[ds_idx]
-        cond_vector = self.conditionals[ds_idx].to(self.device)
+        if not MIX_BATCHES:
+            # Randomly pick which dataset to train on
+            if self.leave_ko_out_idx is not None:
+                valid_indices = [
+                    i for i in range(len(self.adatas)) if i != self.leave_ko_out_idx
+                ]
+                ds_idx = np.random.choice(valid_indices)
+            else:
+                ds_idx = np.random.randint(0, len(self.adatas))
+            model = self.otfms[ds_idx]
+            cond_vector = self.conditionals[ds_idx].to(self.device)
 
-        # Sample bridging flows
-        _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
-            batch_size=self.batch_size, skip_time=None
-        )
-        _x = _x.to(self.device)
-        _s = _s.to(self.device)
-        _u = _u.to(self.device)
-        _t = _t.to(self.device)
-        _t_orig = _t_orig.to(self.device)
+            # Sample bridging flows
+            _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
+                batch_size=self.batch_size, skip_time=self.held_out_time
+            )
+            _x = _x.to(self.device)
+            _s = _s.to(self.device)
+            _u = _u.to(self.device)
+            _t = _t.to(self.device)
+            _t_orig = _t_orig.to(self.device)
+
+            B = _x.shape[0]
+
+            # Expand conditional vectors to match batch size
+            cond_expanded = cond_vector.repeat(B // cond_vector.shape[0] + 1, 1)[:B]
+            cond_expanded = cond_expanded.to(self.device)
+
+        else:
+            # Instead of picking one dataset, sample from each dataset
+            all_x, all_s, all_u, all_t, all_t_orig = [], [], [], [], []
+            all_cond_vectors = []
+
+            # Determine equal batch sizes for each dataset
+            n_datasets = len(self.adatas)
+            base_batch_size = self.batch_size // n_datasets
+            remainder = self.batch_size % n_datasets
+
+            # Create batch sizes list with equal distribution
+            batch_sizes = [base_batch_size] * n_datasets
+
+            # Distribute remainder randomly
+            if remainder > 0:
+                indices = torch.randperm(n_datasets)[:remainder]
+                for idx in indices:
+                    batch_sizes[idx] += 1
+
+            # Sample from each dataset
+            for ds_idx in range(n_datasets):
+                model = self.otfms[ds_idx]
+                cond_vector = self.conditionals[ds_idx].to(self.device)
+
+                # Sample bridges flows with dataset-specific batch size
+                x, s, u, t, t_orig = model.sample_bridges_flows(
+                    batch_size=batch_sizes[ds_idx], skip_time=self.held_out_time
+                )
+
+                # The actual data size returned is larger than requested batch_size due to timepoints
+                actual_batch_size = x.shape[0]
+
+                all_x.append(x.to(self.device))
+                all_s.append(s.to(self.device))
+                all_u.append(u.to(self.device))
+                all_t.append(t.to(self.device))
+                all_t_orig.append(t_orig.to(self.device))
+
+                # Expand conditional vectors to match the actual data size returned
+                cond_expanded = cond_vector.repeat(
+                    actual_batch_size // cond_vector.shape[0] + 1, 1
+                )[:actual_batch_size]
+                all_cond_vectors.append(cond_expanded.to(self.device))
+
+            # Combine all samples using vstack
+            _x = torch.vstack(all_x)
+            _s = torch.vstack(all_s)
+            _u = torch.vstack(all_u)
+            _t = torch.vstack(all_t)
+            _t_orig = torch.vstack(all_t_orig)
+            cond_expanded = torch.vstack(all_cond_vectors)
+
+            B = _x.shape[0]
 
         optimizer.zero_grad()
 
         # Prepare inputs
-        s_input = _x.unsqueeze(1)
         v_input = _x.unsqueeze(1).to(self.device)
         t_input = _t.unsqueeze(1).to(self.device)
-        B = _x.shape[0]
-
-        # Expand conditional vectors to match batch size
-        cond_expanded = cond_vector.repeat(B // cond_vector.shape[0] + 1, 1)[:B]
-        cond_expanded = cond_expanded.to(self.device)
 
         # Score net output
-        s_fit = self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded).squeeze(1)
+        s_fit = self.score_net(
+            _t.to(self.device), _x.to(self.device), cond_expanded
+        ).squeeze(1)
+
+        sigma_value = self.sigma
 
         # Flow net output, with or without correction
         if self.global_step <= 500 or not self.use_correction_mlp:
             # Warmup phase or no correction
             v_fit = self.func_v(t_input, v_input).squeeze(1) - (
-                model.sigma**2 / 2
+                sigma_value**2 / 2
             ) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
         else:
             # Full training phase with correction
-            v_fit = self.func_v(t_input, v_input).squeeze(1) + self.v_correction(_t.to(self.device), _x.to(self.device))
-            v_fit = v_fit - (model.sigma**2 / 2) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
+            v_fit = self.func_v(t_input, v_input).squeeze(1) + self.v_correction(
+                _t.to(self.device), _x.to(self.device)
+            )
+            v_fit = v_fit - (sigma_value**2 / 2) * self.score_net(
+                _t.to(self.device), _x.to(self.device), cond_expanded
+            )
 
         # Losses
         L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
-        L_flow = torch.mean(
-            (_t_orig * (1 - _t_orig)) * (v_fit * model.dt - _u) ** 2
-        )  # weighting by (_t_orig * (1 - _t_orig))
+
+        # Use the dt from the first model
+        dt_value = self.dt
+
+        L_flow = torch.mean((_t_orig * (1 - _t_orig)) * (v_fit * dt_value - _u) ** 2)
         L_reg = self.func_v.l2_reg() + self.func_v.fc1_reg()
-        
+
         # Only apply correction regularization if we're using the correction network
         if self.use_correction_mlp:
             L_reg_correction = self.mlp_l2_reg(self.v_correction)
@@ -323,13 +419,15 @@ class SF2MLitModule(LightningModule):
 
         if self.global_step % 100 == 0:
             print(
-                f"Step={self.global_step}, ds={ds_idx}, "
+                f"Step={self.global_step}, "
                 f"L_score={L_score.item():.4f}, L_flow={L_flow.item():.4f}, "
                 f"Reg(Flow)={L_reg.item():.4f}, Reg(Corr)={L_reg_correction.item():.4f}"
             )
 
         self.log("train/loss", L.item(), on_step=True, on_epoch=True, prog_bar=True)
-        self.log("train/flow_loss", L_flow.item(), on_step=True, on_epoch=True, prog_bar=True)
+        self.log(
+            "train/flow_loss", L_flow.item(), on_step=True, on_epoch=True, prog_bar=True
+        )
         self.log(
             "train/score_loss",
             L_score.item(),
@@ -337,7 +435,9 @@ class SF2MLitModule(LightningModule):
             on_epoch=True,
             prog_bar=True,
         )
-        self.log("train/reg_loss", L_reg.item(), on_step=True, on_epoch=True, prog_bar=True)
+        self.log(
+            "train/reg_loss", L_reg.item(), on_step=True, on_epoch=True, prog_bar=True
+        )
 
         # Backprop and update
         self.manual_backward(L)
@@ -345,53 +445,66 @@ class SF2MLitModule(LightningModule):
 
         # Proximal step (group-lasso style)
         if not self.use_mlp_baseline:
-            self.proximal(self.func_v.fc1.weight, self.func_v.dims, lam=self.func_v.GL_reg, eta=0.01)
+            self.proximal(
+                self.func_v.fc1.weight,
+                self.func_v.dims,
+                lam=self.func_v.GL_reg,
+                eta=0.01,
+            )
 
     def on_train_epoch_end(self):
         if not self.enable_epoch_end_hook:
             return
-        
+
         # Import pandas at the beginning of the method
         import pandas as pd
-        
+
         # Get all gene names from the model
         model_gene_names = self.data_loader.adatas[0].var_names
-        
+
         # Compute the full Jacobian (estimated causal graph)
         with torch.no_grad():
-            A_estim = compute_global_jacobian(self.func_v, self.adatas, dt=1/self.T, device=torch.device("cpu"))
-        
+            A_estim = compute_global_jacobian(
+                self.func_v, self.adatas, dt=1 / self.T, device=torch.device("cpu")
+            )
+
         # Get the directly extracted causal graph from the model
         W_v = self.func_v.causal_graph(w_threshold=0.0).T
-        
+
         # Different handling for DataFrame (Renge) vs. numpy array (synthetic)
         if isinstance(self.data_loader.true_matrix, pd.DataFrame):
             # For Renge dataset: extract the exact subset that matches the reference network
             ref_network = self.data_loader.true_matrix
             ref_rows = ref_network.index
             ref_cols = ref_network.columns
-            
+
             # Create DataFrames for the estimated graphs with all genes
-            A_estim_df = pd.DataFrame(A_estim, index=model_gene_names, columns=model_gene_names)
+            A_estim_df = pd.DataFrame(
+                A_estim, index=model_gene_names, columns=model_gene_names
+            )
             W_v_df = pd.DataFrame(W_v, index=model_gene_names, columns=model_gene_names)
-            
+
             # Extract the exact subset that corresponds to the reference network dimensions
             A_estim_subset = A_estim_df.loc[ref_rows, ref_cols]
             W_v_subset = W_v_df.loc[ref_rows, ref_cols]
-            
+
             # Convert to numpy arrays for evaluation
             A_estim_np = A_estim_subset.values
             W_v_np = W_v_subset.values
             A_true_np = ref_network.values
-            
+
             # Plot with the subset matrices
             plot_auprs(W_v_np, A_estim_np, A_true_np, self.logger, self.global_step)
-            log_causal_graph_matrices(A_estim_np, W_v_np, A_true_np, self.logger, self.global_step)
+            log_causal_graph_matrices(
+                A_estim_np, W_v_np, A_true_np, self.logger, self.global_step
+            )
         else:
             # Standard handling for synthetic data
             A_true = self.true_matrix
             plot_auprs(W_v, A_estim, A_true, self.logger, self.global_step)
-            log_causal_graph_matrices(A_estim, W_v, A_true, self.logger, self.global_step)
+            log_causal_graph_matrices(
+                A_estim, W_v, A_true, self.logger, self.global_step
+            )
 
         table_rows = []
 
@@ -401,7 +514,9 @@ class SF2MLitModule(LightningModule):
                 time_distances = []
                 for i, adata in enumerate(self.adatas):
                     x0 = torch.from_numpy(adata.X[adata.obs["t"] == time - 1]).float()
-                    true_dist = torch.from_numpy(adata.X[adata.obs["t"] == time]).float()
+                    true_dist = torch.from_numpy(
+                        adata.X[adata.obs["t"] == time]
+                    ).float()
                     cond_vector = self.conditionals[i]
                     if cond_vector is not None:
                         cond_vector = cond_vector[0].repeat(len(x0), 1)
@@ -456,11 +571,23 @@ class SF2MLitModule(LightningModule):
             df = pd.DataFrame(all_results)
             table_str = df.to_markdown(index=False)
             if self.logger is not None:
-                self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+                self.logger.experiment.add_text(
+                    "Validation Wasserstein Distances",
+                    table_str,
+                    global_step=self.global_step,
+                )
             # Optionally also log individual metrics:
             for row in all_results:
-                self.log(f"train/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True)
-                self.log(f"train/w_dist_sde_time_{row['Time']}", row["Avg SDE"], prog_bar=True)
+                self.log(
+                    f"train/w_dist_ode_time_{row['Time']}",
+                    row["Avg ODE"],
+                    prog_bar=True,
+                )
+                self.log(
+                    f"train/w_dist_sde_time_{row['Time']}",
+                    row["Avg SDE"],
+                    prog_bar=True,
+                )
 
             self.train_results.clear()
         else:
@@ -469,49 +596,57 @@ class SF2MLitModule(LightningModule):
     def validation_step(self, batch, batch_idx):
         if not self.enable_epoch_end_hook:
             return
-        
+
         # Get validation adatas
         val_adatas = self.data_loader.get_subset_adatas("val")
-        
+
         # Get all gene names from the model
         model_gene_names = self.data_loader.adatas[0].var_names
-        
+
         # Compute the full Jacobian (estimated causal graph)
         with torch.no_grad():
-            A_estim = compute_global_jacobian(self.func_v, val_adatas, dt=1/self.T, device=torch.device("cpu"))
-        
+            A_estim = compute_global_jacobian(
+                self.func_v, val_adatas, dt=1 / self.T, device=torch.device("cpu")
+            )
+
         # Get the directly extracted causal graph from the model
         W_v = self.func_v.causal_graph(w_threshold=0.0).T
-        
+
         # Different handling for DataFrame (Renge) vs. numpy array (synthetic)
         if isinstance(self.data_loader.true_matrix, pd.DataFrame):
             # For Renge dataset: extract the exact subset that matches the reference network
             ref_network = self.data_loader.true_matrix
             ref_rows = ref_network.index
             ref_cols = ref_network.columns
-            
+
             # Create DataFrames for the estimated graphs with all genes
-            A_estim_df = pd.DataFrame(A_estim, index=model_gene_names, columns=model_gene_names)
+            A_estim_df = pd.DataFrame(
+                A_estim, index=model_gene_names, columns=model_gene_names
+            )
             W_v_df = pd.DataFrame(W_v, index=model_gene_names, columns=model_gene_names)
-            
+
             # Extract the exact subset that corresponds to the reference network dimensions
             A_estim_subset = A_estim_df.loc[ref_rows, ref_cols]
             W_v_subset = W_v_df.loc[ref_rows, ref_cols]
-            
+
             # Convert to numpy arrays for evaluation
             A_estim_np = A_estim_subset.values
             W_v_np = W_v_subset.values
             A_true_np = ref_network.values
-            
+
             # Plot with the subset matrices
             plot_auprs(W_v_np, A_estim_np, A_true_np, self.logger, self.global_step)
-            log_causal_graph_matrices(A_estim_np, W_v_np, A_true_np, self.logger, self.global_step)
+            log_causal_graph_matrices(
+                A_estim_np, W_v_np, A_true_np, self.logger, self.global_step
+            )
         else:
             # Standard handling for synthetic data
             A_true = self.true_matrix
             plot_auprs(W_v, A_estim, A_true, self.logger, self.global_step)
-            log_causal_graph_matrices(A_estim, W_v, A_true, self.logger, self.global_step)
-        
+            log_causal_graph_matrices(
+                A_estim, W_v, A_true, self.logger, self.global_step
+            )
+
         # Continue with the standard Wasserstein distance evaluation
         results = []
 
@@ -567,7 +702,7 @@ class SF2MLitModule(LightningModule):
 
         self.val_results.extend(results)
 
-    def on_validation_epoch_end(self):        
+    def on_validation_epoch_end(self):
         # Flatten results if multiple batches
         all_results = self.val_results
 
@@ -576,26 +711,35 @@ class SF2MLitModule(LightningModule):
         df = pd.DataFrame(all_results)
         table_str = df.to_markdown(index=False)
         if self.logger is not None:
-            self.logger.experiment.add_text("Validation Wasserstein Distances", table_str, global_step=self.global_step)
+            self.logger.experiment.add_text(
+                "Validation Wasserstein Distances",
+                table_str,
+                global_step=self.global_step,
+            )
         # Optionally also log individual metrics:
         for row in all_results:
-            self.log(f"val/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True)
-            self.log(f"val/w_dist_sde_time_{row['Time']}", row["Avg SDE"], prog_bar=True)
+            self.log(
+                f"val/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True
+            )
+            self.log(
+                f"val/w_dist_sde_time_{row['Time']}", row["Avg SDE"], prog_bar=True
+            )
 
         self.val_results.clear()
-
 
     def test_step(self, *args, **kwargs):
         pass
 
     def configure_optimizers(self):
         """Pass model parameters to optimizer."""
-        params_to_optimize = list(self.func_v.parameters()) + list(self.score_net.parameters())
-        
+        params_to_optimize = list(self.func_v.parameters()) + list(
+            self.score_net.parameters()
+        )
+
         # Only include correction network parameters if we're using it
         if self.use_correction_mlp:
             params_to_optimize += list(self.v_correction.parameters())
-            
+
         optimizer = torch.optim.AdamW(
             params_to_optimize,
             lr=self.hparams.lr,

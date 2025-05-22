@@ -1,4 +1,4 @@
-# leave_one_ko_out.py
+# leave_ko_out.py
 import torch
 import numpy as np
 import pandas as pd
@@ -9,17 +9,19 @@ import os
 import argparse
 
 # --- Project Specific Imports ---
-from src.datamodules.grn_datamodule import AnnDataDataset, TrajectoryStructureDataModule
+from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.rf_module import ReferenceFittingModule
 from src.models.sf2m_module import SF2MLitModule
-from src.models.components.solver import mmd_squared, simulate_trajectory, wasserstein
+from src.models.components.solver import simulate_trajectory, wasserstein, mmd_squared
 
-# Default configuration values
+
+# Default configuration values (will be overridden by command line arguments)
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Synthetic"
-DEFAULT_MODEL_TYPE = "rf"
-DEFAULT_N_STEPS_PER_KO = 1000
-DEFAULT_BATCH_SIZE = 128
+DEFAULT_DATASET = "dyn-TF"
+DEFAULT_MODEL_TYPE = "sf2m"
+DEFAULT_N_STEPS_PER_FOLD = 15000
+DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
 DEFAULT_ALPHA = 0.1
 DEFAULT_REG = 5e-6
@@ -30,13 +32,23 @@ DEFAULT_SCORE_HIDDEN = [100, 100]
 DEFAULT_CORRECTION_HIDDEN = [64, 64]
 DEFAULT_SIGMA = 1.0
 DEFAULT_N_TIMES_SIM = 100
-DEFAULT_DEVICE = "cpu"
+DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 DEFAULT_SEED = 42
-DEFAULT_RESULTS_DIR = "loko_results"
+DEFAULT_RESULTS_DIR = "lko_results"
 DEFAULT_USE_CORRECTION_MLP = True
 
+# Knockout indices to leave out for testing (will be set in main)
+LEAVE_OUT_KO_INDICES = [2, 3, 4]  # Default values, will be adjusted in main
 
-def create_trajectory_pca_plot(adata, predictions, ko_name, timepoint, folder_path, model_type):
+# --- Renge Specific Parameters ---
+# DEFAULT_N_STEPS_PER_FOLD = 10000
+# DEFAULT_LR = 0.0002
+# DEFAULT_REG = 5e-8
+# DEFAULT_ALPHA = 0.1
+# DEFAULT_GL_REG = 0.02
+
+
+def create_trajectory_pca_plot(adata, predictions, ko_name, time_point, folder_path, model_type):
     """
     Create and save a PCA plot showing the entire trajectory with predictions overlay.
     
@@ -44,11 +56,10 @@ def create_trajectory_pca_plot(adata, predictions, ko_name, timepoint, folder_pa
         adata: AnnData object containing the full trajectory data
         predictions: Model's predicted final state (numpy array)
         ko_name: Name of the knockout for labeling
-        timepoint: The timepoint being predicted
+        time_point: The current timepoint
         folder_path: Path to save the plot
         model_type: Type of model used ("rf", "sf2m", etc.)
     """
-    # Create component folder if it doesn't exist
     os.makedirs(folder_path, exist_ok=True)
     
     # Get all data and times from the anndata object
@@ -107,7 +118,8 @@ def create_trajectory_pca_plot(adata, predictions, ko_name, timepoint, folder_pa
     cbar.ax.tick_params(labelsize=14)
     
     # Add title and labels
-    plt.title(f"Knockout: {ko_name} (t={timepoint}) - {model_type}", fontweight='bold')
+    ko_label = "Wild Type" if ko_name is None else f"Knockout: {ko_name}"
+    plt.title(f"{ko_label} - {model_type} Prediction at t={time_point}", fontweight='bold')
     plt.xlabel("PC1", fontweight='bold')
     plt.ylabel("PC2", fontweight='bold')
     
@@ -124,7 +136,7 @@ def create_trajectory_pca_plot(adata, predictions, ko_name, timepoint, folder_pa
     plt.gca().spines['left'].set_visible(True)
     
     # Save the figure
-    filename = f"ko_{ko_name}_t{timepoint}.png"
+    filename = f"traj_{'wildtype' if ko_name is None else f'ko_{ko_name}'}_t{time_point}.png"
     plt.savefig(os.path.join(folder_path, filename), dpi=200, bbox_inches='tight')
     plt.close()
     
@@ -136,7 +148,8 @@ def main(args):
     # Extract configuration from arguments
     DATA_PATH = args.data_path
     DATASET_TYPE = args.dataset_type
-    N_STEPS_PER_KO = args.n_steps_per_ko
+    DATASET = args.dataset
+    N_STEPS_PER_FOLD = args.n_steps_per_fold
     BATCH_SIZE = args.batch_size
     LR = args.lr
     ALPHA = args.alpha
@@ -157,9 +170,9 @@ def main(args):
     # Create results directory with model type and seed info
     RESULTS_DIR = os.path.join(
         RESULTS_DIR, 
-        f"{DATASET_TYPE}_{MODEL_TYPE}_seed{SEED}"
+        f"{DATASET_TYPE}_{MODEL_TYPE}_{'_' + DATASET if DATASET_TYPE == 'Synthetic' else ''}_seed{SEED}"
     )
-    
+
     seed_everything(SEED, workers=True)
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
@@ -168,10 +181,12 @@ def main(args):
     datamodule = TrajectoryStructureDataModule(
         data_path=DATA_PATH,
         dataset_type=DATASET_TYPE,
+        dataset=DATASET,
         batch_size=BATCH_SIZE,
         use_dummy_train_loader=True,
-        dummy_loader_steps=N_STEPS_PER_KO,
-        num_workers=0,
+        train_val_test_split=(1, 0, 0),
+        dummy_loader_steps=N_STEPS_PER_FOLD,
+        num_workers=11,
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
@@ -179,6 +194,20 @@ def main(args):
     full_adatas = datamodule.get_subset_adatas()
     if not full_adatas:
         raise ValueError("No datasets loaded.")
+    
+    # Determine the KO indices to leave out
+    total_kos = len(full_adatas)
+    LEAVE_OUT_KO_INDICES = args.leave_out_ko_indices
+    
+    # Validate KO indices
+    for ko_idx in LEAVE_OUT_KO_INDICES:
+        if ko_idx >= total_kos:
+            raise ValueError(f"Invalid knockout index {ko_idx}. Only {total_kos} knockouts available.")
+    
+    print(f"Total knockouts available: {total_kos}")
+    print(f"Knockouts to leave out: {LEAVE_OUT_KO_INDICES}")
+    print(f"Knockout names to leave out: {[datamodule.kos[idx] for idx in LEAVE_OUT_KO_INDICES]}")
+    
     T_max = int(max(adata.obs['t'].max() for adata in full_adatas))
     T_times = T_max + 1
     DT_data = 1.0 / T_times
@@ -187,73 +216,31 @@ def main(args):
     print(f"Kos: {datamodule.kos}")
     print(f"Using model type: {MODEL_TYPE}")
 
-    # --- 2. Leave-One-KO-Out Cross-Validation Loop ---
+    # --- 2. Leave-KO-Out Cross-Validation Loop ---
     results = []
-    ko_metrics = []
-    
-    # Create PCA plots directory
-    pca_folder = os.path.join(RESULTS_DIR, "pca_plots")
-    os.makedirs(pca_folder, exist_ok=True)
+    all_ko_metrics = []
 
-    for held_out_ko_idx, held_out_ko_name in enumerate(datamodule.kos):
-        fold_name = f"{MODEL_TYPE}_holdout_ko_{held_out_ko_name}"
+    for leave_out_idx in LEAVE_OUT_KO_INDICES:
+        ko_name = datamodule.kos[leave_out_idx]
+        fold_name = f"{MODEL_TYPE}_leave_out_ko_{ko_name}"
         print(f"\n===== Training Fold: {fold_name} =====")
 
-        # --- 2.1 Create Filtered Dataset for this Fold ---
-        print(f"Creating filtered dataset excluding knockout: {held_out_ko_name}...")
-        fold_adatas = []
-        fold_kos = []
-        fold_ko_indices = []
-        
-        for i, (adata, ko, ko_idx) in enumerate(zip(full_adatas, datamodule.kos, datamodule.ko_indices)):
-            if i != held_out_ko_idx:
-                fold_adatas.append(adata)
-                fold_kos.append(ko)
-                fold_ko_indices.append(ko_idx)
+        # --- 2.1 Create Filtered Data for this Fold (excluding the knockout) ---
+        print(f"Creating filtered dataset excluding knockout: {ko_name} (index {leave_out_idx})...")
+        fold_adatas = [adata for i, adata in enumerate(full_adatas) if i != leave_out_idx]
+        fold_kos = [ko for i, ko in enumerate(datamodule.kos) if i != leave_out_idx]
+        fold_ko_indices = [idx for i, idx in enumerate(datamodule.ko_indices) if i != leave_out_idx]
 
-        # --- 2.2 Create a Temporary DataModule ---
-        temp_datamodule = TrajectoryStructureDataModule(
-            data_path=DATA_PATH,
-            dataset_type=DATASET_TYPE,
-            batch_size=BATCH_SIZE,
-            use_dummy_train_loader=True,
-            dummy_loader_steps=N_STEPS_PER_KO,
-            num_workers=0,
-        )
-        
-        # Override with our filtered data
-        temp_datamodule.adatas = fold_adatas
-        temp_datamodule.kos = fold_kos
-        temp_datamodule.ko_indices = fold_ko_indices
-        temp_datamodule.true_matrix = datamodule.true_matrix
-        temp_datamodule.dim = datamodule.dim
-        temp_datamodule.gene_to_index = datamodule.gene_to_index
-        
-        # Create datasets for training
-        wrapped_datasets = [
-            AnnDataDataset(adata, source_id=i) for i, adata in enumerate(fold_adatas)
-        ]
-        temp_datamodule._dataset_lengths = [len(ds) for ds in wrapped_datasets]
-        temp_datamodule._full_dataset = torch.utils.data.ConcatDataset(wrapped_datasets)
-        
-        # Set up train/val/test splits
-        full_len = len(temp_datamodule._full_dataset)
-        train_len = int(full_len * 0.8)  # Use same splits as the original datamodule
-        val_len = int(full_len * 0.1)
-        test_len = full_len - train_len - val_len
-        temp_datamodule.dataset_train, temp_datamodule.dataset_val, temp_datamodule.dataset_test = \
-            torch.utils.data.random_split(temp_datamodule._full_dataset, [train_len, val_len, test_len])
-        
-        # --- 2.3 Train Model ---
+        # --- 2.2 Train Model ---
         model = None
         
         if MODEL_TYPE == "rf":
             print("Using Reference Fitting model...")
             # Initialize RF model
-            model = ReferenceFittingModule(use_cuda=(DEVICE == "cuda"), iter=N_STEPS_PER_KO)
+            model = ReferenceFittingModule(use_cuda=(DEVICE == "cuda"), iter=(5000 if DATASET_TYPE == "Renge" else 1000))
             
-            # Fit the model without the held-out knockout
-            print(f"Fitting RF model without knockout {held_out_ko_name}...")
+            # Fit the model with the filtered data (excluding the left-out knockout)
+            print(f"Fitting RF model without knockout {ko_name}...")
             model.fit_model(fold_adatas, fold_kos)
             
             print("RF model fitting complete.")
@@ -265,8 +252,9 @@ def main(args):
             use_mlp = MODEL_TYPE == "mlp_baseline"
             use_correction = USE_CORRECTION_MLP and not use_mlp
             
+            # Create a modified SF2M model that leaves out the specified knockout during training
             model = SF2MLitModule(
-                datamodule=temp_datamodule,
+                datamodule=datamodule,
                 T=T_times,
                 sigma=SIGMA,
                 dt=DT_data,
@@ -274,7 +262,7 @@ def main(args):
                 alpha=ALPHA,
                 reg=REG,
                 correction_reg_strength=CORRECTION_REG,
-                n_steps=N_STEPS_PER_KO,
+                n_steps=N_STEPS_PER_FOLD,
                 lr=LR,
                 device=DEVICE,
                 GL_reg=GL_REG,
@@ -284,66 +272,67 @@ def main(args):
                 enable_epoch_end_hook=False,
                 use_mlp_baseline=use_mlp,
                 use_correction_mlp=use_correction,
+                held_out_time=None,  # Not using time holdout in this script
+                leave_ko_out_idx=leave_out_idx,
             )
             
             # Train the model with Lightning
             print("Setting up Trainer...")
             trainer = Trainer(
                 max_epochs=-1,
-                max_steps=N_STEPS_PER_KO,
+                max_steps=N_STEPS_PER_FOLD,
                 accelerator="cpu" if DEVICE == "cpu" else "gpu",
                 devices=1,
                 logger=False,
                 enable_checkpointing=False,
                 enable_progress_bar=True,
-                log_every_n_steps=N_STEPS_PER_KO + 1,
+                log_every_n_steps=N_STEPS_PER_FOLD + 1,
                 num_sanity_val_steps=0,
                 limit_val_batches=0.0,
             )
             
-            print(f"Training model for {N_STEPS_PER_KO} steps...")
-            trainer.fit(model, datamodule=temp_datamodule)
+            print(f"Training model for {N_STEPS_PER_FOLD} steps...")
+            trainer.fit(model, datamodule=datamodule)
             print("Training complete.")
 
-        # --- 2.4 Evaluate Model on Held-Out Knockout ---
-        print(f"Evaluating model on held-out knockout: {held_out_ko_name}...")
+        # --- 2.3 Evaluate on the Held-Out Knockout ---
+        print(f"Evaluating model on predicting trajectories for left-out knockout: {ko_name}...")
         model.eval()
         if MODEL_TYPE != "rf":  # SF2M and MLP need explicit device placement
             model.to(DEVICE)
         
-        # Get the held-out knockout's data
-        held_out_adata = full_adatas[held_out_ko_idx]
-        held_out_ko_idx_value = datamodule.ko_indices[held_out_ko_idx]
-        
-        # For each timepoint (except t=0), predict from t-1 to t
-        timepoint_results = []
-        fold_pca_folder = os.path.join(pca_folder, f"{MODEL_TYPE}_ko_{held_out_ko_name}")
+        # Create folder for trajectory PCA plots
+        pca_folder = os.path.join(RESULTS_DIR, "pca_plots")
+        fold_pca_folder = os.path.join(pca_folder, f"{MODEL_TYPE}_ko_{ko_name}")
         os.makedirs(fold_pca_folder, exist_ok=True)
+
+        # Get the left-out knockout data
+        left_out_adata = full_adatas[leave_out_idx]
+        
+        # Simulate trajectory for each time step and compute metrics
+        ko_distances = []
         
         with torch.no_grad():
-            for t in range(1, T_times):
-                print(f"  Evaluating on timepoint t={t}...")
+            # For each time step, predict t to t+1
+            for t in range(T_max - 1):
+                # Get initial conditions (time t) and true final state (time t+1)
+                x0_np = left_out_adata.X[left_out_adata.obs["t"] == t]
+                true_dist_np = left_out_adata.X[left_out_adata.obs["t"] == t+1]
                 
-                # Get initial conditions (t-1) and true final state (t)
-                x0_np = held_out_adata.X[held_out_adata.obs["t"] == t - 1]
-                true_dist_np = held_out_adata.X[held_out_adata.obs["t"] == t]
-
                 # Check if data exists for this transition
                 if x0_np.shape[0] == 0 or true_dist_np.shape[0] == 0:
-                    print(f"  Skipping timepoint t={t}: No data for t={t-1} -> t={t}.")
+                    print(f"  Skipping time {t} to {t+1}: No data for this transition.")
                     continue
-
+                
                 x0 = torch.from_numpy(x0_np).float()
                 true_dist_cpu = torch.from_numpy(true_dist_np).float()
                 
                 if MODEL_TYPE == "rf":
-                    # For RF, we use the model directly
-                    # RF doesn't explicitly encode knockout information in the model structure,
-                    # it learns the dynamics from the data
+                    # Simulate trajectory using RF model
                     traj_rf = model.simulate_trajectory(
                         x0, 
                         n_times=1,  # Simulate one time step
-                        use_wildtype=False,  # Use full model
+                        use_wildtype=False,  # Use the full model
                         n_points=N_TIMES_SIM
                     )
                     
@@ -362,10 +351,10 @@ def main(args):
                     
                     # Create trajectory PCA plot
                     create_trajectory_pca_plot(
-                        held_out_adata,
+                        left_out_adata,
                         sim_rf_final.numpy(),
-                        held_out_ko_name,
-                        t,
+                        ko_name,
+                        t+1,
                         fold_pca_folder,
                         "RF"
                     )
@@ -375,37 +364,33 @@ def main(args):
                     x0 = x0.to(DEVICE)
                     true_dist = true_dist_cpu.to(DEVICE)
                     
-                    # For SF2M, we need to create a new conditional vector for the held-out knockout
-                    # SF2M model expects a one-hot encoding for the knockout genes
-                    ko_dim = model.n_genes  # Number of genes
-                    
-                    # Create a one-hot vector for the knockout
-                    if held_out_ko_idx_value is not None:
-                        ko_vector = torch.zeros(1, ko_dim, device=DEVICE)
-                        ko_vector[0, held_out_ko_idx_value] = 1.0
+                    # Get conditional vector for the left-out knockout
+                    cond_vector_template = model.conditionals[leave_out_idx].to(DEVICE)
+                    if cond_vector_template is not None and cond_vector_template.nelement() > 0:
+                        cond_vector = cond_vector_template[0].repeat(x0.shape[0], 1)
                     else:
-                        # For wildtype, all zeros
-                        ko_vector = torch.zeros(1, ko_dim, device=DEVICE)
+                        if model.score_net.conditional:
+                            cond_dim = model.score_net.conditional_dim
+                            cond_vector = torch.zeros(x0.shape[0], cond_dim, device=DEVICE)
+                        else:
+                            cond_vector = None
                     
-                    # Repeat for batch size
-                    ko_vector = ko_vector.repeat(x0.shape[0], 1)
-
                     # Common simulation arguments
                     common_sim_args = {
                         "flow_model": model.func_v,
                         "corr_model": model.v_correction,
                         "score_model": model.score_net,
                         "x0": x0,
-                        "dataset_idx": 0,  # This doesn't matter for simulation
-                        "start_time": t - 1,
-                        "end_time": t,
+                        "dataset_idx": leave_out_idx,
+                        "start_time": t,
+                        "end_time": t+1,
                         "n_times": N_TIMES_SIM,
-                        "cond_vector": ko_vector,  # Use our custom knockout vector
+                        "cond_vector": cond_vector,
                         "T": T_times,
                         "sigma": SIGMA,
                         "device": DEVICE,
                     }
-
+                    
                     # ODE Simulation
                     traj_ode = simulate_trajectory(**common_sim_args, use_sde=False)
                     sim_ode_final = traj_ode[-1].cpu()
@@ -413,91 +398,104 @@ def main(args):
                     # SDE Simulation
                     traj_sde = simulate_trajectory(**common_sim_args, use_sde=True)
                     sim_sde_final = traj_sde[-1].cpu()
-
+                    
                     # Compute metrics
                     w_dist_ode = wasserstein(sim_ode_final, true_dist_cpu)
                     w_dist_sde = wasserstein(sim_sde_final, true_dist_cpu)
                     mmd2_ode = mmd_squared(sim_ode_final, true_dist_cpu)
                     mmd2_sde = mmd_squared(sim_sde_final, true_dist_cpu)
-
-                    # Create trajectory PCA plot
+                    
+                    # Create trajectory PCA plot using ODE simulation
                     create_trajectory_pca_plot(
-                        held_out_adata,
+                        left_out_adata,
                         sim_ode_final.numpy(),
-                        held_out_ko_name,
-                        t,
+                        ko_name,
+                        t+1,
                         fold_pca_folder,
                         MODEL_TYPE
                     )
-
-                # Store metrics for this timepoint
-                timepoint_metrics = {
-                    "timepoint": t,
+                
+                # Store metrics for this time point
+                ko_distances.append({
+                    "time_from": t,
+                    "time_to": t+1,
                     "w_dist_ode": w_dist_ode,
                     "w_dist_sde": w_dist_sde,
                     "mmd2_ode": mmd2_ode,
                     "mmd2_sde": mmd2_sde,
-                }
+                })
                 
-                timepoint_results.append(timepoint_metrics)
-                
-                # Log metrics for this timepoint
-                print(f"  Timepoint t={t}: W_dist(ODE)={w_dist_ode:.4f}, MMD2(ODE)={mmd2_ode:.4f}")
+                # Log metrics
+                print(f"  Time {t} to {t+1}: W_dist(ODE)={w_dist_ode:.4f}, MMD2(ODE)={mmd2_ode:.4f}")
                 if MODEL_TYPE != "rf":
-                    print(f"  Timepoint t={t}: W_dist(SDE)={w_dist_sde:.4f}, MMD2(SDE)={mmd2_sde:.4f}")
+                    print(f"  Time {t} to {t+1}: W_dist(SDE)={w_dist_sde:.4f}, MMD2(SDE)={mmd2_sde:.4f}")
         
-        # Calculate average metrics across all timepoints for this knockout
-        if timepoint_results:
-            ko_timepoints_df = pd.DataFrame(timepoint_results)
-            avg_ode_dist = ko_timepoints_df["w_dist_ode"].mean()
-            avg_sde_dist = ko_timepoints_df["w_dist_sde"].mean()
-            avg_mmd2_ode = ko_timepoints_df["mmd2_ode"].mean()
-            avg_mmd2_sde = ko_timepoints_df["mmd2_sde"].mean()
+        # --- 2.4 Aggregate Results for this Knockout ---
+        if ko_distances:
+            ko_df = pd.DataFrame(ko_distances)
+            avg_ode_dist = ko_df["w_dist_ode"].mean()
+            avg_sde_dist = ko_df["w_dist_sde"].mean()
+            avg_mmd2_ode = ko_df["mmd2_ode"].mean()
+            avg_mmd2_sde = ko_df["mmd2_sde"].mean()
             
-            print(f"KO {held_out_ko_name} Avg W_dist: ODE={avg_ode_dist:.4f}")
+            std_ode_dist = ko_df["w_dist_ode"].std()
+            std_sde_dist = ko_df["w_dist_sde"].std()
+            std_mmd2_ode = ko_df["mmd2_ode"].std()
+            std_mmd2_sde = ko_df["mmd2_sde"].std()
+            
+            print(f"Knockout {ko_name} Avg W_dist: ODE={avg_ode_dist:.4f} ± {std_ode_dist:.4f}")
             if MODEL_TYPE != "rf":
-                print(f"KO {held_out_ko_name} Avg W_dist: SDE={avg_sde_dist:.4f}")
-                
-            # Store results for this knockout
-            ko_result = {
-                "held_out_ko": held_out_ko_name,
-                "held_out_ko_idx": held_out_ko_idx,
+                print(f"Knockout {ko_name} Avg W_dist: SDE={avg_sde_dist:.4f} ± {std_sde_dist:.4f}")
+                print(f"Knockout {ko_name} Avg MMD2: ODE={avg_mmd2_ode:.4f} ± {std_mmd2_ode:.4f}")
+                print(f"Knockout {ko_name} Avg MMD2: SDE={avg_mmd2_sde:.4f} ± {std_mmd2_sde:.4f}")
+            
+            results.append({
+                "ko_index": leave_out_idx,
+                "ko_name": ko_name,
                 "model_type": MODEL_TYPE,
                 "avg_ode_distance": avg_ode_dist,
                 "avg_sde_distance": avg_sde_dist,
                 "avg_mmd2_ode": avg_mmd2_ode,
                 "avg_mmd2_sde": avg_mmd2_sde,
-            }
-            results.append(ko_result)
+                "std_ode_distance": std_ode_dist,
+                "std_sde_distance": std_sde_dist,
+                "std_mmd2_ode": std_mmd2_ode,
+                "std_mmd2_sde": std_mmd2_sde,
+            })
             
-            # Store detailed metrics for each timepoint
-            for metric in timepoint_results:
-                metric_with_ko = metric.copy()
-                metric_with_ko["held_out_ko"] = held_out_ko_name
-                metric_with_ko["held_out_ko_idx"] = held_out_ko_idx
-                metric_with_ko["model_type"] = MODEL_TYPE
-                metric_with_ko["seed"] = SEED
-                metric_with_ko["dataset_type"] = DATASET_TYPE
-                ko_metrics.append(metric_with_ko)
+            # Add detailed metrics to global list
+            for record in ko_distances:
+                record["ko_index"] = leave_out_idx
+                record["ko_name"] = ko_name
+                record["model_type"] = MODEL_TYPE
+                record["seed"] = SEED
+                record["dataset_type"] = DATASET_TYPE
+                all_ko_metrics.append(record)
                 
-            # Save the timepoint results for this knockout
-            ko_timepoints_df.to_csv(os.path.join(RESULTS_DIR, f"ko_{held_out_ko_name}_timepoints_{MODEL_TYPE}.csv"), index=False)
+            # Save detailed metrics for this knockout
+            ko_detail_df = pd.DataFrame(ko_distances)
+            ko_detail_df.to_csv(os.path.join(RESULTS_DIR, f"ko_{ko_name}_detailed_metrics.csv"), index=False)
+            print(f"Detailed metrics for KO {ko_name} saved to ko_{ko_name}_detailed_metrics.csv")
+            
         else:
-            print(f"No evaluation results for knockout: {held_out_ko_name}")
+            print(f"Knockout {ko_name}: No evaluation results.")
             results.append({
-                "held_out_ko": held_out_ko_name,
-                "held_out_ko_idx": held_out_ko_idx,
+                "ko_index": leave_out_idx,
+                "ko_name": ko_name,
                 "model_type": MODEL_TYPE,
                 "avg_ode_distance": np.nan,
                 "avg_sde_distance": np.nan,
                 "avg_mmd2_ode": np.nan,
                 "avg_mmd2_sde": np.nan,
+                "std_ode_distance": np.nan,
+                "std_sde_distance": np.nan,
+                "std_mmd2_ode": np.nan,
+                "std_mmd2_sde": np.nan,
             })
 
-    # --- 3. Final Reporting and Result Storage ---
-    print(f"\n===== Leave-One-KO-Out Cross-Validation Summary ({MODEL_TYPE}) =====")
+    # --- 3. Final Reporting ---
+    print(f"\n===== Leave-KO-Out Cross-Validation Summary ({MODEL_TYPE}) =====")
     if results:
-        # Create summary dataframe of knockout-level results
         summary_df = pd.DataFrame(results)
         summary_df['seed'] = SEED
         summary_df['dataset_type'] = DATASET_TYPE
@@ -505,30 +503,29 @@ def main(args):
         print("Average Metrics per Knockout:")
         print(summary_df.to_string(index=False))
 
-        # Calculate overall averages across all knockouts
+        # Calculate overall averages
         final_avg_ode = summary_df["avg_ode_distance"].mean()
         final_avg_sde = summary_df["avg_sde_distance"].mean()
         final_avg_mmd2_ode = summary_df["avg_mmd2_ode"].mean()
         final_avg_mmd2_sde = summary_df["avg_mmd2_sde"].mean()
         
-        final_std_ode = summary_df["avg_ode_distance"].std()
-        final_std_sde = summary_df["avg_sde_distance"].std()
-        final_std_mmd2_ode = summary_df["avg_mmd2_ode"].std()
-        final_std_mmd2_sde = summary_df["avg_mmd2_sde"].std()
+        final_std_ode = np.sqrt(np.mean(summary_df["std_ode_distance"] ** 2))
+        final_std_sde = np.sqrt(np.mean(summary_df["std_sde_distance"] ** 2))
+        final_std_mmd2_ode = np.sqrt(np.mean(summary_df["std_mmd2_ode"] ** 2))
+        final_std_mmd2_sde = np.sqrt(np.mean(summary_df["std_mmd2_sde"] ** 2))
 
-        print(f"\nOverall Average W-Distance (ODE): {final_avg_ode:.4f} +/- {final_std_ode:.4f}")
-        print(f"Overall Average W-Distance (SDE): {final_avg_sde:.4f} +/- {final_std_sde:.4f}")
-        print(f"Overall Average MMD2 (ODE): {final_avg_mmd2_ode:.4f} +/- {final_std_mmd2_ode:.4f}")
-        print(f"Overall Average MMD2 (SDE): {final_avg_mmd2_sde:.4f} +/- {final_std_mmd2_sde:.4f}")
+        print(f"\nOverall Average W-Distance (ODE): {final_avg_ode:.4f} ± {final_std_ode:.4f}")
+        print(f"Overall Average W-Distance (SDE): {final_avg_sde:.4f} ± {final_std_sde:.4f}")
+        print(f"Overall Average MMD2 (ODE): {final_avg_mmd2_ode:.4f} ± {final_std_mmd2_ode:.4f}")
+        print(f"Overall Average MMD2 (SDE): {final_avg_mmd2_sde:.4f} ± {final_std_mmd2_sde:.4f}")
 
         # Save summary results
-        summary_df.to_csv(os.path.join(RESULTS_DIR, f"loko_summary_{MODEL_TYPE}_seed{SEED}.csv"), index=False)
+        summary_df.to_csv(os.path.join(RESULTS_DIR, f"lko_summary_{MODEL_TYPE}_seed{SEED}.csv"), index=False)
 
-        # Save detailed metrics if we have them
-        if ko_metrics:
-            detailed_df = pd.DataFrame(ko_metrics)
-            detailed_df.to_csv(os.path.join(RESULTS_DIR, f"loko_detailed_metrics_{MODEL_TYPE}_seed{SEED}.csv"), index=False)
-            print(f"\nDetailed metrics saved to loko_detailed_metrics_{MODEL_TYPE}_seed{SEED}.csv")
+        if all_ko_metrics:
+            detailed_df = pd.DataFrame(all_ko_metrics)
+            detailed_df.to_csv(os.path.join(RESULTS_DIR, f"lko_detailed_metrics_{MODEL_TYPE}_seed{SEED}.csv"), index=False)
+            print(f"\nDetailed metrics saved to lko_detailed_metrics_{MODEL_TYPE}_seed{SEED}.csv")
 
     else:
         print("No results generated.")
@@ -539,18 +536,19 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Leave-One-KO-Out Cross-Validation for GRN models")
+    parser = argparse.ArgumentParser(description="Leave-KO-Out Cross-Validation for GRN models")
     
     # Data parameters
     parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH, help="Path to data directory")
     parser.add_argument("--dataset_type", type=str, default=DEFAULT_DATASET_TYPE, choices=["Synthetic", "Curated", "Renge"], help="Type of dataset to use")
-    
+    parser.add_argument("--dataset", type=str, default=DEFAULT_DATASET, help="Dataset name (only used for Synthetic dataset_type)")
+
     # Model parameters
     parser.add_argument("--model_type", type=str, default=DEFAULT_MODEL_TYPE, choices=["sf2m", "rf", "mlp_baseline"], help="Type of model to use")
     parser.add_argument("--use_correction_mlp", action="store_true", default=DEFAULT_USE_CORRECTION_MLP, help="Whether to use correction MLP for SF2M")
     
     # Training parameters
-    parser.add_argument("--n_steps_per_ko", type=int, default=DEFAULT_N_STEPS_PER_KO, help="Number of steps per knockout fold")
+    parser.add_argument("--n_steps_per_fold", type=int, default=DEFAULT_N_STEPS_PER_FOLD, help="Number of steps per fold")
     parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Batch size")
     parser.add_argument("--lr", type=float, default=DEFAULT_LR, help="Learning rate")
     parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA, help="Alpha weighting for score vs flow loss")
@@ -566,6 +564,10 @@ if __name__ == "__main__":
     # Simulation parameters
     parser.add_argument("--sigma", type=float, default=DEFAULT_SIGMA, help="Noise level for simulation")
     parser.add_argument("--n_times_sim", type=int, default=DEFAULT_N_TIMES_SIM, help="Number of steps for trajectory simulation")
+    
+    # Leave KO parameters
+    parser.add_argument("--leave_out_ko_indices", type=int, nargs="+", default=LEAVE_OUT_KO_INDICES, 
+                        help="Indices of knockouts to leave out (space-separated list)")
     
     # Other parameters
     parser.add_argument("--device", type=str, default=DEFAULT_DEVICE, choices=["cpu", "cuda"], help="Device to use")

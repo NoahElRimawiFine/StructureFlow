@@ -416,17 +416,31 @@ def rbf_kernel(X, Y, gamma=None):
     K = torch.exp(-gamma * dist_sq)
     return K, gamma
 
-def mmd_squared(X, Y, kernel=rbf_kernel, **kernel_args):
-    n = X.shape[0]
-    m = Y.shape[0]
-    K_XX, gamma = kernel(X, X, **kernel_args) 
-    K_YY, _ = kernel(Y, Y, gamma=gamma)
-    K_XY, _ = kernel(X, Y, gamma=gamma)
-    term1 = K_XX.mean()
-    term2 = K_YY.mean()
-    term3 = K_XY.mean()
-    mmd2 = term1 + term2 - 2 * term3
-    return mmd2.clamp(min=0).item()
+def mmd_squared(X, Y, kernel=rbf_kernel, sigma_list=None, **kernel_args):
+    if X.dim() > 2: X = X.reshape(X.shape[0], -1)
+    if Y.dim() > 2: Y = Y.reshape(Y.shape[0], -1)
+    
+    if sigma_list is None:
+        sigma_list = [0.01, 0.1, 1, 10, 100]
+    
+    mmd_values = []
+    
+    for sigma in sigma_list:
+        gamma = 1.0 / (2 * sigma**2)
+        
+        K_XX, _ = kernel(X, X, gamma=gamma)
+        K_YY, _ = kernel(Y, Y, gamma=gamma)
+        K_XY, _ = kernel(X, Y, gamma=gamma)
+        
+        term1 = K_XX.mean()
+        term2 = K_YY.mean()
+        term3 = K_XY.mean()
+        
+        mmd2 = term1 + term2 - 2 * term3
+        mmd_values.append(mmd2.clamp(min=0))
+    
+    avg_mmd = torch.stack(mmd_values).mean().item()
+    return avg_mmd
 
 def simulate_trajectory(
     flow_model,

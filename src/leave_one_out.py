@@ -16,12 +16,13 @@ from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.components.plotting import compute_global_jacobian, log_causal_graph_matrices, plot_auprs
 from src.models.rf_module import ReferenceFittingModule
 from src.models.sf2m_module import SF2MLitModule
-from src.models.components.solver import mmd_squared, simulate_trajectory, wasserstein
+from src.models.components.solver import simulate_trajectory, wasserstein, mmd_squared
 
 # Default configuration values (will be overridden by command line arguments)
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Synthetic"
 DEFAULT_DATASET = "dyn-TF"
+DEFAULT_MODEL_TYPE = "rf"
 DEFAULT_N_STEPS_PER_FOLD = 15000
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
@@ -34,12 +35,17 @@ DEFAULT_SCORE_HIDDEN = [100, 100]
 DEFAULT_CORRECTION_HIDDEN = [64, 64]
 DEFAULT_SIGMA = 1.0
 DEFAULT_N_TIMES_SIM = 100
-DEFAULT_DEVICE = "cpu"
-DEFAULT_SEED = 42
-DEFAULT_RESULTS_DIR = "loo_results"
-DEFAULT_MODEL_TYPE = "sf2m"
+DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
+DEFAULT_SEED = 1
+DEFAULT_RESULTS_DIR = "loo_results_temp"
 DEFAULT_USE_CORRECTION_MLP = True
 
+# --- Renge Specific Parameters ---
+DEFAULT_N_STEPS_PER_FOLD = 10000
+DEFAULT_LR = 0.0002
+DEFAULT_REG = 5e-8
+DEFAULT_ALPHA = 0.1
+DEFAULT_GL_REG = 0.02
 
 def create_trajectory_pca_plot(adata, predictions, ko_name, held_out_time, folder_path, model_type):
     """
@@ -137,6 +143,298 @@ def create_trajectory_pca_plot(adata, predictions, ko_name, held_out_time, folde
     # Reset rcParams to default to avoid affecting other plots
     plt.rcParams.update(plt.rcParamsDefault)
 
+def create_multi_ko_pca_plot(full_adatas, predictions_dict, ko_names, held_out_time, folder_path, model_type):
+    """
+    Create and save a PCA plot showing multiple KO trajectories with predictions in subplots.
+    
+    Args:
+        full_adatas: List of AnnData objects containing the full trajectory data
+        predictions_dict: Dictionary mapping dataset_idx to predicted final states
+        ko_names: List of knockout names
+        held_out_time: The held-out timepoint
+        folder_path: Path to save the plot
+        model_type: Type of model used ("rf", "sf2m", etc.)
+    """
+    os.makedirs(folder_path, exist_ok=True)
+    
+    if len(ko_names) < 3:
+        print("Not enough knockout conditions to create multi-KO plot (need at least 3)")
+        return
+    
+    ko_indices_to_plot = list(range(min(3, len(ko_names))))
+    
+    # Create figure with plots
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    
+    all_data = np.vstack([adata.X for adata in full_adatas])
+    pca = PCA(n_components=2)
+    pca.fit(all_data)
+    
+    # Increase font sizes
+    plt.rcParams.update({
+        'font.size': 16,           # Base font size
+        'axes.titlesize': 20,      # Subplot title font size
+        'axes.labelsize': 20,      # Axis labels font size
+        'xtick.labelsize': 16,     # X-tick labels font size
+        'ytick.labelsize': 16,     # Y-tick labels font size
+        'legend.fontsize': 18,     # Increased legend font size
+    })
+    
+    # Create a custom colormap that starts darker
+    from matplotlib.colors import LinearSegmentedColormap
+    # Make a custom colormap that starts with a darker red
+    red_cmap_colors = plt.cm.Reds(np.linspace(0.3, 1, 256))  # Starting from 30% instead of 0%
+    dark_reds = LinearSegmentedColormap.from_list('DarkerReds', red_cmap_colors)
+    
+    # Define a pastel blue color for predictions
+    pastel_blue = '#86BFEF'  # Light/pastel blue color
+    
+    x_min, x_max = float('inf'), float('-inf')
+    y_min, y_max = float('inf'), float('-inf')
+    
+    for i, (ax, ko_idx) in enumerate(zip(axes, ko_indices_to_plot)):
+        adata = full_adatas[ko_idx]
+        ko_name = ko_names[ko_idx]
+        
+        times = adata.obs['t'].values
+        ko_data_pca = pca.transform(adata.X)
+        
+        if ko_idx in predictions_dict:
+            predictions = predictions_dict[ko_idx]
+            if isinstance(predictions, torch.Tensor):
+                predictions = predictions.cpu().numpy()
+            pred_pca = pca.transform(predictions)
+        else:
+            print(f"No predictions available for KO: {ko_name}")
+            continue
+        
+        # Using custom darker Reds colormap for true data
+        scatter = ax.scatter(
+            ko_data_pca[:, 0], 
+            ko_data_pca[:, 1], 
+            c=times, 
+            cmap=dark_reds,  # Using custom darker Reds colormap
+            label="True samples" if i == 0 else None,
+            s=60
+        )
+        
+        # Using pastel blue for predictions
+        ax.scatter(
+            pred_pca[:, 0], 
+            pred_pca[:, 1], 
+            c=pastel_blue,  # Pastel blue color
+            s=100,
+            marker='x',
+            linewidth=2,
+            label="Predictions" if i == 0 else None
+        )
+        
+        x_min = min(x_min, ko_data_pca[:, 0].min(), pred_pca[:, 0].min())
+        x_max = max(x_max, ko_data_pca[:, 0].max(), pred_pca[:, 0].max())
+        y_min = min(y_min, ko_data_pca[:, 1].min(), pred_pca[:, 1].min())
+        y_max = max(y_max, ko_data_pca[:, 1].max(), pred_pca[:, 1].max())
+        
+        ax.set_xlabel("PC1", fontsize=20)
+        if i == 0:
+            ax.set_ylabel("PC2", fontsize=20)
+        
+        ko_label = "Observational" if ko_name is None else f"Knockout {ko_name}"
+        ax.set_title(ko_label, pad=10)
+        
+        ax.grid(True, alpha=0.3, linestyle='--')
+        
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+    
+    for ax in axes:
+        ax.set_xlim(x_min - 0.1 * (x_max - x_min), x_max + 0.1 * (x_max - x_min))
+        ax.set_ylim(y_min - 0.1 * (y_max - y_min), y_max + 0.1 * (y_max - y_min))
+    
+    # Apply tight layout
+    plt.tight_layout()
+    
+    # Get the position of the rightmost plot and first plot
+    pos_right = axes[-1].get_position()
+    right_edge = pos_right.x1
+    
+    # Create space for colorbar to the right of the plots
+    cbar_ax = fig.add_axes([right_edge + 0.02, pos_right.y0, 0.02, pos_right.height])
+    cbar = fig.colorbar(scatter, cax=cbar_ax)
+    cbar.set_label('Time', fontsize=20)
+    cbar.ax.tick_params(labelsize=16)
+    
+    # Add legend positioned at the bottom, about 1/3 across the figure width
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles=handles,
+        labels=labels,
+        loc='lower center',
+        bbox_to_anchor=(0.26, 0.12),
+        frameon=True,
+        framealpha=0.9,
+        edgecolor='black'
+    )
+    
+    # Save the figure
+    filename_base = f"multi_ko_comparison_{model_type}_holdout_{held_out_time}"
+    plt.savefig(os.path.join(folder_path, f"{filename_base}.pdf"), bbox_inches='tight')
+    plt.savefig(os.path.join(folder_path, f"{filename_base}.png"), dpi=300, bbox_inches='tight')
+    
+    plt.close()
+    
+    plt.rcParams.update(plt.rcParamsDefault)
+
+def create_multi_ko_pca_plot_wgrey(full_adatas, predictions_dict, ko_names, held_out_time, folder_path, model_type):
+    """
+    Create and save a PCA plot showing multiple KO trajectories with predictions in subplots.
+    
+    Args:
+        full_adatas: List of AnnData objects containing the full trajectory data
+        predictions_dict: Dictionary mapping dataset_idx to predicted final states
+        ko_names: List of knockout names
+        held_out_time: The held-out timepoint
+        folder_path: Path to save the plot
+        model_type: Type of model used ("rf", "sf2m", etc.)
+    """
+    os.makedirs(folder_path, exist_ok=True)
+    
+    if len(ko_names) < 3:
+        print("Not enough knockout conditions to create multi-KO plot (need at least 3)")
+        return
+    
+    ko_indices_to_plot = list(range(min(3, len(ko_names))))
+    
+    # Create figure with plots - even more extra space for legend
+    fig, axes = plt.subplots(1, 3, figsize=(18, 9))
+    
+    all_data = np.vstack([adata.X for adata in full_adatas])
+    pca = PCA(n_components=2)
+    pca.fit(all_data)
+    
+    # Increase font sizes by approximately 20%
+    plt.rcParams.update({
+        'font.size': 38,               # ~20% increase from 32
+        'axes.titlesize': 44,          # ~20% increase from 36
+        'axes.labelsize': 44,          # ~20% increase from 36
+        'xtick.labelsize': 38,         # ~20% increase from 32
+        'ytick.labelsize': 38,         # ~20% increase from 32
+        'legend.fontsize': 38,         # ~20% increase from 32
+    })
+    
+    # Define colors
+    highlight_color = '#E41A1C'  # Bright red for the held_out_time
+    prediction_color = '#377EB8'  # Blue for predictions
+    
+    x_min, x_max = float('inf'), float('-inf')
+    y_min, y_max = float('inf'), float('-inf')
+    
+    for i, (ax, ko_idx) in enumerate(zip(axes, ko_indices_to_plot)):
+        adata = full_adatas[ko_idx]
+        ko_name = ko_names[ko_idx]
+        
+        times = adata.obs['t'].values
+        ko_data_pca = pca.transform(adata.X)
+        
+        if ko_idx in predictions_dict:
+            predictions = predictions_dict[ko_idx]
+            if isinstance(predictions, torch.Tensor):
+                predictions = predictions.cpu().numpy()
+            pred_pca = pca.transform(predictions)
+        else:
+            print(f"No predictions available for KO: {ko_name}")
+            continue
+        
+        # Create mask for different time points
+        is_held_out = times == held_out_time
+        
+        # Plot non-held-out times in grayscale with darker shades for later times
+        for t in sorted(set(times)):
+            if t == held_out_time:
+                continue
+                
+            t_mask = times == t
+            shade = 0.3 + 0.5 * (t / max(times))  # Map to darkness between 0.3-0.8
+            gray_color = str(1 - shade)  # Grayscale as string: '0.2' to '0.7'
+            
+            ax.scatter(
+                ko_data_pca[t_mask, 0],
+                ko_data_pca[t_mask, 1],
+                c=gray_color,
+                s=60,
+                label=f"t={t}" if i == 0 and t == min(times) else None,
+            )
+        
+        # Plot held-out time in highlight color
+        if any(is_held_out):
+            ax.scatter(
+                ko_data_pca[is_held_out, 0],
+                ko_data_pca[is_held_out, 1],
+                c=highlight_color,
+                s=80,
+                label=f"t={held_out_time} (held out)" if i == 0 else None,
+            )
+        
+        # Plot predictions
+        ax.scatter(
+            pred_pca[:, 0],
+            pred_pca[:, 1],
+            c=prediction_color,
+            s=100,
+            marker='x',
+            linewidth=2,
+            label="Predictions" if i == 0 else None,
+        )
+        
+        x_min = min(x_min, ko_data_pca[:, 0].min(), pred_pca[:, 0].min())
+        x_max = max(x_max, ko_data_pca[:, 0].max(), pred_pca[:, 0].max())
+        y_min = min(y_min, ko_data_pca[:, 1].min(), pred_pca[:, 1].min())
+        y_max = max(y_max, ko_data_pca[:, 1].max(), pred_pca[:, 1].max())
+        
+        ax.set_xlabel("PC1", fontsize=44)
+        if i == 0:
+            ax.set_ylabel("PC2", fontsize=44)
+        
+        ko_label = "Observational" if ko_name is None else f"Knockout {ko_name}"
+        ax.set_title(ko_label, pad=15, fontsize=44)
+        
+        # Keep original grid
+        ax.grid(True, alpha=0.3, linestyle='--')
+        
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+    
+    for ax in axes:
+        ax.set_xlim(x_min - 0.1 * (x_max - x_min), x_max + 0.1 * (x_max - x_min))
+        ax.set_ylim(y_min - 0.1 * (y_max - y_min), y_max + 0.1 * (y_max - y_min))
+    
+    # First, apply tight layout to get good spacing for the plots
+    plt.tight_layout()
+    
+    # Move the plots up significantly to make room for the legend at the bottom
+    plt.subplots_adjust(bottom=0.35)
+    
+    # Add legend positioned well below the plots with increased font size
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles=handles,
+        labels=labels,
+        loc='lower center',
+        bbox_to_anchor=(0.5, 0.1),
+        ncol=min(len(handles), 3),
+        frameon=True,
+        framealpha=0.9,
+        edgecolor='black',
+        fontsize=38,  # Increased by ~20% from 32
+    )
+    
+    # Save the figure
+    filename_base = f"multi_ko_comparison_{model_type}_holdout_{held_out_time}"
+    plt.savefig(os.path.join(folder_path, f"{filename_base}_finalmain.pdf"), bbox_inches='tight')
+    plt.savefig(os.path.join(folder_path, f"{filename_base}.png"), dpi=300, bbox_inches='tight')
+    
+    plt.close()
+    
+    plt.rcParams.update(plt.rcParamsDefault)
 
 def main(args):
     # Extract configuration from arguments
@@ -178,8 +476,9 @@ def main(args):
         dataset=DATASET,
         batch_size=BATCH_SIZE,
         use_dummy_train_loader=True,
+        train_val_test_split=(1, 0, 0),
         dummy_loader_steps=N_STEPS_PER_FOLD,
-        num_workers=20,
+        num_workers=11,
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
@@ -198,7 +497,8 @@ def main(args):
     # --- 2. Leave-One-Out Cross-Validation Loop ---
     results = []
     all_fold_metrics = []
-    timepoints_to_hold_out = range(1, T_times)
+    # timepoints_to_hold_out = range(1, T_times - 1)
+    timepoints_to_hold_out = [3]
 
     for held_out_time in timepoints_to_hold_out:
         fold_name = f"{MODEL_TYPE}_holdout_{held_out_time}"
@@ -218,7 +518,7 @@ def main(args):
         if MODEL_TYPE == "rf":
             print("Using Reference Fitting model...")
             # Initialize RF model
-            model = ReferenceFittingModule(use_cuda=(DEVICE == "cuda"))
+            model = ReferenceFittingModule(use_cuda=(DEVICE == "cuda"), iter=(5000 if DATASET_TYPE == "Renge" else 1000))
             
             # Fit the model with holdout time (RF handles data filtering internally)
             print(f"Fitting RF model with holdout time {held_out_time}...")
@@ -281,15 +581,17 @@ def main(args):
         model.eval()
         if MODEL_TYPE != "rf":  # SF2M and MLP need explicit device placement
             model.to(DEVICE)
-        
+
         # Create folder for trajectory PCA plots
         # Only create plots for the last timepoint (T_max)
-        if held_out_time == T_max:
+        if held_out_time == T_max - 1:
             pca_folder = os.path.join(RESULTS_DIR, "pca_plots")
             fold_pca_folder = os.path.join(pca_folder, f"{MODEL_TYPE}_final_trajectory")
             os.makedirs(fold_pca_folder, exist_ok=True)
 
         fold_distances_list = []
+        predictions_dict = {}  # Store predictions for multi-KO plot
+
         with torch.no_grad():
             # Iterate through the original full datasets
             for i, adata_full in enumerate(full_adatas):
@@ -333,8 +635,11 @@ def main(args):
                     mmd2_ode = mmd2_rf
                     mmd2_sde = mmd2_rf
                     
-                    # Create trajectory PCA plot only for the last timepoint
-                    if held_out_time == T_max:
+                    # Store predictions for multi-KO plot
+                    if held_out_time == T_max - 1:
+                        predictions_dict[i] = sim_rf_final.numpy()
+                        
+                        # Create individual trajectory PCA plot
                         create_trajectory_pca_plot(
                             adata_full,
                             sim_rf_final.numpy(),
@@ -391,9 +696,11 @@ def main(args):
                     mmd2_ode = mmd_squared(sim_ode_final, true_dist_cpu)
                     mmd2_sde = mmd_squared(sim_sde_final, true_dist_cpu)
 
-                    # Create trajectory PCA plot only for the last timepoint
-                    if held_out_time == T_max:
-                        # For SF2M, use the SDE simulation for the plot
+                    # Store predictions for multi-KO plot (using ODE predictions)
+                    if held_out_time == T_max - 1:
+                        predictions_dict[i] = sim_ode_final.numpy()
+                        
+                        # Create individual trajectory PCA plot
                         create_trajectory_pca_plot(
                             adata_full,
                             sim_ode_final.numpy(),
@@ -418,9 +725,20 @@ def main(args):
                 if MODEL_TYPE != "rf":
                     print(f"  Dataset {i} (KO: {ko_name}): W_dist(SDE)={w_dist_sde:.4f}, MMD2(SDE)={mmd2_sde:.4f}")
                 
-                if held_out_time == T_max:
+                if held_out_time == T_max - 1:
                     print(f"  Created trajectory PCA plot for dataset {i} (KO: {ko_name})")
 
+        # Create multi-KO plot if we're at the last timepoint and have predictions
+        if held_out_time == T_max - 1 and predictions_dict:
+            create_multi_ko_pca_plot_wgrey(
+                full_adatas,
+                predictions_dict,
+                datamodule.kos,
+                held_out_time,
+                fold_pca_folder,
+                MODEL_TYPE
+            )
+            print(f"  Created multi-KO comparison plot with {len(predictions_dict)} conditions")
         # --- 2.7 Aggregate and Store Results for this Fold ---
         if fold_distances_list:
             fold_df = pd.DataFrame(fold_distances_list)
@@ -520,7 +838,7 @@ if __name__ == "__main__":
     
     # Data parameters
     parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH, help="Path to data directory")
-    parser.add_argument("--dataset_type", type=str, default=DEFAULT_DATASET_TYPE, choices=["Synthetic", "Curated"], help="Type of dataset to use")
+    parser.add_argument("--dataset_type", type=str, default=DEFAULT_DATASET_TYPE, choices=["Synthetic", "Curated", "Renge"], help="Type of dataset to use")
     parser.add_argument("--dataset", type=str, default=DEFAULT_DATASET, help="Dataset name (only used for Synthetic dataset_type)")
 
     # Model parameters

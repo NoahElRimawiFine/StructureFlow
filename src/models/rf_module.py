@@ -7,17 +7,19 @@ from .components import rf
 
 
 class ReferenceFittingModule(pl.LightningModule):
-    def __init__(self, use_cuda=True):
+    def __init__(self, use_cuda=True, iter=1000):
         super().__init__()
         # Set the device as before.
-        self.my_device = torch.device("cuda" if use_cuda and torch.cuda.is_available() else "cpu")
+        self.my_device = torch.device(
+            "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
+        )
         self.PLT_CELL = 3.5
         self.options = {
             "lr": 0.1,
             "reg_sinkhorn": 0.1,
             "reg_A": 1e-3,
             "reg_A_elastic": 0,
-            "iter": 1000,
+            "iter": iter,
             "ot_coupling": True,
             "optimizer": torch.optim.Adam,
         }
@@ -47,7 +49,9 @@ class ReferenceFittingModule(pl.LightningModule):
         self.estimator_wt = rf.Estimator(
             [adatas[i] for i in wt_idx], [kos[i] for i in wt_idx], **self.options
         )
-        self.estimator_wt.fit(print_iter=100, alg="alternating", update_couplings_iter=250)
+        self.estimator_wt.fit(
+            print_iter=100, alg="alternating", update_couplings_iter=250
+        )
 
     def fit_model_with_holdout(self, adatas, kos, left_out_time):
         """Fits the reference model using both knockout and wild-type data, taking into account a
@@ -60,15 +64,23 @@ class ReferenceFittingModule(pl.LightningModule):
 
         print("Training reference model with knockouts...")
         self.estimator = rf.Estimator(
-            [adatas[i] for i in ko_idx], [kos[i] for i in ko_idx], **self.options, num_timepoints=len(adatas[0].obs["t"].unique())
+            [adatas[i] for i in ko_idx],
+            [kos[i] for i in ko_idx],
+            **self.options,
+            num_timepoints=len(adatas[0].obs["t"].unique())
         )
         self.estimator.fit(print_iter=100, alg="alternating", update_couplings_iter=250)
 
         print("Training reference model with wild type data only...")
         self.estimator_wt = rf.Estimator(
-            [adatas[i] for i in wt_idx], [kos[i] for i in wt_idx], **self.options, num_timepoints=len(adatas[0].obs["t"].unique())
+            [adatas[i] for i in wt_idx],
+            [kos[i] for i in wt_idx],
+            **self.options,
+            num_timepoints=len(adatas[0].obs["t"].unique())
         )
-        self.estimator_wt.fit(print_iter=100, alg="alternating", update_couplings_iter=250)
+        self.estimator_wt.fit(
+            print_iter=100, alg="alternating", update_couplings_iter=250
+        )
 
     def get_interaction_matrix(self):
         """Return the interaction matrix from the full model."""
@@ -153,7 +165,9 @@ class ReferenceFittingModule(pl.LightningModule):
         fig.colorbar(cax)
 
         if self.logger is not None:
-            self.logger.experiment.add_figure("Causal_Graph", fig, global_step=self.global_step)
+            self.logger.experiment.add_figure(
+                "Causal_Graph", fig, global_step=self.global_step
+            )
             plt.close(fig)
         else:
             plt.show()

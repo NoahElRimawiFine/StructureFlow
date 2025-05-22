@@ -12,7 +12,6 @@ from tqdm import tqdm
 from src.datamodules.components import sc_dataset as util
 from src.models.components.base import MLPODEFKO
 from src.models.components.cond_mlp import MLP as CONDMLP
-from src.models.components.distribution_distances import compute_distribution_distances
 from src.models.components.optimal_transport import EntropicOTFM
 from src.models.components.simple_mlp import MLP
 
@@ -140,12 +139,16 @@ class SF2MNGM(nn.Module):
             conditional_dim=self.n_genes,
         )
 
-        self.v_correction = MLP(d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True)
+        self.v_correction = MLP(
+            d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True
+        )
 
         # -----------------------
         # 5. Build OTFMs
         # -----------------------
-        self.otfms = self.build_entropic_otfms(self.adatas, T=self.T, sigma=self.sigma, dt=self.dt)
+        self.otfms = self.build_entropic_otfms(
+            self.adatas, T=self.T, sigma=self.sigma, dt=self.dt
+        )
 
         # Move models to device
         self.func_v.to(self.device)
@@ -267,9 +270,9 @@ class SF2MNGM(nn.Module):
             # Flow net output, with or without correction
             if i <= 500:
                 # Warmup phase
-                v_fit = func_v(t_input, v_input).squeeze(1) - (model.sigma**2 / 2) * func_s(
-                    _t, _x, cond_expanded
-                )
+                v_fit = func_v(t_input, v_input).squeeze(1) - (
+                    model.sigma**2 / 2
+                ) * func_s(_t, _x, cond_expanded)
             else:
                 # Full training phase with correction
                 v_fit = func_v(t_input, v_input).squeeze(1) + v_correction(_t, _x)
