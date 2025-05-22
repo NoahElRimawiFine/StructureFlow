@@ -150,6 +150,7 @@ checkpoints/
 src/jobs/results*
 src/jobs/heatmaps
 notebooks/*.h5ad
+src/jobs/*.csv
 
 
 # Aim logging
@@ -160,3 +161,14 @@ loo_results/
 lko_results/
 .cursor/rules/gemini-rules.mdc
 .conda/
+
+#SINCERITIES
+tools/SINCERITIES/Results 
+tools/SINCERITIES/*.csv
+
+#reference fitting
+referencefitting/data  
+referencefitting/notebooks/chip_1kb
+referencefitting/notebooks/*.csv
+referencefitting/notebooks/*.h5ad
+referencefitting/notebooks/W_v_matrices

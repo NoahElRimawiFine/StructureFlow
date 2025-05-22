@@ -215,7 +215,7 @@ def main(checkpoint_path, ref_network_path, config_path=None):
 
 if __name__ == "__main__":
     # Replace with your actual paths
-    checkpoint_path = "/Users/lucasnelson/sf2m-grn-hydra/logs/train/runs/2025-04-18_15-16-13/checkpoints/last.ckpt"
-    ref_network_path = "/Users/lucasnelson/sf2m-grn-hydra/data/Renge/A_ref_thresh_0.csv"
-    config_path = "/Users/lucasnelson/sf2m-grn-hydra/logs/train/runs/2025-04-18_15-16-13/.hydra/config.yaml"
+    checkpoint_path = "/Users/user/sf2m-grn-hydra/logs/train/runs/2025-04-18_15-16-13/checkpoints/last.ckpt"
+    ref_network_path = "/Users/user/sf2m-grn-hydra/data/Renge/A_ref_thresh_0.csv"
+    config_path = "/Users/user/sf2m-grn-hydra/logs/train/runs/2025-04-18_15-16-13/.hydra/config.yaml"
     main(checkpoint_path, ref_network_path, config_path)
