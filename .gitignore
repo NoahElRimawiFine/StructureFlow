@@ -168,7 +168,7 @@ tools/SINCERITIES/*.csv
 
 #reference fitting
 referencefitting/data  
-referencefitting/notebooks/chip_1kb
-referencefitting/notebooks/*.csv
+referencefitting/notebooks/renge_scCRISPR/chip_1kb
+referencefitting/notebooks/renge_scCRISPR/*.csv
 referencefitting/notebooks/*.h5ad
-referencefitting/notebooks/W_v_matrices
+referencefitting/notebooks/renge_scCRISPR/W_v_matrices
