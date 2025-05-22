@@ -146,8 +146,11 @@ dmypy.json
 configs/local/default.yaml
 /logs/
 .env
-src/jobs/results
 checkpoints/
+src/jobs/results*
+src/jobs/heatmaps
+notebooks/*.h5ad
+
 
 # Aim logging
 .aim

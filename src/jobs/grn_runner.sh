@@ -6,9 +6,10 @@
 set -euo pipefail
 
 # ─── Edit just this array to add/remove datasets ─────────────────
-datasets=(dyn-TF dyn-BF dyn-LL dyn-SW dyn-CY)
+datasets=(HSC)
+seeds=(1 2 3 4 5)
 
-ROOT="../../data/Synthetic"        # common parent
+ROOT="../../data/Curated"        # common parent
 SCRIPT="run_less_simple.py"        # python entry-point
 PYTHON="python3"
 T=5                                # pseudo-time bins
@@ -21,13 +22,13 @@ for ds in "${datasets[@]}"; do
   CURATED=""
   [[ "${DIR}" =~ /Curated/ ]] && CURATED="--curated"
 
-  # ── 1) wild-type (WT only) ────────────────────────────────────
-  echo "  • wildtype"
-  ${PYTHON} ${SCRIPT} "${DIR}" --T "${T}" ${CURATED}
+  for seed in "${seeds[@]}"; do
+    echo "  • wildtype (seed ${seed})"
+    ${PYTHON} ${SCRIPT} "${DIR}" --T "${T}" ${CURATED} --seed "${seed}"
 
-  # ── 2) full (concatenate all replicates) ──────────────────────
-  echo "  • full"
-  ${PYTHON} ${SCRIPT} "${DIR}" --T "${T}" --concat_all ${CURATED}
+    echo "  • full (seed ${seed})"
+    ${PYTHON} ${SCRIPT} "${DIR}" --T "${T}" --concat_all ${CURATED} --seed "${seed}"
+  done
 done
 
 echo -e "\n✓ All datasets processed."

@@ -29,12 +29,20 @@ from pathlib import Path
 import anndata as ad
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
 import numpy as np
 import pandas as pd
 import scanpy as sc
 import seaborn as sns
 import sklearn as sk
-from sklearn.metrics import average_precision_score, precision_recall_curve
+from sklearn.metrics import (
+    average_precision_score, 
+    precision_recall_curve,
+    roc_auc_score, 
+    roc_curve,
+    auc
+)
+import random
 
 matplotlib.use("Agg")
 
@@ -49,6 +57,8 @@ parser.add_argument("--curated", action="store_true",
                     help="Interpret the path as a curated dataset")
 parser.add_argument("--concat_all", action="store_true",
                     help="Stack every AnnData before GRN inference")
+parser.add_argument("--seed", type=int, default=None,
+                    help="Random seed for reproducibility (default: None)")
 args = parser.parse_args()
 
 # ░░░ Run-level tags & folders
@@ -57,9 +67,10 @@ script_dir   = Path(__file__).resolve().parent
 dataset_name = Path(args.path).name                    # dyn-TF-1000-1
 regime_tag   = "full" if args.concat_all else "wt"     # wt | full
 
-dataset_root = script_dir / "results" / dataset_name   # <dataset>/
+dataset_root = script_dir / "results-curated" / dataset_name   # <dataset>/
 results_dir  = dataset_root / regime_tag               # <dataset>/wt or /full
 results_dir.mkdir(parents=True, exist_ok=True)
+random.seed(args.seed)
 
 # helper ─ save_csv -----------------------------------------------------------
 def save_csv(df: pd.DataFrame, stem: str, **to_csv_kwargs) -> Path:
@@ -114,15 +125,53 @@ def maskdiag(A: np.ndarray) -> np.ndarray:
 
 def plot_grns(grns: dict[str, np.ndarray],
               true_grn: np.ndarray | None = None,
-              cmap="RdBu_r") -> plt.Figure:
-    names = list(grns); mats = [maskdiag(grns[n]) for n in names]
+              cmap="RdBu_r",
+              clamp=20.0) -> plt.Figure:
+    """
+    Plot each GRN adjacency matrix with:
+      • its own min/max (unless |val| > clamp, then we clamp)
+      • 0 always white (via TwoSlopeNorm)
+      • negative→blue, positive→red (RdBu_r)
+
+    Args:
+      grns:     dict of name→adjacency matrix
+      true_grn: optional “True” matrix to append
+      cmap:     diverging colormap
+      clamp:    maximum absolute value allowed (per panel)
+    """
+    # collect names/mats
+    names = list(grns)
+    mats  = [maskdiag(grns[n]) for n in names]
     if true_grn is not None:
-        names.append("True"); mats.append(maskdiag(true_grn))
-    fig, axs = plt.subplots(1, len(mats), figsize=(4*len(mats), 4), squeeze=False)
+        names.append("True")
+        mats.append(maskdiag(true_grn))
+
+    # set up figure
+    fig, axs = plt.subplots(1, len(mats), figsize=(4 * len(mats), 4), squeeze=False)
+
     for ax, name, mat in zip(axs[0], names, mats):
-        im = ax.imshow(mat, cmap=cmap); ax.set_title(name)
-        ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
+        # 1) panel raw min/max
+        mn, mx = mat.min(), mat.max()
+        # 2) clamp if too big, else use raw
+        vmin = max(mn, -clamp)
+        vmax = min(mx, +clamp)
+
+        # 3) ensure vmin<0<vmax
+        eps = max((vmax - vmin) * 1e-6, 1e-6)
+        if vmin >= 0:
+            vmin = -eps
+        if vmax <= 0:
+            vmax = eps
+
+        # 4) normalize with center at zero
+        norm = TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
+
+        im = ax.imshow(mat, cmap=cmap, norm=norm)
+        ax.set_title(name)
+        ax.invert_yaxis()
+        ax.set_xticks([]); ax.set_yticks([])
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
     return fig
 
 
@@ -233,27 +282,65 @@ methods = {
 }
 
 fig = plot_grns(methods, true_matrix.values)
-fig.savefig(results_dir / f"comparison_T{args.T}_{regime_tag}_{dataset_name}.png",
+fig.savefig(results_dir / f"comparison_T{args.T}_{regime_tag}_{dataset_name}_seed{args.seed}.png",
             dpi=300); plt.close(fig)
 
 y_true = np.abs(maskdiag(true_matrix.values)).astype(int).flatten()
-curves = {}
+
+ # ---------------- PR + ROC curves ----------------
+curves_pr  = {}
+curves_roc = {}
 for name, A in methods.items():
     y_score = np.abs(maskdiag(A)).flatten()
-    prec, rec, _ = precision_recall_curve(y_true, y_score)
-    curves[name] = (rec, prec,
-                    average_precision_score(y_true, y_score))
 
+    # PR
+    prec, rec, _ = precision_recall_curve(y_true, y_score)
+    ap = average_precision_score(y_true, y_score)
+    aupr = auc(rec, prec)
+    curves_pr[name] = (rec, prec, ap, aupr)
+
+    # ROC
+    fpr, tpr, _ = roc_curve(y_true, y_score)
+    curves_roc[name] = (fpr, tpr, roc_auc_score(y_true, y_score))
+
+# ---- PR figure (unchanged) ----
 fig_pr, ax_pr = plt.subplots(figsize=(5, 4))
-for name, (rec, prec, ap) in curves.items():
-    ax_pr.step(rec, prec, where="post", label=f"{name} (AP={ap:.2f})")
+for name, (rec, prec, ap, aupr) in curves_pr.items():
+    ax_pr.step(rec, prec, where="post",
+               label=f"{name} (AP={ap:.2f}, AUPR={aupr:.2f})")
 ax_pr.set_xlabel("Recall"); ax_pr.set_ylabel("Precision")
 ax_pr.set_title(f"PR curves – {regime_tag.upper()} data"); ax_pr.legend()
-fig_pr.savefig(results_dir / f"pr_{regime_tag}_{dataset_name}.png",
-               dpi=300, bbox_inches="tight"); plt.close(fig_pr)
+ax_pr.grid(True)
+fig_pr.tight_layout()
+fig_pr.savefig(results_dir / f"pr_{regime_tag}_{dataset_name}_seed{args.seed}.pdf",
+               dpi=300)
+plt.close(fig_pr)
 
-metric_rows = [{"dataset": dataset_name, "regime": regime_tag,
-                "method": m, "AP": curves[m][2]} for m in curves]
-save_csv(pd.DataFrame(metric_rows), "metrics", index=False)
+# ---- ROC figure ----
+fig_roc, ax_roc = plt.subplots(figsize=(5, 4))
+for name, (fpr, tpr, auc) in curves_roc.items():
+    ax_roc.plot(fpr, tpr, label=f"{name} (AUC={auc:.2f})")
+ax_roc.plot([0, 1], [0, 1], linestyle="--", linewidth=1, color="grey")
+ax_roc.set_xlabel("False‑positive rate");  ax_roc.set_ylabel("True‑positive rate")
+ax_roc.set_title(f"ROC curves – {regime_tag.upper()} data");  ax_roc.legend()
+fig_roc.savefig(results_dir / f"roc_{regime_tag}_{dataset_name}_seed{args.seed}.pdf",
+                dpi=300, bbox_inches="tight")
+plt.close(fig_roc)
+
+# ---------------- CSV ----------------
+metric_rows = []
+for m in methods:
+    metric_rows.append({
+        "dataset": dataset_name,
+        "regime":  regime_tag,
+        "seed":    args.seed,
+        "method":  m,
+        "AP":      curves_pr[m][2],
+        "AUPR":    curves_pr[m][3],
+        "AUC_ROC": curves_roc[m][2],
+    })
+
+pd.DataFrame(metric_rows).to_csv(
+    results_dir / f"metrics_seed{args.seed}.csv", index=False)
 
 print(f"[DONE] All outputs under  {dataset_root.relative_to(script_dir)}/")
