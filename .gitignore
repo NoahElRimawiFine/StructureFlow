@@ -154,5 +154,6 @@ checkpoints/
 
 # leave_one_out results
 loo_results/
+lko_results/
 .cursor/rules/gemini-rules.mdc
 .conda/

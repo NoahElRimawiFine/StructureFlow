@@ -102,7 +102,7 @@ class EntropicOTFM:
                     _t.append((i-1 + ts*2) * self.dt)  # Scale ts to span 2 timesteps
                     _t_orig.append(ts)
                     _u.append(u)
-                    i += 2  # Skip the next iteration as we've handled it
+                    i += 1
                 else:
                     i += 1
             else:
@@ -123,7 +123,6 @@ class EntropicOTFM:
                 _t_orig.append(ts)
                 _u.append(u)
                 i += 1
-            
         return (
             torch.vstack(_x),
             torch.vstack(_s),

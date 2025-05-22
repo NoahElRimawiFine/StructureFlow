@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset, random_split, IterableDataset, ConcatDataset
+import scanpy as sc
 
 from .components import sc_dataset as util
 
@@ -177,7 +178,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             else:
                 self.ko_indices.append(self.gene_to_index[ko])
 
-    def _setup_renge_data(self):
+    def _setup_renge_data_old(self):
         """Load Renge data from disk and convert to AnnData objects."""
         # Load the Renge data files
         x_renge_path = os.path.join(self.data_path, "X_renge_d2_80.csv")
@@ -277,6 +278,76 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             self.adatas.append(adata)
             self.kos.append(ko_gene)
             self.ko_indices.append(None if ko_gene is None else self.gene_to_index[ko_gene])
+
+    def _setup_renge_data(self):
+        """Load Renge data from disk and use the hipsc AnnData object."""
+        # Load the hipsc.h5ad file
+        hipsc_path = os.path.join(self.data_path, "hipsc.h5ad")
+        hipsc = sc.read_h5ad(hipsc_path)
+
+        if 'gene' in hipsc.var:
+            # Create a mapping from current IDs to gene symbols
+            gene_mapping = dict(zip(hipsc.var_names, hipsc.var['gene']))
+
+            # Create a new AnnData with gene symbols as variable names
+            gene_symbols = hipsc.var['gene'].tolist()
+
+            # Rename the variables using the gene symbols
+            hipsc.var_names = pd.Index(gene_symbols)
+            hipsc.var.index = hipsc.var_names
+
+        # Load the reference network if available
+        ref_network_path = os.path.join(self.data_path, "A_ref_thresh_0.csv")
+        try:
+            ref_network = pd.read_csv(ref_network_path, index_col=0)
+            has_ref_network = True
+        except FileNotFoundError:
+            has_ref_network = False
+
+        # Set dimensions based on genes in the hipsc data
+        gene_names = hipsc.var_names.tolist()
+        self.dim = len(gene_names)
+
+        # Set the reference network matrix
+        if has_ref_network:
+            self.true_matrix = ref_network
+        else:
+            # Create an empty matrix if no reference is available
+            self.true_matrix = pd.DataFrame(
+                np.zeros((self.dim, self.dim), int),
+                index=gene_names,
+                columns=gene_names,
+            )
+
+        # Shift timepoints to start from 0
+        min_t = hipsc.obs['t'].min()
+        hipsc.obs['t'] = hipsc.obs['t'] - min_t
+
+        # Convert sparse matrix to dense if needed
+        if hasattr(hipsc.X, 'toarray'):
+            hipsc.X = hipsc.X.toarray()
+
+        # Create separate AnnData objects for each knockout condition
+        ko_groups = hipsc.obs.groupby('ko')
+
+        self.adatas = []
+        self.kos = []
+        self.ko_indices = []
+
+        # gene_to_index mapping
+        self.gene_to_index = {gene: idx for idx, gene in enumerate(gene_names)}
+
+        for ko_gene, indices in ko_groups.indices.items():
+            # Extract subset for this condition
+            adata_subset = hipsc[indices].copy()
+
+            # Handle the case where ko_gene might be NaN or a special value for wildtype
+            if pd.isna(ko_gene) or ko_gene == 'wt' or ko_gene == 'WT' or ko_gene == '':
+                ko_gene = None
+
+            self.adatas.append(adata_subset)
+            self.kos.append(ko_gene)
+            self.ko_indices.append(None if ko_gene is None else self.gene_to_index.get(ko_gene))
 
     def get_subset_adatas(self, split: str = "train"):
         """Returns a list of AnnData objects, each containing only the cells used in the specified

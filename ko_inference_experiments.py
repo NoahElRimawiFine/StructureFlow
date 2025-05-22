@@ -6,10 +6,10 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-def run_experiment(dataset_type, model_type, seed, dataset=None, base_results_dir="loo_results"):
+def run_experiment(dataset_type, model_type, seed, leave_out_ko_indices=None, dataset=None, base_results_dir="lko_results"):
     """Run a single experiment with specific configuration."""
     cmd = [
-        "python", "-m", "src.leave_one_out",
+        "python", "-m", "src.leave_ko_out",
         "--dataset_type", dataset_type,
         "--model_type", model_type,
         "--seed", str(seed),
@@ -20,10 +20,15 @@ def run_experiment(dataset_type, model_type, seed, dataset=None, base_results_di
     if dataset_type == "Synthetic" and dataset:
         cmd.extend(["--dataset", dataset])
     
+    # Add knockout indices to leave out
+    if leave_out_ko_indices:
+        ko_indices_str = " ".join(map(str, leave_out_ko_indices))
+        cmd.extend(["--leave_out_ko_indices", *map(str, leave_out_ko_indices)])
+    
     print(f"Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
 
-def aggregate_results(base_results_dir, dataset_types, model_types, seeds, synthetic_datasets=None):
+def aggregate_results(base_results_dir, dataset_types, model_types, seeds, knockout_groups, synthetic_datasets=None):
     """Aggregate results across seeds for each model and dataset type."""
     print("\nAggregating results across seeds...")
     
@@ -33,7 +38,7 @@ def aggregate_results(base_results_dir, dataset_types, model_types, seeds, synth
     
     # Prepare summary tables
     all_summary_rows = []  # For overall comparison across models
-    timepoint_comparisons = {}  # For per-timepoint comparison across models
+    knockout_comparisons = {}  # For per-knockout comparison across models
     
     # Process each dataset type
     for dataset_type in dataset_types:
@@ -50,23 +55,25 @@ def aggregate_results(base_results_dir, dataset_types, model_types, seeds, synth
                 all_seed_summaries = []
                 all_seed_details = []
                 
+                available_seeds = []
                 for seed in seeds:
                     # Load summary results
                     summary_path = os.path.join(
                         base_results_dir, 
                         f"{dataset_type}_{model_type}_{dataset_suffix}_seed{seed}", 
-                        f"loo_summary_{model_type}_seed{seed}.csv"
+                        f"lko_summary_{model_type}_seed{seed}.csv"
                     )
                     
                     detailed_path = os.path.join(
                         base_results_dir, 
                         f"{dataset_type}_{model_type}{dataset_suffix}_seed{seed}", 
-                        f"loo_detailed_metrics_{model_type}_seed{seed}.csv"
+                        f"lko_detailed_metrics_{model_type}_seed{seed}.csv"
                     )
                     
                     if os.path.exists(summary_path):
                         summary_df = pd.read_csv(summary_path)
                         all_seed_summaries.append(summary_df)
+                        available_seeds.append(seed)
                     if os.path.exists(detailed_path):
                         detailed_df = pd.read_csv(detailed_path)
                         all_seed_details.append(detailed_df)
@@ -75,11 +82,14 @@ def aggregate_results(base_results_dir, dataset_types, model_types, seeds, synth
                     print(f"  No results found for {model_type} on {dataset_type}{dataset_suffix}")
                     continue
                 
+                # Log available seeds
+                print(f"  Aggregating over {len(available_seeds)} available seeds: {available_seeds}")
+                
                 # Combine results from all seeds
                 combined_summary = pd.concat(all_seed_summaries, ignore_index=True)
                 
-                # Group by timepoint and calculate mean and std across seeds
-                agg_summary = combined_summary.groupby('held_out_time').agg({
+                # Group by knockout and calculate mean and std across seeds
+                agg_summary = combined_summary.groupby('ko_name').agg({
                     'avg_ode_distance': ['mean', 'std'],
                     'avg_sde_distance': ['mean', 'std'],
                     'avg_mmd2_ode': ['mean', 'std'],
@@ -88,7 +98,7 @@ def aggregate_results(base_results_dir, dataset_types, model_types, seeds, synth
                 
                 # Flatten column names
                 agg_summary.columns = ['_'.join(col).strip() for col in agg_summary.columns.values]
-                agg_summary = agg_summary.rename(columns={'held_out_time_': 'held_out_time'})
+                agg_summary = agg_summary.rename(columns={'ko_name_': 'ko_name'})
                 
                 # Add model and dataset info
                 agg_summary['model_type'] = model_type
@@ -96,15 +106,20 @@ def aggregate_results(base_results_dir, dataset_types, model_types, seeds, synth
                 if dataset_type == "Synthetic":
                     agg_summary['dataset'] = dataset
                 
+                # Add seed info
+                agg_summary['available_seeds'] = str(available_seeds)
+                agg_summary['seed_count'] = len(available_seeds)
+                
                 # Save aggregated summary
                 agg_summary_path = os.path.join(agg_dir, f"{dataset_type}{dataset_suffix}_{model_type}_agg_summary.csv")
                 agg_summary.to_csv(agg_summary_path, index=False)
                 print(f"  Saved aggregated summary to {agg_summary_path}")
                 
-                # Calculate overall average metrics across all timepoints
+                # Calculate overall average metrics across all knockouts
                 overall_avg = {
                     'Model': model_type,
                     'Dataset': f"{dataset_type}{dataset_suffix}",
+                    'Seeds': f"{len(available_seeds)}/{len(seeds)}",
                     'W-Dist (ODE)': f"{agg_summary['avg_ode_distance_mean'].mean():.4f} ± {agg_summary['avg_ode_distance_std'].mean():.4f}",
                     'W-Dist (SDE)': f"{agg_summary['avg_sde_distance_mean'].mean():.4f} ± {agg_summary['avg_sde_distance_std'].mean():.4f}",
                     'MMD2 (ODE)': f"{agg_summary['avg_mmd2_ode_mean'].mean():.4f} ± {agg_summary['avg_mmd2_ode_std'].mean():.4f}",
@@ -112,16 +127,17 @@ def aggregate_results(base_results_dir, dataset_types, model_types, seeds, synth
                 }
                 all_summary_rows.append(overall_avg)
                 
-                # Store per-timepoint data for comparison across models
+                # Store per-knockout data for comparison across models
                 for _, row in agg_summary.iterrows():
-                    timepoint = int(row['held_out_time'])
+                    ko_name = row['ko_name']
                     dataset_key = f"{dataset_type}{dataset_suffix}"
-                    if (dataset_key, timepoint) not in timepoint_comparisons:
-                        timepoint_comparisons[(dataset_key, timepoint)] = []
+                    if (dataset_key, ko_name) not in knockout_comparisons:
+                        knockout_comparisons[(dataset_key, ko_name)] = []
                     
-                    # Add this model's results for this timepoint
-                    timepoint_comparisons[(dataset_key, timepoint)].append({
+                    # Add this model's results for this knockout
+                    knockout_comparisons[(dataset_key, ko_name)].append({
                         'Model': model_type,
+                        'Seeds': f"{len(available_seeds)}/{len(seeds)}",
                         'W-Dist (ODE)': f"{row['avg_ode_distance_mean']:.4f} ± {row['avg_ode_distance_std']:.4f}",
                         'W-Dist (SDE)': f"{row['avg_sde_distance_mean']:.4f} ± {row['avg_sde_distance_std']:.4f}",
                         'MMD2 (ODE)': f"{row['avg_mmd2_ode_mean']:.4f} ± {row['avg_mmd2_ode_std']:.4f}",
@@ -146,80 +162,90 @@ def aggregate_results(base_results_dir, dataset_types, model_types, seeds, synth
         print("\n===== Overall Comparison =====")
         print(overall_summary.to_string(index=False))
     
-    # Create per-timepoint comparison tables
-    if timepoint_comparisons:
-        print("\n===== Per-Timepoint Comparisons =====")
+    # Create per-knockout comparison tables
+    if knockout_comparisons:
+        print("\n===== Per-Knockout Comparisons =====")
         
-        # Create directory for timepoint comparisons if needed
-        timepoint_dir = os.path.join(agg_dir, "timepoint_comparisons")
-        os.makedirs(timepoint_dir, exist_ok=True)
+        # Create directory for knockout comparisons if needed
+        knockout_dir = os.path.join(agg_dir, "knockout_comparisons")
+        os.makedirs(knockout_dir, exist_ok=True)
         
-        # For each dataset type and timepoint
-        for (dataset_type, timepoint), models_data in timepoint_comparisons.items():
+        # For each dataset type and knockout
+        for (dataset_type, ko_name), models_data in knockout_comparisons.items():
             if models_data:
-                # Create a DataFrame for this timepoint
-                timepoint_df = pd.DataFrame(models_data)
+                # Create a DataFrame for this knockout
+                knockout_df = pd.DataFrame(models_data)
                 
                 # Save to CSV
-                timepoint_path = os.path.join(timepoint_dir, f"{dataset_type}_timepoint_{timepoint}.csv")
-                timepoint_df.to_csv(timepoint_path, index=False)
+                knockout_path = os.path.join(knockout_dir, f"{dataset_type}_knockout_{ko_name}.csv")
+                knockout_df.to_csv(knockout_path, index=False)
                 
                 # Print the comparison
-                print(f"\nDataset: {dataset_type}, Timepoint: {timepoint}")
-                print(timepoint_df.to_string(index=False))
+                print(f"\nDataset: {dataset_type}, Knockout: {ko_name}")
+                print(knockout_df.to_string(index=False))
         
-        print(f"\nPer-timepoint comparisons saved to {timepoint_dir}")
+        print(f"\nPer-knockout comparisons saved to {knockout_dir}")
     
-    # Create a combined per-timepoint table for each dataset
+    # Create a combined per-model table for each dataset showing performance across knockouts
     for dataset_type in dataset_types:
-        # Get all timepoints for this dataset
-        timepoints = sorted(t for ds, t in timepoint_comparisons.keys() if ds == dataset_type)
+        datasets_to_process = synthetic_datasets if dataset_type == "Synthetic" else [None]
         
-        if timepoints:
-            # For each model, collect data across timepoints
-            model_timepoint_data = {model: [] for model in model_types if any(m['Model'] == model for tp in timepoints for m in timepoint_comparisons.get((dataset_type, tp), []))}
+        for dataset in datasets_to_process:
+            dataset_suffix = f"_{dataset}" if dataset_type == "Synthetic" else ""
+            dataset_key = f"{dataset_type}{dataset_suffix}"
             
-            for timepoint in timepoints:
-                models_at_tp = timepoint_comparisons.get((dataset_type, timepoint), [])
+            # Get all knockouts for this dataset
+            knockouts = sorted(ko for ds, ko in knockout_comparisons.keys() if ds == dataset_key)
+            
+            if knockouts:
+                # For each model, collect data across knockouts
+                model_knockout_data = {model: [] for model in model_types if any(m['Model'] == model for ko in knockouts for m in knockout_comparisons.get((dataset_key, ko), []))}
                 
-                # Add each model's data for this timepoint
-                for model_data in models_at_tp:
-                    model = model_data['Model']
-                    if model in model_timepoint_data:
-                        model_timepoint_data[model].append({
-                            'Timepoint': timepoint,
-                            'W-Dist (ODE)': model_data['W-Dist (ODE)'],
-                            'W-Dist (SDE)': model_data['W-Dist (SDE)'],
-                            'MMD2 (ODE)': model_data['MMD2 (ODE)'],
-                            'MMD2 (SDE)': model_data['MMD2 (SDE)'],
-                        })
-            
-            # Create a combined table for each model
-            for model, timepoint_rows in model_timepoint_data.items():
-                if timepoint_rows:
-                    # Sort by timepoint
-                    timepoint_rows.sort(key=lambda x: x['Timepoint'])
+                for ko_name in knockouts:
+                    models_at_ko = knockout_comparisons.get((dataset_key, ko_name), [])
                     
-                    # Create DataFrame
-                    model_tp_df = pd.DataFrame(timepoint_rows)
-                    
-                    # Save to CSV
-                    model_tp_path = os.path.join(agg_dir, f"{dataset_type}_{model}_by_timepoint.csv")
-                    model_tp_df.to_csv(model_tp_path, index=False)
-                    print(f"Saved {model} timepoint analysis for {dataset_type} to {model_tp_path}")
+                    # Add each model's data for this knockout
+                    for model_data in models_at_ko:
+                        model = model_data['Model']
+                        if model in model_knockout_data:
+                            model_knockout_data[model].append({
+                                'Knockout': ko_name,
+                                'Seeds': model_data['Seeds'],
+                                'W-Dist (ODE)': model_data['W-Dist (ODE)'],
+                                'W-Dist (SDE)': model_data['W-Dist (SDE)'],
+                                'MMD2 (ODE)': model_data['MMD2 (ODE)'],
+                                'MMD2 (SDE)': model_data['MMD2 (SDE)'],
+                            })
+                
+                # Create a combined table for each model
+                for model, knockout_rows in model_knockout_data.items():
+                    if knockout_rows:
+                        # Create DataFrame
+                        model_ko_df = pd.DataFrame(knockout_rows)
+                        
+                        # Save to CSV
+                        model_ko_path = os.path.join(agg_dir, f"{dataset_key}_{model}_by_knockout.csv")
+                        model_ko_df.to_csv(model_ko_path, index=False)
+                        print(f"Saved {model} knockout analysis for {dataset_key} to {model_ko_path}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Run multiple leave-one-out experiments")
-    parser.add_argument("--base_results_dir", type=str, default="loo_results", help="Base directory to save results")
+    parser = argparse.ArgumentParser(description="Run multiple leave-knockout-out experiments")
+    parser.add_argument("--base_results_dir", type=str, default="lko_results", help="Base directory to save results")
     parser.add_argument("--only_aggregate", action="store_true", help="Only aggregate existing results without running new experiments")
     args = parser.parse_args()
     
     # Configuration
     model_types = ["sf2m", "rf", "mlp_baseline"]
     dataset_types = ["Renge"]
-    # synthetic_datasets = ["dyn-TF", "dyn-BF", "dyn-CY", "dyn-LL", "dyn-SW"]
     synthetic_datasets = ["dyn-TF", "dyn-CY", "dyn-LL"]
     seeds = [1, 2, 3]
+    
+    # Define knockout groups to leave out for each dataset
+    # Each list entry is a group of KO indices that will be left out in one experiment
+    # For synthetic datasets, typically we'll have KO indices 0-7 (including wildtype)
+    knockout_groups = {
+        "default": [[1, 3, 4]]  # Default group for all datasets
+    }
     
     # Create base results directory
     os.makedirs(args.base_results_dir, exist_ok=True)
@@ -233,9 +259,9 @@ def main():
         total_runs = 0
         for dataset_type in dataset_types:
             if dataset_type == "Synthetic":
-                total_runs += len(model_types) * len(synthetic_datasets) * len(seeds)
+                total_runs += len(model_types) * len(synthetic_datasets) * len(seeds) * len(knockout_groups["default"])
             else:
-                total_runs += len(model_types) * len(seeds)
+                total_runs += len(model_types) * len(seeds) * len(knockout_groups["default"])
                 
         completed_runs = 0
         
@@ -246,8 +272,27 @@ def main():
                 for dataset in synthetic_datasets:
                     for model_type in model_types:
                         for seed in seeds:
-                            print(f"\n[{completed_runs+1}/{total_runs}] Running {model_type} on {dataset_type}_{dataset} with seed {seed}")
-                            run_experiment(dataset_type, model_type, seed, dataset, args.base_results_dir)
+                            for ko_indices in knockout_groups.get(dataset, knockout_groups["default"]):
+                                print(f"\n[{completed_runs+1}/{total_runs}] Running {model_type} on {dataset_type}_{dataset} with seed {seed}, leaving out KOs {ko_indices}")
+                                run_experiment(dataset_type, model_type, seed, ko_indices, dataset, args.base_results_dir)
+                                completed_runs += 1
+                                
+                                # Calculate and display progress
+                                elapsed = datetime.now() - start_time
+                                avg_time_per_run = elapsed / completed_runs
+                                remaining_runs = total_runs - completed_runs
+                                est_remaining = avg_time_per_run * remaining_runs
+                                
+                                print(f"Progress: {completed_runs}/{total_runs} runs completed")
+                                print(f"Elapsed time: {elapsed}")
+                                print(f"Estimated time remaining: {est_remaining}")
+            else:
+                # For Curated, just run once without dataset parameter
+                for model_type in model_types:
+                    for seed in seeds:
+                        for ko_indices in knockout_groups.get("default", [[1, 3, 5]]):
+                            print(f"\n[{completed_runs+1}/{total_runs}] Running {model_type} on {dataset_type} with seed {seed}, leaving out KOs {ko_indices}")
+                            run_experiment(dataset_type, model_type, seed, ko_indices, None, args.base_results_dir)
                             completed_runs += 1
                             
                             # Calculate and display progress
@@ -259,26 +304,9 @@ def main():
                             print(f"Progress: {completed_runs}/{total_runs} runs completed")
                             print(f"Elapsed time: {elapsed}")
                             print(f"Estimated time remaining: {est_remaining}")
-            else:
-                # For Curated, just run once without dataset parameter
-                for model_type in model_types:
-                    for seed in seeds:
-                        print(f"\n[{completed_runs+1}/{total_runs}] Running {model_type} on {dataset_type} with seed {seed}")
-                        run_experiment(dataset_type, model_type, seed, None, args.base_results_dir)
-                        completed_runs += 1
-                        
-                        # Calculate and display progress
-                        elapsed = datetime.now() - start_time
-                        avg_time_per_run = elapsed / completed_runs
-                        remaining_runs = total_runs - completed_runs
-                        est_remaining = avg_time_per_run * remaining_runs
-                        
-                        print(f"Progress: {completed_runs}/{total_runs} runs completed")
-                        print(f"Elapsed time: {elapsed}")
-                        print(f"Estimated time remaining: {est_remaining}")
     
     # Aggregate results
-    aggregate_results(args.base_results_dir, dataset_types, model_types, seeds, synthetic_datasets)
+    aggregate_results(args.base_results_dir, dataset_types, model_types, seeds, knockout_groups, synthetic_datasets)
     
     # Calculate total runtime
     total_runtime = datetime.now() - start_time
