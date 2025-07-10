@@ -314,10 +314,12 @@ class SF2MConfig:
         # Linear scaling based on dimension size (baseline: N=10)
         scaling_factor = num_vars / 10.0
 
-        print(f"Using linear scaling for N={num_vars} (factor: {scaling_factor:.1f}x)")
+        print(
+            f"Using scaling for N={num_vars} (linear factor: {scaling_factor:.1f}x, quadratic factor: {scaling_factor**2:.1f}x)"
+        )
 
-        # Scale training steps linearly with dimension
-        n_steps = int(self.base_n_steps * scaling_factor)
+        # Scale training steps quadratically with dimension
+        n_steps = int(self.base_n_steps * (scaling_factor**2))
 
         # Scale model layer sizes linearly with dimension
         knockout_hidden = int(self.base_knockout_hidden * scaling_factor)
@@ -1002,14 +1004,14 @@ def main():
     sf2m_config = SF2MConfig(
         # Base parameters for N=10 (will be scaled linearly)
         base_n_steps=2000,
-        base_lr=0.0005,
+        base_lr=0.001,
         base_alpha=0.3,
         base_reg=1e-06,
         base_gl_reg=0.02,
         base_knockout_hidden=256,  # Will scale linearly with dimension
         base_score_hidden=[128, 128],  # Will scale linearly with dimension
         base_correction_hidden=[64, 64],  # Will scale linearly with dimension
-        base_batch_size=128,
+        base_batch_size=64,
         sigma=1.0,
         device="cpu",
     )
