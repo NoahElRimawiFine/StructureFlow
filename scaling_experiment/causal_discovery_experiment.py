@@ -1,3 +1,4 @@
+import random
 import numpy as np
 import torch
 import networkx as nx
@@ -5,9 +6,32 @@ import pandas as pd
 import time
 from typing import List, Dict, Any, Tuple
 import os
-from sklearn.metrics import roc_auc_score, average_precision_score
+from sklearn.metrics import (
+    roc_auc_score,
+    average_precision_score,
+    precision_recall_curve,
+)
 from sklearn.linear_model import LinearRegression
 import multiprocessing as mp
+
+# SF2M specific imports
+import anndata as ad
+from lightning.pytorch import Trainer, seed_everything
+from lightning.pytorch.loggers import TensorBoardLogger
+
+# Add src to path for imports
+import sys
+
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
+from src.models.sf2m_module import SF2MLitModule
+
+# SF2M component imports for DirectSF2MMethod
+from src.models.components.base import MLPODEFKO
+from src.models.components.cond_mlp import MLP as CONDMLP, MLPFlow
+from src.models.components.simple_mlp import MLP
+from src.models.components.optimal_transport import EntropicOTFM
 
 
 def set_random_seeds(seed: int):
@@ -16,6 +40,7 @@ def set_random_seeds(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
+    seed_everything(seed, workers=True)
 
 
 def set_fixed_cores(num_cores: int = 4):
@@ -65,7 +90,7 @@ def generate_causal_system(
 
 def simulate_time_series(
     dynamics_matrix: np.ndarray,
-    num_timepoints: int = 10,
+    num_timepoints: int = 5,  # Changed from 10 to 5
     num_samples: int = 500,
     noise_std: float = 0.1,
     dt: float = 0.1,
@@ -109,6 +134,34 @@ def simulate_time_series(
         time_series.append(samples)
 
     return np.array(time_series)
+
+
+def create_anndata_from_time_series(time_series_data: np.ndarray) -> ad.AnnData:
+    """
+    Convert time series data to AnnData format expected by SF2M.
+
+    Args:
+        time_series_data: Array of shape (num_timepoints, num_samples, num_vars)
+
+    Returns:
+        adata: AnnData object with time series data
+    """
+    num_timepoints, num_samples, num_vars = time_series_data.shape
+
+    # Reshape data: (total_samples, num_vars)
+    data_flat = time_series_data.reshape(-1, num_vars)
+
+    # Create time labels
+    time_labels = np.repeat(np.arange(num_timepoints), num_samples)
+
+    # Create AnnData object
+    adata = ad.AnnData(X=data_flat)
+    adata.obs["t"] = time_labels
+
+    # Add variable names
+    adata.var_names = [f"gene_{i}" for i in range(num_vars)]
+
+    return adata
 
 
 class CausalDiscoveryMethod:
@@ -181,11 +234,440 @@ class CorrelationBasedMethod(CausalDiscoveryMethod):
         return predicted_adjacency
 
 
+class SF2MConfig:
+    """Configuration class for SF2M hyperparameters that can scale with system size."""
+
+    def __init__(
+        self,
+        base_n_steps: int = 5000,
+        base_lr: float = 3e-3,
+        base_alpha: float = 0.1,
+        base_reg: float = 5e-6,
+        base_gl_reg: float = 0.04,
+        base_knockout_hidden: int = 64,
+        base_score_hidden: List[int] = None,
+        base_correction_hidden: List[int] = None,
+        base_batch_size: int = 32,
+        sigma: float = 1.0,
+        device: str = "cpu",
+        scaling_factor: float = 1.0,
+        size_specific_configs: Dict[int, Dict[str, Any]] = None,
+    ):
+        """
+        Initialize SF2M configuration with scaling options.
+
+        Args:
+            base_*: Base hyperparameters for small systems (used for auto-scaling)
+            scaling_factor: Factor to scale hyperparameters based on system size
+            size_specific_configs: Dictionary mapping system size to specific hyperparameters
+                                 Example: {10: {'n_steps': 3000, 'lr': 1e-3, 'gl_reg': 0.02},
+                                          50: {'n_steps': 8000, 'lr': 5e-4, 'gl_reg': 0.05}}
+        """
+        self.base_n_steps = base_n_steps
+        self.base_lr = base_lr
+        self.base_alpha = base_alpha
+        self.base_reg = base_reg
+        self.base_gl_reg = base_gl_reg
+        self.base_knockout_hidden = base_knockout_hidden
+        self.base_score_hidden = base_score_hidden or [64, 64]
+        self.base_correction_hidden = base_correction_hidden or [32, 32]
+        self.base_batch_size = base_batch_size
+        self.sigma = sigma
+        self.device = device
+        self.scaling_factor = scaling_factor
+        self.size_specific_configs = size_specific_configs or {}
+
+    def get_scaled_config(self, num_vars: int) -> Dict[str, Any]:
+        """Get scaled hyperparameters based on system size."""
+
+        # If specific config exists for this size, use it as base
+        if num_vars in self.size_specific_configs:
+            specific_config = self.size_specific_configs[num_vars]
+            print(f"Using size-specific config for N={num_vars}: {specific_config}")
+
+            # Start with defaults and override with specific values
+            config = {
+                "n_steps": self.base_n_steps,
+                "lr": self.base_lr,
+                "alpha": self.base_alpha,
+                "reg": self.base_reg,
+                "gl_reg": self.base_gl_reg,
+                "knockout_hidden": max(self.base_knockout_hidden, num_vars * 2),
+                "score_hidden": [max(dim, num_vars) for dim in self.base_score_hidden],
+                "correction_hidden": [
+                    max(dim, num_vars // 2) for dim in self.base_correction_hidden
+                ],
+                "sigma": self.sigma,
+                "device": self.device,
+                "batch_size": self.base_batch_size,  # Use base_batch_size
+            }
+
+            # Override with specific values
+            for key, value in specific_config.items():
+                if key in config:
+                    config[key] = value
+                else:
+                    print(f"Warning: Unknown config key '{key}' for size {num_vars}")
+
+            return config
+
+        # Otherwise use automatic scaling
+        print(f"Using auto-scaled config for N={num_vars}")
+
+        # Scale training steps with system size
+        n_steps = int(self.base_n_steps * max(1.0, np.sqrt(num_vars / 10)))
+
+        # Scale learning rate (smaller for larger systems)
+        lr = self.base_lr * max(0.5, 1.0 / np.sqrt(num_vars / 10))
+
+        # Scale regularization (stronger for larger systems)
+        reg = self.base_reg * max(1.0, num_vars / 10)
+        gl_reg = self.base_gl_reg * max(1.0, np.sqrt(num_vars / 10))
+
+        # Scale network dimensions
+        knockout_hidden = max(self.base_knockout_hidden, num_vars * 2)
+        score_hidden = [max(dim, num_vars) for dim in self.base_score_hidden]
+        correction_hidden = [
+            max(dim, num_vars // 2) for dim in self.base_correction_hidden
+        ]
+
+        config = {
+            "n_steps": n_steps,
+            "lr": lr,
+            "alpha": self.base_alpha,
+            "reg": reg,
+            "gl_reg": gl_reg,
+            "knockout_hidden": knockout_hidden,
+            "score_hidden": score_hidden,
+            "correction_hidden": correction_hidden,
+            "sigma": self.sigma,
+            "device": self.device,
+            "batch_size": self.base_batch_size,  # Use base_batch_size
+        }
+
+        print(
+            f"Auto-scaled config: n_steps={n_steps}, lr={lr:.2e}, reg={reg:.2e}, gl_reg={gl_reg:.3f}"
+        )
+
+        return config
+
+
+class DirectSF2MMethod(CausalDiscoveryMethod):
+    """Direct SF2M implementation using core components."""
+
+    def __init__(self, config: SF2MConfig = None, silent: bool = False):
+        super().__init__("DirectSF2M")
+        self.config = config or SF2MConfig()
+        self.needs_true_adjacency = (
+            True  # Flag to indicate this method needs true adjacency for evaluation
+        )
+        self.model = None
+        self.silent = silent  # Flag to suppress debug output
+
+    def fit(
+        self, time_series_data: np.ndarray, true_adjacency: np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Fit SF2M model directly to time series data using core SF2M training logic.
+
+        Args:
+            time_series_data: Shape (num_timepoints, num_samples, num_vars)
+
+        Returns:
+            predicted_adjacency: Predicted adjacency matrix from SF2M
+        """
+        start_time = time.time()
+
+        num_timepoints, num_samples, num_vars = time_series_data.shape
+        if not self.silent:
+            print(f"  SF2M Debug - Input data shape: {time_series_data.shape}")
+
+        # Get scaled configuration for this system size
+        scaled_config = self.config.get_scaled_config(num_vars)
+
+        try:
+            # Convert data to AnnData format
+            adata = create_anndata_from_time_series(time_series_data)
+            if not self.silent:
+                print(
+                    f"  SF2M Debug - Created AnnData: {adata.shape}, times: {adata.obs['t'].unique()}"
+                )
+
+            # Calculate time parameters
+            T_max = int(adata.obs["t"].max())
+            T_times = T_max + 1
+            DT_data = 1.0 / T_times
+
+            if not self.silent:
+                print(
+                    f"  SF2M Debug - T_max: {T_max}, T_times: {T_times}, DT_data: {DT_data}"
+                )
+
+            # Set device
+            device = torch.device(scaled_config["device"])
+
+            # Create OTFM model for our single dataset
+            x_tensor = torch.tensor(adata.X, dtype=torch.float32)
+            t_idx = torch.tensor(adata.obs["t"], dtype=torch.long)
+
+            otfm = EntropicOTFM(
+                x=x_tensor,
+                t_idx=t_idx,
+                dt=DT_data,
+                sigma=scaled_config["sigma"],
+                T=T_times,
+                dim=num_vars,
+                device=device,
+                held_out_time=None,
+            )
+
+            if not self.silent:
+                print(f"  SF2M Debug - Created OTFM model")
+
+            # Create SF2M neural networks
+            dims = [num_vars, scaled_config["knockout_hidden"], 1]
+
+            # No knockout masks for single wild-type dataset
+            knockout_masks = [np.ones((num_vars, num_vars), dtype=np.float32)]
+
+            func_v = MLPODEFKO(
+                dims=dims,
+                GL_reg=scaled_config["gl_reg"],
+                bias=True,
+                knockout_masks=knockout_masks,
+                device=device,
+            )
+
+            score_net = CONDMLP(
+                d=num_vars,
+                hidden_sizes=scaled_config["score_hidden"],
+                time_varying=True,
+                conditional=True,
+                conditional_dim=num_vars,
+                device=device,
+            )
+
+            v_correction = MLP(
+                d=num_vars,
+                hidden_sizes=scaled_config["correction_hidden"],
+                time_varying=True,
+            )
+
+            # Move models to device
+            func_v = func_v.to(device)
+            score_net = score_net.to(device)
+            v_correction = v_correction.to(device)
+
+            if not self.silent:
+                print(f"  SF2M Debug - Created neural networks")
+
+            # Create conditional vector (all zeros for wild-type)
+            # Use adaptive batch size based on dataset size
+            adaptive_batch_size = min(scaled_config["batch_size"], num_samples // 4)
+            cond_vector = torch.zeros(adaptive_batch_size, num_vars).to(device)
+
+            # Setup optimizer
+            params_to_optimize = (
+                list(func_v.parameters())
+                + list(score_net.parameters())
+                + list(v_correction.parameters())
+            )
+
+            optimizer = torch.optim.AdamW(
+                params_to_optimize,
+                lr=scaled_config["lr"],
+                eps=1e-7,
+            )
+
+            if not self.silent:
+                print(
+                    f"  SF2M Debug - Starting training for {scaled_config['n_steps']} steps with batch_size={adaptive_batch_size}..."
+                )
+
+            # Training loop
+            for step in range(scaled_config["n_steps"]):
+                optimizer.zero_grad()
+
+                # Sample bridging flows from OTFM
+                _x, _s, _u, _t, _t_orig = otfm.sample_bridges_flows(
+                    batch_size=adaptive_batch_size, skip_time=None
+                )
+
+                # Move to device
+                _x = _x.to(device)
+                _s = _s.to(device)
+                _u = _u.to(device)
+                _t = _t.to(device)
+                _t_orig = _t_orig.to(device)
+
+                B = _x.shape[0]
+
+                # Expand conditional vector to match batch size
+                cond_expanded = cond_vector.repeat(B // cond_vector.shape[0] + 1, 1)[:B]
+
+                # Prepare inputs
+                v_input = _x.unsqueeze(1)
+                t_input = _t.unsqueeze(1)
+
+                # Score net output
+                s_fit = score_net(_t, _x, cond_expanded).squeeze(1)
+
+                # Flow net output with correction (after warmup)
+                if step <= 500:
+                    # Warmup phase
+                    v_fit = func_v(t_input, v_input).squeeze(1) - (
+                        scaled_config["sigma"] ** 2 / 2
+                    ) * score_net(_t, _x, cond_expanded)
+                else:
+                    # Full training phase with correction
+                    v_fit = func_v(t_input, v_input).squeeze(1) + v_correction(_t, _x)
+                    v_fit = v_fit - (scaled_config["sigma"] ** 2 / 2) * score_net(
+                        _t, _x, cond_expanded
+                    )
+
+                # Compute losses
+                L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
+                L_flow = torch.mean(
+                    (_t_orig * (1 - _t_orig)) * (v_fit * DT_data - _u) ** 2
+                )
+                L_reg = func_v.l2_reg() + func_v.fc1_reg()
+
+                # L2 regularization for correction network
+                L_reg_correction = 0.0
+                for param in v_correction.parameters():
+                    L_reg_correction += torch.sum(param**2)
+
+                # Loss combination logic
+                if step < 100:
+                    # Train only score initially
+                    L = scaled_config["alpha"] * L_score
+                elif step <= 500:
+                    # Mix score + flow + small reg
+                    L = (
+                        scaled_config["alpha"] * L_score
+                        + (1 - scaled_config["alpha"]) * L_flow
+                        + scaled_config["reg"] * L_reg
+                    )
+                else:
+                    # Full combined loss with correction reg
+                    L = (
+                        scaled_config["alpha"] * L_score
+                        + (1 - scaled_config["alpha"]) * L_flow
+                        + scaled_config["reg"] * L_reg
+                        + scaled_config["reg"] * L_reg_correction
+                    )
+
+                # Backprop and update
+                L.backward()
+                optimizer.step()
+
+                # Proximal step (group-lasso style)
+                with torch.no_grad():
+                    # Proximal operator for group lasso regularization
+                    w = func_v.fc1.weight
+                    d = dims[0]
+                    d_hidden = dims[1]
+                    wadj = w.view(d, d_hidden, d)
+                    tmp = (
+                        torch.sum(wadj**2, dim=1).sqrt()
+                        - scaled_config["gl_reg"] * 0.01
+                    )
+                    alpha_ = torch.clamp(tmp, min=0)
+                    v_ = torch.nn.functional.normalize(wadj, dim=1) * alpha_[:, None, :]
+                    w.copy_(v_.view(-1, d))
+
+                if step % 200 == 0:
+                    if not self.silent:
+                        print(
+                            f"    Step {step}/{scaled_config['n_steps']}, Loss: {L.item():.4f}"
+                        )
+
+            if not self.silent:
+                print(f"  SF2M Debug - Training completed")
+
+            # Extract causal graph
+            func_v.eval()
+            with torch.no_grad():
+                # Get the causal graph from the velocity field
+                W_v_raw = func_v.causal_graph(w_threshold=0.0)
+
+                # Handle both tensor and numpy array cases
+                if isinstance(W_v_raw, torch.Tensor):
+                    W_v_np = W_v_raw.cpu().numpy()
+                else:
+                    W_v_np = W_v_raw
+
+                if not self.silent:
+                    print(f"  SF2M Debug - Raw W_v shape: {W_v_np.shape}")
+                    print(f"  SF2M Debug - Raw W_v matrix:")
+                    np.set_printoptions(precision=2, suppress=True)
+                    print(W_v_np)
+
+                # Use consistent orientation based on our matrix convention understanding
+                # SF2M's causal_graph() returns W[i,j] meaning variable j influences variable i's dynamics
+                # Our convention: adjacency[i,j] means variable i → variable j
+                # Therefore, we use W.T to match our convention
+                predicted_adjacency = W_v_np.T
+
+                # Zero out diagonal values - we don't need self-loops
+                np.fill_diagonal(predicted_adjacency, 0)
+
+                if not self.silent:
+                    print(
+                        f"  SF2M Debug - Using W_v.T (transposed) based on matrix conventions"
+                    )
+                    print(f"  SF2M Debug - Final predicted adjacency:")
+                    print(predicted_adjacency)
+
+                # If we have true adjacency, show both orientations for debugging but don't use for selection
+                if true_adjacency is not None:
+                    if not self.silent:
+                        print(f"  SF2M Debug - Both orientations for debugging:")
+
+                    # Zero out diagonal for evaluation (self-loops not considered)
+                    true_adj_eval = true_adjacency.copy()
+                    np.fill_diagonal(true_adj_eval, 0)
+
+                    # Evaluate version 1 (direct W_v)
+                    pred_v1 = W_v_np.copy()
+                    np.fill_diagonal(pred_v1, 0)
+                    metrics_v1 = evaluate_causal_discovery(true_adj_eval, pred_v1)
+                    if not self.silent:
+                        print(
+                            f"    Direct W_v: AUROC={metrics_v1['AUROC']:.4f}, AUPRC={metrics_v1['AUPRC']:.4f}"
+                        )
+
+                    # Evaluate version 2 (W_v.T) - this is what we're using
+                    metrics_v2 = evaluate_causal_discovery(
+                        true_adj_eval, predicted_adjacency
+                    )
+                    if not self.silent:
+                        print(
+                            f"    W_v.T (used): AUROC={metrics_v2['AUROC']:.4f}, AUPRC={metrics_v2['AUPRC']:.4f}"
+                        )
+
+        except Exception as e:
+            print(f"  SF2M Error in training: {e}")
+            import traceback
+
+        self._training_time = time.time() - start_time
+        return predicted_adjacency
+
+
+def maskdiag(A):
+    """Mask diagonal elements to zero, following the approach in plotting.py."""
+    A_masked = A.copy()
+    np.fill_diagonal(A_masked, 0)
+    return A_masked
+
+
 def evaluate_causal_discovery(
     true_adjacency: np.ndarray, predicted_adjacency: np.ndarray
 ) -> Dict[str, float]:
     """
     Evaluate causal discovery performance with AUROC and AUPRC.
+
+    Uses the same approach as plotting.py for standardization.
 
     Args:
         true_adjacency: True adjacency matrix
@@ -194,21 +676,25 @@ def evaluate_causal_discovery(
     Returns:
         metrics: Dictionary containing AUROC and AUPRC
     """
-    # Convert to binary ground truth (any non-zero edge is a true edge)
-    true_edges = (np.abs(true_adjacency) > 0).astype(int).flatten()
+    # Mask diagonal elements (following plotting.py approach)
+    masked_true = maskdiag(true_adjacency)
+    masked_pred = maskdiag(predicted_adjacency)
 
-    # Use absolute values of predictions as confidence scores
-    pred_scores = np.abs(predicted_adjacency).flatten()
+    # Convert to binary ground truth (following plotting.py)
+    y_true = np.abs(np.sign(masked_true).astype(int).flatten())
 
-    # Calculate metrics
+    # Use absolute values of predictions as confidence scores (following plotting.py)
+    y_pred = np.abs(masked_pred.flatten())
+
+    # Calculate metrics using sklearn (same as plotting.py)
     try:
-        if len(np.unique(true_edges)) < 2:
+        if len(np.unique(y_true)) < 2:
             # Handle edge case: all edges are 0 or all edges are 1
             auroc = float("nan")
             auprc = float("nan")
         else:
-            auroc = roc_auc_score(true_edges, pred_scores)
-            auprc = average_precision_score(true_edges, pred_scores)
+            auroc = roc_auc_score(y_true, y_pred)
+            auprc = average_precision_score(y_true, y_pred)
     except Exception as e:
         print(f"Warning: Error calculating metrics: {e}")
         auroc = float("nan")
@@ -217,8 +703,8 @@ def evaluate_causal_discovery(
     return {
         "AUROC": auroc,
         "AUPRC": auprc,
-        "num_true_edges": np.sum(true_edges),
-        "num_possible_edges": len(true_edges),
+        "num_true_edges": np.sum(y_true),
+        "num_possible_edges": len(y_true),
     }
 
 
@@ -253,12 +739,21 @@ def run_single_experiment(
         "max_eigenvalue_real": np.max(np.real(np.linalg.eigvals(dynamics_matrix))),
     }
 
+    # Store predicted matrices for inspection (only for quick test)
+    predicted_matrices = {}
+
     # Test each method
     for method in methods:
         print(f"  Testing {method.name}...")
 
         # Fit method and get predictions
-        predicted_adjacency = method.fit(time_series_data)
+        if hasattr(method, "needs_true_adjacency") and method.needs_true_adjacency:
+            predicted_adjacency = method.fit(time_series_data, true_adjacency)
+        else:
+            predicted_adjacency = method.fit(time_series_data)
+
+        # Store the predicted matrix for inspection during quick tests
+        predicted_matrices[method.name] = predicted_adjacency
 
         # Evaluate performance
         metrics = evaluate_causal_discovery(true_adjacency, predicted_adjacency)
@@ -274,7 +769,114 @@ def run_single_experiment(
             f"    AUROC: {metrics['AUROC']:.4f}, AUPRC: {metrics['AUPRC']:.4f}, Time: {training_time:.4f}s"
         )
 
+    # Only print matrices during quick test (when there are just a few methods)
+    if len(methods) <= 3:  # Quick test mode
+        print_matrices_for_inspection(
+            true_adjacency, predicted_matrices, num_vars, seed
+        )
+
     return results
+
+
+def run_single_experiment_silent(
+    num_vars: int, methods: List[CausalDiscoveryMethod], seed: int = 42
+) -> Dict[str, Any]:
+    """
+    Run causal discovery experiment for a single system size with minimal output.
+    This version suppresses all debug printing and matrix output for hyperparameter sweeps.
+
+    Args:
+        num_vars: Number of variables in the system
+        methods: List of causal discovery methods to test
+        seed: Random seed
+
+    Returns:
+        results: Dictionary containing results for all methods
+    """
+    # Generate causal system
+    true_adjacency, dynamics_matrix = generate_causal_system(num_vars, seed=seed)
+
+    # Simulate time series data
+    time_series_data = simulate_time_series(dynamics_matrix, seed=seed)
+
+    # Basic system info
+    results = {
+        "num_vars": num_vars,
+        "seed": seed,
+        "true_edges": np.sum(np.abs(true_adjacency) > 0),
+        "edge_density": np.sum(np.abs(true_adjacency) > 0) / (num_vars * num_vars),
+        "max_eigenvalue_real": np.max(np.real(np.linalg.eigvals(dynamics_matrix))),
+    }
+
+    # Test each method
+    for method in methods:
+        # Fit method and get predictions
+        if hasattr(method, "needs_true_adjacency") and method.needs_true_adjacency:
+            predicted_adjacency = method.fit(time_series_data, true_adjacency)
+        else:
+            predicted_adjacency = method.fit(time_series_data)
+
+        # Evaluate performance
+        metrics = evaluate_causal_discovery(true_adjacency, predicted_adjacency)
+        training_time = method.get_training_time()
+
+        # Store results
+        results[f"{method.name}_AUROC"] = metrics["AUROC"]
+        results[f"{method.name}_AUPRC"] = metrics["AUPRC"]
+        results[f"{method.name}_training_time"] = training_time
+        results[f"{method.name}_num_true_edges"] = metrics["num_true_edges"]
+
+        # Print performance metrics even in silent mode
+        print(
+            f"    {method.name}: AUROC={metrics['AUROC']:.4f}, AUPRC={metrics['AUPRC']:.4f}, Time={training_time:.4f}s"
+        )
+
+    return results
+
+
+def print_matrices_for_inspection(
+    true_adjacency: np.ndarray,
+    predicted_matrices: Dict[str, np.ndarray],
+    num_vars: int,
+    seed: int,
+):
+    """Print matrices for immediate inspection during quick tests only."""
+    print(f"\n=== ADJACENCY MATRICES (N={num_vars}, seed={seed}) ===")
+    print("True adjacency matrix (adjacency[i,j] = variable i → variable j):")
+    np.set_printoptions(precision=2, suppress=True)
+    print(true_adjacency)
+
+    for method_name, pred_matrix in predicted_matrices.items():
+        print(f"\n{method_name} predicted matrix:")
+        print(pred_matrix)
+
+        # For SF2M methods, also show both orientations for comparison
+        if "SF2M" in method_name or "DirectSF2M" in method_name:
+            print(f"\n{method_name} - MATRIX ORIENTATION COMPARISON:")
+            print("Ground Truth:")
+            print(true_adjacency)
+            print(f"\nSF2M W_v (direct):")
+            # To show the direct W_v, we need to transpose back since pred_matrix is already W_v.T
+            direct_w_v = pred_matrix.T
+            print(direct_w_v)
+            print(f"\nSF2M W_v.T (transposed - what we use):")
+            print(pred_matrix)
+            print(f"\nDifference from ground truth (W_v.T - true):")
+            print(pred_matrix - true_adjacency)
+
+        # Show which edges were correctly identified
+        true_edges = np.abs(true_adjacency) > 0
+        pred_edges = np.abs(pred_matrix) > np.percentile(
+            np.abs(pred_matrix), 80
+        )  # Top 20% as predicted edges
+
+        true_positives = np.sum(true_edges & pred_edges)
+        false_positives = np.sum((~true_edges) & pred_edges)
+        false_negatives = np.sum(true_edges & (~pred_edges))
+
+        print(
+            f"{method_name} edge detection: TP={true_positives}, FP={false_positives}, FN={false_negatives}"
+        )
 
 
 def run_scaling_experiment(
@@ -388,17 +990,81 @@ def main():
     # Set fixed cores for reproducible timing
     NUM_CORES = 4
 
+    # QUICK TEST: Run a small example first to inspect matrices
+    print("=" * 60)
+    print("QUICK TEST - Inspecting adjacency matrices with N=5")
+    print("=" * 60)
+
+    # Create a small test configuration
+    test_sf2m_config = SF2MConfig(
+        base_n_steps=2000,
+        base_lr=5e-3,
+        base_alpha=0.1,
+        base_reg=1e-6,
+        base_gl_reg=0.02,
+        device="cpu",
+    )
+
+    test_methods = [
+        CorrelationBasedMethod("pearson"),
+        DirectSF2MMethod(test_sf2m_config),
+    ]
+
+    # Run quick test
+    _ = run_single_experiment(10, test_methods, seed=random.randint(0, 1000))
+
+    print("\n" + "=" * 60)
+    print("QUICK TEST COMPLETE - Check matrices above!")
+    print("=" * 60)
+
+    # Ask user if they want to continue with full experiment
+    response = input("\nContinue with full experiment? (y/n): ").lower().strip()
+    if response != "y":
+        print("Experiment stopped by user.")
+        return
+
     # Define system sizes to test
     system_sizes = [10, 20, 50]
+
+    # Alternative: Mix size-specific configs with auto-scaling
+    # size_specific_configs = {
+    #     10: {'n_steps': 2000, 'lr': 2e-3},  # Only override n_steps and lr for N=10
+    #     50: {'gl_reg': 0.1, 'reg': 1e-4},   # Only override regularization for N=50
+    #     # N=20 will use auto-scaling since it's not specified
+    # }
+
+    sf2m_config = SF2MConfig(
+        # Base parameters (used for auto-scaling if size not in size_specific_configs)
+        base_n_steps=3000,
+        base_lr=1e-3,
+        base_alpha=0.1,
+        base_reg=1e-5,
+        base_gl_reg=0.02,
+        base_knockout_hidden=64,
+        base_score_hidden=[64, 64],
+        base_correction_hidden=[32, 32],
+        base_batch_size=32,
+        sigma=1.0,
+        device="cpu",
+        # Size-specific configurations override auto-scaling
+        # size_specific_configs=size_specific_configs,
+    )
 
     # Define methods to test
     methods = [
         CorrelationBasedMethod("pearson"),
+        DirectSF2MMethod(sf2m_config),
     ]
 
     # Run experiments
     print("Starting causal discovery scaling experiment...")
     print(f"Using {NUM_CORES} cores for reproducible timing")
+    print(f"SF2M configurations:")
+    for size in system_sizes:
+        config = sf2m_config.get_scaled_config(size)
+        print(
+            f"  N={size}: steps={config['n_steps']}, lr={config['lr']:.2e}, gl_reg={config['gl_reg']:.3f}"
+        )
 
     results_df = run_scaling_experiment(
         system_sizes, methods, seeds=[42, 123, 456], num_cores=NUM_CORES
