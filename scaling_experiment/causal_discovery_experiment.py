@@ -475,6 +475,10 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
                 print(
                     f"  SF2M Debug - Starting training for {scaled_config['n_steps']} steps with batch_size={adaptive_batch_size}..."
                 )
+            else:
+                print(
+                    f"  SF2M: Training {scaled_config['n_steps']} steps (batch_size={adaptive_batch_size})..."
+                )
 
             # Training loop
             for step in range(scaled_config["n_steps"]):
@@ -573,6 +577,10 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
                         print(
                             f"    Step {step}/{scaled_config['n_steps']}, Loss: {L.item():.4f}"
                         )
+                    elif (
+                        step % 1000 == 0
+                    ):  # Show progress every 1000 steps in silent mode
+                        print(f"    Step {step}/{scaled_config['n_steps']}")
 
             if not self.silent:
                 print(f"  SF2M Debug - Training completed")
