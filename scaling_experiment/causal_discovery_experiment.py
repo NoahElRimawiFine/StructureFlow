@@ -349,9 +349,9 @@ class SF2MConfig:
 class DirectSF2MMethod(CausalDiscoveryMethod):
     """Direct SF2M implementation using core components."""
 
-    def __init__(self, config: SF2MConfig = None, silent: bool = False):
+    def __init__(self, hyperparams: Dict[str, Any], silent: bool = False):
         super().__init__("DirectSF2M")
-        self.config = config or SF2MConfig()
+        self.hyperparams = hyperparams
         self.needs_true_adjacency = (
             True  # Flag to indicate this method needs true adjacency for evaluation
         )
@@ -376,9 +376,6 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
         if not self.silent:
             print(f"  SF2M Debug - Input data shape: {time_series_data.shape}")
 
-        # Get scaled configuration for this system size
-        scaled_config = self.config.get_scaled_config(num_vars)
-
         try:
             # Convert data to AnnData format
             adata = create_anndata_from_time_series(time_series_data)
@@ -398,7 +395,7 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
                 )
 
             # Set device
-            device = torch.device(scaled_config["device"])
+            device = torch.device(self.hyperparams["device"])
 
             # Create OTFM model for our single dataset
             x_tensor = torch.tensor(adata.X, dtype=torch.float32)
@@ -408,7 +405,7 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
                 x=x_tensor,
                 t_idx=t_idx,
                 dt=DT_data,
-                sigma=scaled_config["sigma"],
+                sigma=self.hyperparams["sigma"],
                 T=T_times,
                 dim=num_vars,
                 device=device,
@@ -419,14 +416,14 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
                 print(f"  SF2M Debug - Created OTFM model")
 
             # Create SF2M neural networks
-            dims = [num_vars, scaled_config["knockout_hidden"], 1]
+            dims = [num_vars, self.hyperparams["knockout_hidden"], 1]
 
             # No knockout masks for single wild-type dataset
             knockout_masks = [np.ones((num_vars, num_vars), dtype=np.float32)]
 
             func_v = MLPODEFKO(
                 dims=dims,
-                GL_reg=scaled_config["gl_reg"],
+                GL_reg=self.hyperparams["gl_reg"],
                 bias=True,
                 knockout_masks=knockout_masks,
                 device=device,
@@ -434,7 +431,7 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
 
             score_net = CONDMLP(
                 d=num_vars,
-                hidden_sizes=scaled_config["score_hidden"],
+                hidden_sizes=self.hyperparams["score_hidden"],
                 time_varying=True,
                 conditional=True,
                 conditional_dim=num_vars,
@@ -443,7 +440,7 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
 
             v_correction = MLP(
                 d=num_vars,
-                hidden_sizes=scaled_config["correction_hidden"],
+                hidden_sizes=self.hyperparams["correction_hidden"],
                 time_varying=True,
             )
 
@@ -457,7 +454,7 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
 
             # Create conditional vector (all zeros for wild-type)
             # Use adaptive batch size based on dataset size
-            adaptive_batch_size = min(scaled_config["batch_size"], num_samples // 4)
+            adaptive_batch_size = min(self.hyperparams["batch_size"], num_samples // 4)
             cond_vector = torch.zeros(adaptive_batch_size, num_vars).to(device)
 
             # Setup optimizer
@@ -469,21 +466,21 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
 
             optimizer = torch.optim.AdamW(
                 params_to_optimize,
-                lr=scaled_config["lr"],
+                lr=self.hyperparams["lr"],
                 eps=1e-7,
             )
 
             if not self.silent:
                 print(
-                    f"  SF2M Debug - Starting training for {scaled_config['n_steps']} steps with batch_size={adaptive_batch_size}..."
+                    f"  SF2M Debug - Starting training for {self.hyperparams['n_steps']} steps with batch_size={adaptive_batch_size}..."
                 )
             else:
                 print(
-                    f"  SF2M: Training {scaled_config['n_steps']} steps (batch_size={adaptive_batch_size})..."
+                    f"  SF2M: Training {self.hyperparams['n_steps']} steps (batch_size={adaptive_batch_size})..."
                 )
 
             # Training loop
-            for step in range(scaled_config["n_steps"]):
+            for step in range(self.hyperparams["n_steps"]):
                 optimizer.zero_grad()
 
                 # Sample bridging flows from OTFM
@@ -514,12 +511,12 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
                 if step <= 500:
                     # Warmup phase
                     v_fit = func_v(t_input, v_input).squeeze(1) - (
-                        scaled_config["sigma"] ** 2 / 2
+                        self.hyperparams["sigma"] ** 2 / 2
                     ) * score_net(_t, _x, cond_expanded)
                 else:
                     # Full training phase with correction
                     v_fit = func_v(t_input, v_input).squeeze(1) + v_correction(_t, _x)
-                    v_fit = v_fit - (scaled_config["sigma"] ** 2 / 2) * score_net(
+                    v_fit = v_fit - (self.hyperparams["sigma"] ** 2 / 2) * score_net(
                         _t, _x, cond_expanded
                     )
 
@@ -538,21 +535,21 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
                 # Loss combination logic
                 if step < 100:
                     # Train only score initially
-                    L = scaled_config["alpha"] * L_score
+                    L = self.hyperparams["alpha"] * L_score
                 elif step <= 500:
                     # Mix score + flow + small reg
                     L = (
-                        scaled_config["alpha"] * L_score
-                        + (1 - scaled_config["alpha"]) * L_flow
-                        + scaled_config["reg"] * L_reg
+                        self.hyperparams["alpha"] * L_score
+                        + (1 - self.hyperparams["alpha"]) * L_flow
+                        + self.hyperparams["reg"] * L_reg
                     )
                 else:
                     # Full combined loss with correction reg
                     L = (
-                        scaled_config["alpha"] * L_score
-                        + (1 - scaled_config["alpha"]) * L_flow
-                        + scaled_config["reg"] * L_reg
-                        + scaled_config["reg"] * L_reg_correction
+                        self.hyperparams["alpha"] * L_score
+                        + (1 - self.hyperparams["alpha"]) * L_flow
+                        + self.hyperparams["reg"] * L_reg
+                        + self.hyperparams["reg"] * L_reg_correction
                     )
 
                 # Backprop and update
@@ -568,7 +565,7 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
                     wadj = w.view(d, d_hidden, d)
                     tmp = (
                         torch.sum(wadj**2, dim=1).sqrt()
-                        - scaled_config["gl_reg"] * 0.01
+                        - self.hyperparams["gl_reg"] * 0.01
                     )
                     alpha_ = torch.clamp(tmp, min=0)
                     v_ = torch.nn.functional.normalize(wadj, dim=1) * alpha_[:, None, :]
@@ -577,12 +574,12 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
                 if step % 200 == 0:
                     if not self.silent:
                         print(
-                            f"    Step {step}/{scaled_config['n_steps']}, Loss: {L.item():.4f}"
+                            f"    Step {step}/{self.hyperparams['n_steps']}, Loss: {L.item():.4f}"
                         )
                     elif (
                         step % 1000 == 0
                     ):  # Show progress every 1000 steps in silent mode
-                        print(f"    Step {step}/{scaled_config['n_steps']}")
+                        print(f"    Step {step}/{self.hyperparams['n_steps']}")
 
             if not self.silent:
                 print(f"  SF2M Debug - Training completed")
@@ -601,9 +598,6 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
 
                 if not self.silent:
                     print(f"  SF2M Debug - Raw W_v shape: {W_v_np.shape}")
-                    print(f"  SF2M Debug - Raw W_v matrix:")
-                    np.set_printoptions(precision=2, suppress=True)
-                    print(W_v_np)
 
                 # Use consistent orientation based on our matrix convention understanding
                 # SF2M's causal_graph() returns W[i,j] meaning variable j influences variable i's dynamics
@@ -618,13 +612,22 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
                     print(
                         f"  SF2M Debug - Using W_v.T (transposed) based on matrix conventions"
                     )
-                    print(f"  SF2M Debug - Final predicted adjacency:")
-                    print(predicted_adjacency)
 
                 # If we have true adjacency, show both orientations for debugging but don't use for selection
                 if true_adjacency is not None:
                     if not self.silent:
-                        print(f"  SF2M Debug - Both orientations for debugging:")
+                        print(f"  SF2M Debug - Matrix comparison:")
+                        print("Ground Truth:")
+                        np.set_printoptions(precision=2, suppress=True)
+                        print(true_adjacency)
+
+                        print(f"SF2M direct:")
+                        W_v_direct = W_v_np.copy()
+                        np.fill_diagonal(W_v_direct, 0)
+                        print(W_v_direct)
+
+                        print(f"SF2M.T (used):")
+                        print(predicted_adjacency)
 
                     # Zero out diagonal for evaluation (self-loops not considered)
                     true_adj_eval = true_adjacency.copy()
@@ -771,12 +774,6 @@ def run_single_experiment(
             f"    AUROC: {metrics['AUROC']:.4f}, AUPRC: {metrics['AUPRC']:.4f}, Time: {training_time:.4f}s"
         )
 
-    # Only print matrices during quick test (when there are just a few methods)
-    if len(methods) <= 3:  # Quick test mode
-        print_matrices_for_inspection(
-            true_adjacency, predicted_matrices, num_vars, seed
-        )
-
     return results
 
 
@@ -836,54 +833,9 @@ def run_single_experiment_silent(
     return results
 
 
-def print_matrices_for_inspection(
-    true_adjacency: np.ndarray,
-    predicted_matrices: Dict[str, np.ndarray],
-    num_vars: int,
-    seed: int,
-):
-    """Print matrices for immediate inspection during quick tests only."""
-    print(f"\n=== ADJACENCY MATRICES (N={num_vars}, seed={seed}) ===")
-    print("True adjacency matrix (adjacency[i,j] = variable i → variable j):")
-    np.set_printoptions(precision=2, suppress=True)
-    print(true_adjacency)
-
-    for method_name, pred_matrix in predicted_matrices.items():
-        print(f"\n{method_name} predicted matrix:")
-        print(pred_matrix)
-
-        # For SF2M methods, also show both orientations for comparison
-        if "SF2M" in method_name or "DirectSF2M" in method_name:
-            print(f"\n{method_name} - MATRIX ORIENTATION COMPARISON:")
-            print("Ground Truth:")
-            print(true_adjacency)
-            print(f"\nSF2M W_v (direct):")
-            # To show the direct W_v, we need to transpose back since pred_matrix is already W_v.T
-            direct_w_v = pred_matrix.T
-            print(direct_w_v)
-            print(f"\nSF2M W_v.T (transposed - what we use):")
-            print(pred_matrix)
-            print(f"\nDifference from ground truth (W_v.T - true):")
-            print(pred_matrix - true_adjacency)
-
-        # Show which edges were correctly identified
-        true_edges = np.abs(true_adjacency) > 0
-        pred_edges = np.abs(pred_matrix) > np.percentile(
-            np.abs(pred_matrix), 80
-        )  # Top 20% as predicted edges
-
-        true_positives = np.sum(true_edges & pred_edges)
-        false_positives = np.sum((~true_edges) & pred_edges)
-        false_negatives = np.sum(true_edges & (~pred_edges))
-
-        print(
-            f"{method_name} edge detection: TP={true_positives}, FP={false_positives}, FN={false_negatives}"
-        )
-
-
 def run_scaling_experiment(
     system_sizes: List[int],
-    methods: List[CausalDiscoveryMethod],
+    sf2m_config: SF2MConfig,
     seeds: List[int] = [42],
     num_cores: int = 4,
 ) -> pd.DataFrame:
@@ -892,7 +844,7 @@ def run_scaling_experiment(
 
     Args:
         system_sizes: List of system sizes to test
-        methods: List of causal discovery methods
+        sf2m_config: SF2M configuration object for scaling
         seeds: List of random seeds for multiple runs
         num_cores: Number of cores to use for reproducible timing
 
@@ -914,6 +866,12 @@ def run_scaling_experiment(
             print(
                 f"\n[{current_exp}/{total_experiments}] System size: {num_vars}, Seed: {seed}"
             )
+
+            # Create methods with scaled configurations for this system size
+            methods = [
+                CorrelationBasedMethod("pearson"),
+                DirectSF2MMethod(sf2m_config.get_scaled_config(num_vars), silent=True),
+            ]
 
             result = run_single_experiment_silent(num_vars, methods, seed)
             result["experiment_id"] = current_exp
@@ -996,11 +954,7 @@ def main():
     print("SF2M CAUSAL DISCOVERY SCALING EXPERIMENT")
     print("=" * 60)
 
-    # Define system sizes to test
-    system_sizes = [10, 20, 50]
-
-    # Best hyperparameters from hyperparameter sweep
-    # Top config: n_steps=2000, batch_size=64, reg=1e-06, alpha=0.3, lr=0.001, knockout_hidden=256
+    # from hparam sweep, top config: n_steps=2000, batch_size=64, reg=1e-06, alpha=0.3, lr=0.001, knockout_hidden=256
     sf2m_config = SF2MConfig(
         # Base parameters for N=10 (will be scaled linearly)
         base_n_steps=2000,
@@ -1016,14 +970,65 @@ def main():
         device="cpu",
     )
 
-    # Define methods to test
-    methods = [
+    # QUICK TEST: Run a single experiment on N=20
+    print("QUICK TEST - Testing on N=20")
+    print("-" * 30)
+
+    test_size = 10
+    test_seed = random.randint(0, 1000)
+
+    # Show base configuration (no scaling for quick test)
+    print(f"Using base configuration for quick test (N={test_size}):")
+    print(
+        f"  steps={sf2m_config.base_n_steps}, knockout_hidden={sf2m_config.base_knockout_hidden}"
+    )
+    print(
+        f"  score_hidden={sf2m_config.base_score_hidden}, correction_hidden={sf2m_config.base_correction_hidden}"
+    )
+    print(
+        f"  lr={sf2m_config.base_lr}, alpha={sf2m_config.base_alpha}, reg={sf2m_config.base_reg}"
+    )
+
+    # Create methods with base config for quick test
+    test_methods = [
         CorrelationBasedMethod("pearson"),
-        DirectSF2MMethod(sf2m_config, silent=True),
+        DirectSF2MMethod(
+            {
+                "n_steps": sf2m_config.base_n_steps,
+                "lr": sf2m_config.base_lr,
+                "alpha": sf2m_config.base_alpha,
+                "reg": sf2m_config.base_reg,
+                "gl_reg": sf2m_config.base_gl_reg,
+                "knockout_hidden": sf2m_config.base_knockout_hidden,
+                "score_hidden": sf2m_config.base_score_hidden,
+                "correction_hidden": sf2m_config.base_correction_hidden,
+                "batch_size": sf2m_config.base_batch_size,
+                "sigma": sf2m_config.sigma,
+                "device": sf2m_config.device,
+            },
+            silent=False,
+        ),
     ]
 
+    # Run single test experiment
+    print(f"\nRunning test experiment (N={test_size}, seed={test_seed})...")
+    _ = run_single_experiment(test_size, test_methods, seed=test_seed)
+
+    print("\n" + "=" * 60)
+    print("QUICK TEST COMPLETE")
+    print("=" * 60)
+
+    # Ask user if they want to continue with full experiment
+    response = input("\nContinue with full scaling experiment? (y/n): ").lower().strip()
+    if response != "y":
+        print("Experiment stopped by user.")
+        return
+
+    # Define system sizes to test
+    system_sizes = [10, 20, 50]
+
     # Show scaled configurations for each system size
-    print("SF2M configurations with linear scaling:")
+    print("\nSF2M configurations with linear scaling:")
     for size in system_sizes:
         config = sf2m_config.get_scaled_config(size)
         print(
@@ -1039,7 +1044,7 @@ def main():
     print(f"Using random seeds: {random_seeds}")
 
     results_df = run_scaling_experiment(
-        system_sizes, methods, seeds=random_seeds, num_cores=NUM_CORES
+        system_sizes, sf2m_config, seeds=random_seeds, num_cores=NUM_CORES
     )
 
     # Save results and print summary
