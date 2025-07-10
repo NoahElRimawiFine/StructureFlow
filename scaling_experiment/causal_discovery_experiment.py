@@ -319,7 +319,7 @@ class SF2MConfig:
         )
 
         # Scale training steps quadratically with dimension
-        n_steps = int(self.base_n_steps * (scaling_factor**2))
+        n_steps = int(self.base_n_steps * (scaling_factor))
 
         # Scale model layer sizes linearly with dimension
         knockout_hidden = int(self.base_knockout_hidden * scaling_factor)
