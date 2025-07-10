@@ -278,7 +278,7 @@ class SF2MConfig:
         self.size_specific_configs = size_specific_configs or {}
 
     def get_scaled_config(self, num_vars: int) -> Dict[str, Any]:
-        """Get scaled hyperparameters based on system size."""
+        """Get scaled hyperparameters based on system size with linear scaling."""
 
         # If specific config exists for this size, use it as base
         if num_vars in self.size_specific_configs:
@@ -299,7 +299,7 @@ class SF2MConfig:
                 ],
                 "sigma": self.sigma,
                 "device": self.device,
-                "batch_size": self.base_batch_size,  # Use base_batch_size
+                "batch_size": self.base_batch_size,
             }
 
             # Override with specific values
@@ -311,43 +311,35 @@ class SF2MConfig:
 
             return config
 
-        # Otherwise use automatic scaling
-        print(f"Using auto-scaled config for N={num_vars}")
+        # Linear scaling based on dimension size (baseline: N=10)
+        scaling_factor = num_vars / 10.0
 
-        # Scale training steps with system size
-        n_steps = int(self.base_n_steps * max(1.0, np.sqrt(num_vars / 10)))
+        print(f"Using linear scaling for N={num_vars} (factor: {scaling_factor:.1f}x)")
 
-        # Scale learning rate (smaller for larger systems)
-        lr = self.base_lr * max(0.5, 1.0 / np.sqrt(num_vars / 10))
+        # Scale training steps linearly with dimension
+        n_steps = int(self.base_n_steps * scaling_factor)
 
-        # Scale regularization (stronger for larger systems)
-        reg = self.base_reg * max(1.0, num_vars / 10)
-        gl_reg = self.base_gl_reg * max(1.0, np.sqrt(num_vars / 10))
-
-        # Scale network dimensions
-        knockout_hidden = max(self.base_knockout_hidden, num_vars * 2)
-        score_hidden = [max(dim, num_vars) for dim in self.base_score_hidden]
+        # Scale model layer sizes linearly with dimension
+        knockout_hidden = int(self.base_knockout_hidden * scaling_factor)
+        score_hidden = [int(dim * scaling_factor) for dim in self.base_score_hidden]
         correction_hidden = [
-            max(dim, num_vars // 2) for dim in self.base_correction_hidden
+            int(dim * scaling_factor) for dim in self.base_correction_hidden
         ]
 
+        # Keep other hyperparameters fixed (they were optimized for this problem)
         config = {
             "n_steps": n_steps,
-            "lr": lr,
-            "alpha": self.base_alpha,
-            "reg": reg,
-            "gl_reg": gl_reg,
+            "lr": self.base_lr,  # Keep fixed
+            "alpha": self.base_alpha,  # Keep fixed
+            "reg": self.base_reg,  # Keep fixed
+            "gl_reg": self.base_gl_reg,  # Keep fixed
             "knockout_hidden": knockout_hidden,
             "score_hidden": score_hidden,
             "correction_hidden": correction_hidden,
             "sigma": self.sigma,
             "device": self.device,
-            "batch_size": self.base_batch_size,  # Use base_batch_size
+            "batch_size": self.base_batch_size,  # Keep fixed
         }
-
-        print(
-            f"Auto-scaled config: n_steps={n_steps}, lr={lr:.2e}, reg={reg:.2e}, gl_reg={gl_reg:.3f}"
-        )
 
         return config
 
@@ -913,7 +905,7 @@ def run_scaling_experiment(
                 f"\n[{current_exp}/{total_experiments}] System size: {num_vars}, Seed: {seed}"
             )
 
-            result = run_single_experiment(num_vars, methods, seed)
+            result = run_single_experiment_silent(num_vars, methods, seed)
             result["experiment_id"] = current_exp
             result["total_experiments"] = total_experiments
             all_results.append(result)
@@ -990,88 +982,58 @@ def main():
     # Set fixed cores for reproducible timing
     NUM_CORES = 4
 
-    # QUICK TEST: Run a small example first to inspect matrices
     print("=" * 60)
-    print("QUICK TEST - Inspecting adjacency matrices with N=5")
+    print("SF2M CAUSAL DISCOVERY SCALING EXPERIMENT")
     print("=" * 60)
-
-    # Create a small test configuration
-    test_sf2m_config = SF2MConfig(
-        base_n_steps=2000,
-        base_lr=5e-3,
-        base_alpha=0.1,
-        base_reg=1e-6,
-        base_gl_reg=0.02,
-        device="cpu",
-    )
-
-    test_methods = [
-        CorrelationBasedMethod("pearson"),
-        DirectSF2MMethod(test_sf2m_config),
-    ]
-
-    # Run quick test
-    _ = run_single_experiment(10, test_methods, seed=random.randint(0, 1000))
-
-    print("\n" + "=" * 60)
-    print("QUICK TEST COMPLETE - Check matrices above!")
-    print("=" * 60)
-
-    # Ask user if they want to continue with full experiment
-    response = input("\nContinue with full experiment? (y/n): ").lower().strip()
-    if response != "y":
-        print("Experiment stopped by user.")
-        return
 
     # Define system sizes to test
     system_sizes = [10, 20, 50]
 
-    # Alternative: Mix size-specific configs with auto-scaling
-    # size_specific_configs = {
-    #     10: {'n_steps': 2000, 'lr': 2e-3},  # Only override n_steps and lr for N=10
-    #     50: {'gl_reg': 0.1, 'reg': 1e-4},   # Only override regularization for N=50
-    #     # N=20 will use auto-scaling since it's not specified
-    # }
-
+    # Best hyperparameters from hyperparameter sweep
+    # Top config: n_steps=2000, batch_size=64, reg=1e-06, alpha=0.3, lr=0.001, knockout_hidden=256
     sf2m_config = SF2MConfig(
-        # Base parameters (used for auto-scaling if size not in size_specific_configs)
-        base_n_steps=3000,
-        base_lr=1e-3,
-        base_alpha=0.1,
-        base_reg=1e-5,
+        # Base parameters for N=10 (will be scaled linearly)
+        base_n_steps=2000,
+        base_lr=0.001,
+        base_alpha=0.3,
+        base_reg=1e-06,
         base_gl_reg=0.02,
-        base_knockout_hidden=64,
-        base_score_hidden=[64, 64],
-        base_correction_hidden=[32, 32],
-        base_batch_size=32,
+        base_knockout_hidden=256,  # Will scale linearly with dimension
+        base_score_hidden=[128, 128],  # Will scale linearly with dimension
+        base_correction_hidden=[64, 64],  # Will scale linearly with dimension
+        base_batch_size=64,
         sigma=1.0,
         device="cpu",
-        # Size-specific configurations override auto-scaling
-        # size_specific_configs=size_specific_configs,
     )
 
     # Define methods to test
     methods = [
         CorrelationBasedMethod("pearson"),
-        DirectSF2MMethod(sf2m_config),
+        DirectSF2MMethod(sf2m_config, silent=True),
     ]
 
-    # Run experiments
-    print("Starting causal discovery scaling experiment...")
-    print(f"Using {NUM_CORES} cores for reproducible timing")
-    print(f"SF2M configurations:")
+    # Show scaled configurations for each system size
+    print("SF2M configurations with linear scaling:")
     for size in system_sizes:
         config = sf2m_config.get_scaled_config(size)
         print(
-            f"  N={size}: steps={config['n_steps']}, lr={config['lr']:.2e}, gl_reg={config['gl_reg']:.3f}"
+            f"  N={size}: steps={config['n_steps']}, knockout_hidden={config['knockout_hidden']}, "
+            f"score_hidden={config['score_hidden']}, correction_hidden={config['correction_hidden']}"
         )
 
+    # Run experiments
+    print(f"\nStarting scaling experiment with {NUM_CORES} cores...")
+
+    # Generate 5 random seeds
+    random_seeds = [random.randint(0, 10000) for _ in range(5)]
+    print(f"Using random seeds: {random_seeds}")
+
     results_df = run_scaling_experiment(
-        system_sizes, methods, seeds=[42, 123, 456], num_cores=NUM_CORES
+        system_sizes, methods, seeds=random_seeds, num_cores=NUM_CORES
     )
 
     # Save results and print summary
-    save_and_print_results(results_df)
+    save_and_print_results(results_df, "scaling_experiment_results.csv")
 
 
 if __name__ == "__main__":
