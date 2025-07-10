@@ -1002,7 +1002,7 @@ def main():
     sf2m_config = SF2MConfig(
         # Base parameters for N=10 (will be scaled linearly)
         base_n_steps=2000,
-        base_lr=0.001,
+        base_lr=0.0005,
         base_alpha=0.3,
         base_reg=1e-06,
         base_gl_reg=0.02,
