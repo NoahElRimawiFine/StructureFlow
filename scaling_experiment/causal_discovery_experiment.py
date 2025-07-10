@@ -1009,7 +1009,7 @@ def main():
         base_knockout_hidden=256,  # Will scale linearly with dimension
         base_score_hidden=[128, 128],  # Will scale linearly with dimension
         base_correction_hidden=[64, 64],  # Will scale linearly with dimension
-        base_batch_size=64,
+        base_batch_size=128,
         sigma=1.0,
         device="cpu",
     )
