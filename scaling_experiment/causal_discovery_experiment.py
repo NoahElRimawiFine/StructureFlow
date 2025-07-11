@@ -1187,7 +1187,7 @@ def run_scaling_experiment(
             methods = [
                 CorrelationBasedMethod("pearson"),
                 DirectSF2MMethod(fixed_hyperparams_sf2m, silent=True),
-                # NGMNodeMethod(fixed_hyperparams_ngm, silent=True),
+                NGMNodeMethod(fixed_hyperparams_ngm, silent=True),
             ]
 
             result = run_single_experiment_silent(num_vars, methods, seed)
@@ -1288,7 +1288,7 @@ def main():
     )
 
     # Define system sizes to test
-    system_sizes = [10, 20, 50, 100, 200]
+    system_sizes = [10, 20, 50, 80]
 
     print(f"\nScaling experiment setup:")
     print(f"  System sizes: {system_sizes}")
