@@ -1164,7 +1164,7 @@ def run_scaling_experiment(
 
     # NGM-NODE hyperparameters (simpler, fewer steps due to ODE cost)
     fixed_hyperparams_ngm = {
-        "n_steps": 1000,  # Fewer steps due to ODE integration cost
+        "n_steps": 4000,  # Fewer steps due to ODE integration cost
         "lr": 0.005,
         "gl_reg": 0.05,
         "hidden_dim": 128,  # Single hidden layer size
