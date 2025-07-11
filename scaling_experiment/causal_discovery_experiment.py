@@ -1288,7 +1288,7 @@ def main():
     )
 
     # Define system sizes to test
-    system_sizes = [10, 20, 50, 80]
+    system_sizes = [10, 25, 50, 75]
 
     print(f"\nScaling experiment setup:")
     print(f"  System sizes: {system_sizes}")
