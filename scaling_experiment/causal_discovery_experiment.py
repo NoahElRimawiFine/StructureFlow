@@ -713,6 +713,131 @@ def evaluate_causal_discovery(
     }
 
 
+def generate_test_causal_system(num_vars: int = 5) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate a specific test causal system to distinguish transpose orientations.
+
+    Creates a graph where variable 0 affects all other variables (first row all 1s).
+    This creates a clear pattern that should only match one orientation.
+
+    Args:
+        num_vars: Number of variables in the system
+
+    Returns:
+        adjacency_matrix: True causal adjacency matrix
+        dynamics_matrix: System dynamics matrix for simulation
+    """
+    # Create adjacency matrix: variable 0 affects all others
+    adjacency_matrix = np.zeros((num_vars, num_vars))
+    adjacency_matrix[0, 1:] = 1.0  # Variable 0 → all others
+
+    # Add a few more edges to make it more realistic but keep the pattern clear
+    if num_vars >= 4:
+        adjacency_matrix[1, 3] = 0.5  # Variable 1 → Variable 3
+    if num_vars >= 5:
+        adjacency_matrix[2, 4] = 0.5  # Variable 2 → Variable 4
+
+    # Dynamics matrix is transpose
+    dynamics_matrix = adjacency_matrix.T
+
+    return adjacency_matrix, dynamics_matrix
+
+
+def run_transpose_test():
+    """Run a specific test to determine correct transpose orientation."""
+    print("\n" + "=" * 60)
+    print("TRANSPOSE ORIENTATION TEST")
+    print("=" * 60)
+
+    # Create test system with clear pattern
+    test_size = 10
+    true_adjacency, dynamics_matrix = generate_test_causal_system(test_size)
+
+    print("Test system: Variable 0 affects all others")
+    print("True adjacency matrix (adjacency[i,j] = variable i → variable j):")
+    np.set_printoptions(precision=2, suppress=True)
+    print(true_adjacency)
+
+    print(
+        "\nDynamics matrix (dynamics[i,j] = variable j affects derivative of variable i):"
+    )
+    print(dynamics_matrix)
+
+    # Simulate data
+    time_series_data = simulate_time_series(
+        dynamics_matrix, seed=random.randint(0, 1000000)
+    )
+
+    # Test both Correlation and SF2M methods
+    correlation_method = CorrelationBasedMethod("pearson")
+
+    # Create SF2M method with base config
+    sf2m_config = SF2MConfig(
+        base_n_steps=2000,
+        base_lr=0.001,
+        base_alpha=0.3,
+        base_reg=1e-06,
+        base_gl_reg=0.02,
+        base_knockout_hidden=64,
+        base_score_hidden=[32, 32],
+        base_correction_hidden=[16, 16],
+        base_batch_size=32,
+        sigma=1.0,
+        device="cpu",
+    )
+
+    sf2m_method = DirectSF2MMethod(
+        {
+            "n_steps": sf2m_config.base_n_steps,
+            "lr": sf2m_config.base_lr,
+            "alpha": sf2m_config.base_alpha,
+            "reg": sf2m_config.base_reg,
+            "gl_reg": sf2m_config.base_gl_reg,
+            "knockout_hidden": sf2m_config.base_knockout_hidden,
+            "score_hidden": sf2m_config.base_score_hidden,
+            "correction_hidden": sf2m_config.base_correction_hidden,
+            "batch_size": sf2m_config.base_batch_size,
+            "sigma": sf2m_config.sigma,
+            "device": sf2m_config.device,
+        },
+        silent=False,
+    )
+
+    # Run Correlation method first
+    print(f"\nRunning Correlation method...")
+    correlation_pred = correlation_method.fit(time_series_data)
+    print("Correlation predicted matrix:")
+    print(correlation_pred)
+
+    # Analyze correlation pattern
+    print("\nCorrelation analysis:")
+    print(f"Row 0 sum: {np.sum(correlation_pred[0, :]):.3f}")
+    print(f"Col 0 sum: {np.sum(correlation_pred[:, 0]):.3f}")
+    print(f"Row 0 values: {correlation_pred[0, :]}")
+    print(f"Col 0 values: {correlation_pred[:, 0]}")
+
+    # Run SF2M
+    print(f"\nRunning SF2M method...")
+    sf2m_pred = sf2m_method.fit(time_series_data, true_adjacency)
+
+    # Analyze SF2M pattern
+    print("\nSF2M analysis:")
+    print(f"Row 0 sum: {np.sum(sf2m_pred[0, :]):.3f}")
+    print(f"Col 0 sum: {np.sum(sf2m_pred[:, 0]):.3f}")
+    print(f"Row 0 values: {sf2m_pred[0, :]}")
+    print(f"Col 0 values: {sf2m_pred[:, 0]}")
+
+    print(f"\nTraining completed in {sf2m_method.get_training_time():.2f}s")
+
+    # Final diagnosis
+    print("\n" + "=" * 60)
+    print("DIAGNOSIS:")
+    print("If Correlation shows ONLY row 0 pattern → Data generation is correct")
+    print("If Correlation shows BOTH row 0 AND col 0 pattern → Data generation issue")
+    print("If SF2M differs from Correlation → SF2M-specific issue")
+    print("=" * 60)
+
+
 def run_single_experiment(
     num_vars: int, methods: List[CausalDiscoveryMethod], seed: int = 42
 ) -> Dict[str, Any]:
@@ -840,11 +965,11 @@ def run_scaling_experiment(
     num_cores: int = 4,
 ) -> pd.DataFrame:
     """
-    Run causal discovery scaling experiment.
+    Run causal discovery scaling experiment with fixed hyperparameters.
 
     Args:
         system_sizes: List of system sizes to test
-        sf2m_config: SF2M configuration object for scaling
+        sf2m_config: SF2M configuration object (uses base config for all sizes)
         seeds: List of random seeds for multiple runs
         num_cores: Number of cores to use for reproducible timing
 
@@ -860,6 +985,31 @@ def run_scaling_experiment(
 
     start_time = time.time()
 
+    # Create fixed hyperparameters (same for all system sizes)
+    fixed_hyperparams = {
+        "n_steps": sf2m_config.base_n_steps,
+        "lr": sf2m_config.base_lr,
+        "alpha": sf2m_config.base_alpha,
+        "reg": sf2m_config.base_reg,
+        "gl_reg": sf2m_config.base_gl_reg,
+        "knockout_hidden": sf2m_config.base_knockout_hidden,
+        "score_hidden": sf2m_config.base_score_hidden,
+        "correction_hidden": sf2m_config.base_correction_hidden,
+        "batch_size": sf2m_config.base_batch_size,
+        "sigma": sf2m_config.sigma,
+        "device": sf2m_config.device,
+    }
+
+    print(
+        f"  steps={fixed_hyperparams['n_steps']}, knockout_hidden={fixed_hyperparams['knockout_hidden']}"
+    )
+    print(
+        f"  score_hidden={fixed_hyperparams['score_hidden']}, correction_hidden={fixed_hyperparams['correction_hidden']}"
+    )
+    print(
+        f"  lr={fixed_hyperparams['lr']}, alpha={fixed_hyperparams['alpha']}, reg={fixed_hyperparams['reg']}"
+    )
+
     for seed in seeds:
         for num_vars in system_sizes:
             current_exp += 1
@@ -867,10 +1017,10 @@ def run_scaling_experiment(
                 f"\n[{current_exp}/{total_experiments}] System size: {num_vars}, Seed: {seed}"
             )
 
-            # Create methods with scaled configurations for this system size
+            # Create methods with fixed configurations (same for all system sizes)
             methods = [
                 CorrelationBasedMethod("pearson"),
-                DirectSF2MMethod(sf2m_config.get_scaled_config(num_vars), silent=True),
+                DirectSF2MMethod(fixed_hyperparams, silent=True),
             ]
 
             result = run_single_experiment_silent(num_vars, methods, seed)
@@ -962,79 +1112,22 @@ def main():
         base_alpha=0.3,
         base_reg=1e-06,
         base_gl_reg=0.02,
-        base_knockout_hidden=256,  # Will scale linearly with dimension
-        base_score_hidden=[128, 128],  # Will scale linearly with dimension
-        base_correction_hidden=[64, 64],  # Will scale linearly with dimension
+        base_knockout_hidden=256,
+        base_score_hidden=[128, 128],
+        base_correction_hidden=[64, 64],
         base_batch_size=64,
         sigma=1.0,
         device="cpu",
     )
 
-    # QUICK TEST: Run a single experiment on N=20
-    print("QUICK TEST - Testing on N=20")
-    print("-" * 30)
-
-    test_size = 10
-    test_seed = random.randint(0, 1000)
-
-    # Show base configuration (no scaling for quick test)
-    print(f"Using base configuration for quick test (N={test_size}):")
-    print(
-        f"  steps={sf2m_config.base_n_steps}, knockout_hidden={sf2m_config.base_knockout_hidden}"
-    )
-    print(
-        f"  score_hidden={sf2m_config.base_score_hidden}, correction_hidden={sf2m_config.base_correction_hidden}"
-    )
-    print(
-        f"  lr={sf2m_config.base_lr}, alpha={sf2m_config.base_alpha}, reg={sf2m_config.base_reg}"
-    )
-
-    # Create methods with base config for quick test
-    test_methods = [
-        CorrelationBasedMethod("pearson"),
-        DirectSF2MMethod(
-            {
-                "n_steps": sf2m_config.base_n_steps,
-                "lr": sf2m_config.base_lr,
-                "alpha": sf2m_config.base_alpha,
-                "reg": sf2m_config.base_reg,
-                "gl_reg": sf2m_config.base_gl_reg,
-                "knockout_hidden": sf2m_config.base_knockout_hidden,
-                "score_hidden": sf2m_config.base_score_hidden,
-                "correction_hidden": sf2m_config.base_correction_hidden,
-                "batch_size": sf2m_config.base_batch_size,
-                "sigma": sf2m_config.sigma,
-                "device": sf2m_config.device,
-            },
-            silent=False,
-        ),
-    ]
-
-    # Run single test experiment
-    print(f"\nRunning test experiment (N={test_size}, seed={test_seed})...")
-    _ = run_single_experiment(test_size, test_methods, seed=test_seed)
-
-    print("\n" + "=" * 60)
-    print("QUICK TEST COMPLETE")
-    print("=" * 60)
-
-    # Ask user if they want to continue with full experiment
-    response = input("\nContinue with full scaling experiment? (y/n): ").lower().strip()
-    if response != "y":
-        print("Experiment stopped by user.")
-        return
-
     # Define system sizes to test
     system_sizes = [10, 20, 50]
 
-    # Show scaled configurations for each system size
-    print("\nSF2M configurations with linear scaling:")
-    for size in system_sizes:
-        config = sf2m_config.get_scaled_config(size)
-        print(
-            f"  N={size}: steps={config['n_steps']}, knockout_hidden={config['knockout_hidden']}, "
-            f"score_hidden={config['score_hidden']}, correction_hidden={config['correction_hidden']}"
-        )
+    print(f"\nScaling experiment setup:")
+    print(f"  System sizes: {system_sizes}")
+    print(f"  Seeds per size: 5 (for averaging over different random graphs)")
+    print(f"  Total experiments: {len(system_sizes) * 5}")
+    print(f"  Fixed hyperparameters (no scaling with system size)")
 
     # Run experiments
     print(f"\nStarting scaling experiment with {NUM_CORES} cores...")
