@@ -788,78 +788,39 @@ class NGMNodeMethod(CausalDiscoveryMethod):
                     print(f"    Step {step}/{self.hyperparams['n_steps']}")
 
         if not self.silent:
-            print(f"  NGM-NODE Debug - Training completed, computing Jacobian...")
+            print(f"  NGM-NODE Debug - Training completed, extracting causal graph...")
 
-        # Extract causal graph via Jacobian computation
+        # Extract causal graph directly from network weights (same as SF2M)
         func_ode.eval()
+        with torch.no_grad():
+            # Get the causal graph from the network weights
+            W_v_raw = func_ode.causal_graph(w_threshold=0.0)
 
-        # Compute Jacobians across all timepoints and samples
-        jacobians = []
+            # Handle both tensor and numpy array cases
+            if isinstance(W_v_raw, torch.Tensor):
+                W_v_np = W_v_raw.cpu().numpy()
+            else:
+                W_v_np = W_v_raw
 
-        for t_idx in range(num_timepoints):
-            t_tensor = torch.tensor(t_idx * (1.0 / (num_timepoints - 1)), device=device)
-            data_t = data_by_timepoint[t_idx].to(device)
+            if not self.silent:
+                print(f"  NGM-NODE Debug - Raw W_v shape: {W_v_np.shape}")
 
-            # Sample subset for Jacobian computation (can be expensive)
-            max_samples_for_jacobian = min(50, data_t.shape[0])
-            sample_indices = torch.randperm(data_t.shape[0])[:max_samples_for_jacobian]
-            samples_t = data_t[sample_indices]
+            # Use consistent orientation (same as SF2M)
+            predicted_adjacency = W_v_np.T
 
-            for sample_idx in range(samples_t.shape[0]):
-                x_sample = samples_t[sample_idx].clone().detach().requires_grad_(True)
+            # Zero out diagonal values
+            np.fill_diagonal(predicted_adjacency, 0)
 
-                # Create function for this timepoint
-                x_input = x_sample.unsqueeze(0).unsqueeze(1)  # Add batch and time dims
-                t_input = t_tensor.unsqueeze(0).unsqueeze(1)  # Add batch and time dims
-
-                output = func_ode(t_input, x_input)
-                output = output.squeeze()
-
-                # Compute Jacobian for each output dimension
-                jacobian_sample = torch.zeros(num_vars, num_vars, device=device)
-
-                for i in range(num_vars):
-                    # Zero out previous gradients
-                    if x_sample.grad is not None:
-                        x_sample.grad.zero_()
-
-                    # Select the i-th output
-                    output_i = output[i] if output.dim() > 0 else output
-
-                    # Compute gradient of output_i w.r.t. x_sample
-                    grads = torch.autograd.grad(
-                        outputs=output_i,
-                        inputs=x_sample,
-                        retain_graph=True,
-                        create_graph=False,
-                        only_inputs=True,
-                    )[0]
-
-                    jacobian_sample[i, :] = grads
-
-                jacobians.append(jacobian_sample)
-
-        # Average Jacobians and negate (since dx/dt = -A*x convention)
-        if jacobians:
-            avg_jacobian = torch.stack(jacobians).mean(dim=0)
-            predicted_adjacency = (-avg_jacobian).cpu().numpy()
-        else:
-            predicted_adjacency = np.zeros((num_vars, num_vars))
-
-        # Zero out diagonal
-        np.fill_diagonal(predicted_adjacency, 0)
-
-        if not self.silent:
-            print(f"  NGM-NODE Debug - Computed Jacobian from {len(jacobians)} samples")
-            if true_adjacency is not None:
+            if not self.silent:
                 print(
-                    f"  NGM-NODE Debug - Predicted adjacency shape: {predicted_adjacency.shape}"
+                    f"  NGM-NODE Debug - Using W_v.T (transposed) for consistency with SF2M"
                 )
-                print("Ground Truth:")
-                np.set_printoptions(precision=2, suppress=True)
-                print(true_adjacency)
-                print("NGM-NODE Predicted:")
-                print(predicted_adjacency)
+                if true_adjacency is not None:
+                    print("Ground Truth:")
+                    np.set_printoptions(precision=2, suppress=True)
+                    print(true_adjacency)
+                    print("NGM-NODE Predicted:")
+                    print(predicted_adjacency)
 
         self._training_time = time.time() - start_time
         return predicted_adjacency
