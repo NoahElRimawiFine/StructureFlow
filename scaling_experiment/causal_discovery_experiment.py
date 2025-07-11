@@ -592,10 +592,6 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
             if not self.silent:
                 print(f"  SF2M Debug - Raw W_v shape: {W_v_np.shape}")
 
-            # Use consistent orientation based on our matrix convention understanding
-            # SF2M's causal_graph() returns W[i,j] meaning variable j influences variable i's dynamics
-            # Our convention: adjacency[i,j] means variable i → variable j
-            # Therefore, we use W.T to match our convention
             predicted_adjacency = W_v_np.T
 
             # Zero out diagonal values - we don't need self-loops
@@ -805,7 +801,6 @@ class NGMNodeMethod(CausalDiscoveryMethod):
             if not self.silent:
                 print(f"  NGM-NODE Debug - Raw W_v shape: {W_v_np.shape}")
 
-            # Use consistent orientation (same as SF2M)
             predicted_adjacency = W_v_np.T
 
             # Zero out diagonal values
@@ -1168,7 +1163,7 @@ def run_scaling_experiment(
         "lr": 0.005,
         "gl_reg": 0.05,
         "hidden_dim": 128,  # Single hidden layer size
-        "batch_size": 32,
+        "batch_size": 64,
         "l2_reg": 0.01,
         "l1_reg": 0.0,
         "device": sf2m_config.device,
@@ -1191,8 +1186,8 @@ def run_scaling_experiment(
             # Create methods with fixed configurations
             methods = [
                 CorrelationBasedMethod("pearson"),
-                # DirectSF2MMethod(fixed_hyperparams_sf2m, silent=True),
-                NGMNodeMethod(fixed_hyperparams_ngm, silent=True),
+                DirectSF2MMethod(fixed_hyperparams_sf2m, silent=True),
+                # NGMNodeMethod(fixed_hyperparams_ngm, silent=True),
             ]
 
             result = run_single_experiment_silent(num_vars, methods, seed)
