@@ -90,8 +90,8 @@ def generate_causal_system(
 
 def simulate_time_series(
     dynamics_matrix: np.ndarray,
-    num_timepoints: int = 5,  # Changed from 10 to 5
-    num_samples: int = 500,
+    num_timepoints: int = 5,
+    num_samples: int = 1000,
     noise_std: float = 0.1,
     dt: float = 0.1,
     seed: int = 42,
@@ -376,284 +376,274 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
         if not self.silent:
             print(f"  SF2M Debug - Input data shape: {time_series_data.shape}")
 
-        try:
-            # Convert data to AnnData format
-            adata = create_anndata_from_time_series(time_series_data)
-            if not self.silent:
-                print(
-                    f"  SF2M Debug - Created AnnData: {adata.shape}, times: {adata.obs['t'].unique()}"
+        # Convert data to AnnData format
+        adata = create_anndata_from_time_series(time_series_data)
+        if not self.silent:
+            print(
+                f"  SF2M Debug - Created AnnData: {adata.shape}, times: {adata.obs['t'].unique()}"
+            )
+
+        # Calculate time parameters
+        T_max = int(adata.obs["t"].max())
+        T_times = T_max + 1
+        DT_data = 1.0 / T_times
+
+        if not self.silent:
+            print(
+                f"  SF2M Debug - T_max: {T_max}, T_times: {T_times}, DT_data: {DT_data}"
+            )
+
+        # Set device
+        device = torch.device(self.hyperparams["device"])
+
+        # Create OTFM model for our single dataset
+        x_tensor = torch.tensor(adata.X, dtype=torch.float32)
+        t_idx = torch.tensor(adata.obs["t"], dtype=torch.long)
+
+        otfm = EntropicOTFM(
+            x=x_tensor,
+            t_idx=t_idx,
+            dt=DT_data,
+            sigma=self.hyperparams["sigma"],
+            T=T_times,
+            dim=num_vars,
+            device=device,
+            held_out_time=None,
+        )
+
+        if not self.silent:
+            print(f"  SF2M Debug - Created OTFM model")
+
+        # Create SF2M neural networks
+        dims = [num_vars, self.hyperparams["knockout_hidden"], 1]
+
+        # No knockout masks for single wild-type dataset
+        knockout_masks = [np.ones((num_vars, num_vars), dtype=np.float32)]
+
+        func_v = MLPODEFKO(
+            dims=dims,
+            GL_reg=self.hyperparams["gl_reg"],
+            bias=True,
+            knockout_masks=knockout_masks,
+            device=device,
+        )
+
+        score_net = CONDMLP(
+            d=num_vars,
+            hidden_sizes=self.hyperparams["score_hidden"],
+            time_varying=True,
+            conditional=True,
+            conditional_dim=num_vars,
+            device=device,
+        )
+
+        v_correction = MLP(
+            d=num_vars,
+            hidden_sizes=self.hyperparams["correction_hidden"],
+            time_varying=True,
+        )
+
+        # Move models to device
+        func_v = func_v.to(device)
+        score_net = score_net.to(device)
+        v_correction = v_correction.to(device)
+
+        if not self.silent:
+            print(f"  SF2M Debug - Created neural networks")
+
+        # Create conditional vector (all zeros for wild-type)
+        # Use adaptive batch size based on dataset size
+        adaptive_batch_size = min(self.hyperparams["batch_size"], num_samples // 4)
+        cond_vector = torch.zeros(adaptive_batch_size, num_vars).to(device)
+
+        # Setup optimizer
+        params_to_optimize = (
+            list(func_v.parameters())
+            + list(score_net.parameters())
+            + list(v_correction.parameters())
+        )
+
+        optimizer = torch.optim.AdamW(
+            params_to_optimize,
+            lr=self.hyperparams["lr"],
+            eps=1e-7,
+        )
+
+        if not self.silent:
+            print(
+                f"  SF2M Debug - Starting training for {self.hyperparams['n_steps']} steps with batch_size={adaptive_batch_size}..."
+            )
+        else:
+            print(
+                f"  SF2M: Training {self.hyperparams['n_steps']} steps (batch_size={adaptive_batch_size})..."
+            )
+
+        # Training loop
+        for step in range(self.hyperparams["n_steps"]):
+            optimizer.zero_grad()
+
+            # Sample bridging flows from OTFM
+            _x, _s, _u, _t, _t_orig = otfm.sample_bridges_flows(
+                batch_size=adaptive_batch_size, skip_time=None
+            )
+
+            # Move to device
+            _x = _x.to(device)
+            _s = _s.to(device)
+            _u = _u.to(device)
+            _t = _t.to(device)
+            _t_orig = _t_orig.to(device)
+
+            B = _x.shape[0]
+
+            # Expand conditional vector to match batch size
+            cond_expanded = cond_vector.repeat(B // cond_vector.shape[0] + 1, 1)[:B]
+
+            # Prepare inputs
+            v_input = _x.unsqueeze(1)
+            t_input = _t.unsqueeze(1)
+
+            # Score net output
+            s_fit = score_net(_t, _x, cond_expanded).squeeze(1)
+
+            # Flow net output with correction (after warmup)
+            if step <= 500:
+                # Warmup phase
+                v_fit = func_v(t_input, v_input).squeeze(1) - (
+                    self.hyperparams["sigma"] ** 2 / 2
+                ) * score_net(_t, _x, cond_expanded)
+            else:
+                # Full training phase with correction
+                v_fit = func_v(t_input, v_input).squeeze(1) + v_correction(_t, _x)
+                v_fit = v_fit - (self.hyperparams["sigma"] ** 2 / 2) * score_net(
+                    _t, _x, cond_expanded
                 )
 
-            # Calculate time parameters
-            T_max = int(adata.obs["t"].max())
-            T_times = T_max + 1
-            DT_data = 1.0 / T_times
+            # Compute losses
+            L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
+            L_flow = torch.mean((_t_orig * (1 - _t_orig)) * (v_fit * DT_data - _u) ** 2)
+            L_reg = func_v.l2_reg() + func_v.fc1_reg()
 
-            if not self.silent:
-                print(
-                    f"  SF2M Debug - T_max: {T_max}, T_times: {T_times}, DT_data: {DT_data}"
-                )
+            # L2 regularization for correction network
+            L_reg_correction = 0.0
+            for param in v_correction.parameters():
+                L_reg_correction += torch.sum(param**2)
 
-            # Set device
-            device = torch.device(self.hyperparams["device"])
-
-            # Create OTFM model for our single dataset
-            x_tensor = torch.tensor(adata.X, dtype=torch.float32)
-            t_idx = torch.tensor(adata.obs["t"], dtype=torch.long)
-
-            otfm = EntropicOTFM(
-                x=x_tensor,
-                t_idx=t_idx,
-                dt=DT_data,
-                sigma=self.hyperparams["sigma"],
-                T=T_times,
-                dim=num_vars,
-                device=device,
-                held_out_time=None,
-            )
-
-            if not self.silent:
-                print(f"  SF2M Debug - Created OTFM model")
-
-            # Create SF2M neural networks
-            dims = [num_vars, self.hyperparams["knockout_hidden"], 1]
-
-            # No knockout masks for single wild-type dataset
-            knockout_masks = [np.ones((num_vars, num_vars), dtype=np.float32)]
-
-            func_v = MLPODEFKO(
-                dims=dims,
-                GL_reg=self.hyperparams["gl_reg"],
-                bias=True,
-                knockout_masks=knockout_masks,
-                device=device,
-            )
-
-            score_net = CONDMLP(
-                d=num_vars,
-                hidden_sizes=self.hyperparams["score_hidden"],
-                time_varying=True,
-                conditional=True,
-                conditional_dim=num_vars,
-                device=device,
-            )
-
-            v_correction = MLP(
-                d=num_vars,
-                hidden_sizes=self.hyperparams["correction_hidden"],
-                time_varying=True,
-            )
-
-            # Move models to device
-            func_v = func_v.to(device)
-            score_net = score_net.to(device)
-            v_correction = v_correction.to(device)
-
-            if not self.silent:
-                print(f"  SF2M Debug - Created neural networks")
-
-            # Create conditional vector (all zeros for wild-type)
-            # Use adaptive batch size based on dataset size
-            adaptive_batch_size = min(self.hyperparams["batch_size"], num_samples // 4)
-            cond_vector = torch.zeros(adaptive_batch_size, num_vars).to(device)
-
-            # Setup optimizer
-            params_to_optimize = (
-                list(func_v.parameters())
-                + list(score_net.parameters())
-                + list(v_correction.parameters())
-            )
-
-            optimizer = torch.optim.AdamW(
-                params_to_optimize,
-                lr=self.hyperparams["lr"],
-                eps=1e-7,
-            )
-
-            if not self.silent:
-                print(
-                    f"  SF2M Debug - Starting training for {self.hyperparams['n_steps']} steps with batch_size={adaptive_batch_size}..."
+            # Loss combination logic
+            if step < 100:
+                # Train only score initially
+                L = self.hyperparams["alpha"] * L_score
+            elif step <= 500:
+                # Mix score + flow + small reg
+                L = (
+                    self.hyperparams["alpha"] * L_score
+                    + (1 - self.hyperparams["alpha"]) * L_flow
+                    + self.hyperparams["reg"] * L_reg
                 )
             else:
-                print(
-                    f"  SF2M: Training {self.hyperparams['n_steps']} steps (batch_size={adaptive_batch_size})..."
+                # Full combined loss with correction reg
+                L = (
+                    self.hyperparams["alpha"] * L_score
+                    + (1 - self.hyperparams["alpha"]) * L_flow
+                    + self.hyperparams["reg"] * L_reg
+                    + self.hyperparams["reg"] * L_reg_correction
                 )
 
-            # Training loop
-            for step in range(self.hyperparams["n_steps"]):
-                optimizer.zero_grad()
+            # Backprop and update
+            L.backward()
+            optimizer.step()
 
-                # Sample bridging flows from OTFM
-                _x, _s, _u, _t, _t_orig = otfm.sample_bridges_flows(
-                    batch_size=adaptive_batch_size, skip_time=None
-                )
-
-                # Move to device
-                _x = _x.to(device)
-                _s = _s.to(device)
-                _u = _u.to(device)
-                _t = _t.to(device)
-                _t_orig = _t_orig.to(device)
-
-                B = _x.shape[0]
-
-                # Expand conditional vector to match batch size
-                cond_expanded = cond_vector.repeat(B // cond_vector.shape[0] + 1, 1)[:B]
-
-                # Prepare inputs
-                v_input = _x.unsqueeze(1)
-                t_input = _t.unsqueeze(1)
-
-                # Score net output
-                s_fit = score_net(_t, _x, cond_expanded).squeeze(1)
-
-                # Flow net output with correction (after warmup)
-                if step <= 500:
-                    # Warmup phase
-                    v_fit = func_v(t_input, v_input).squeeze(1) - (
-                        self.hyperparams["sigma"] ** 2 / 2
-                    ) * score_net(_t, _x, cond_expanded)
-                else:
-                    # Full training phase with correction
-                    v_fit = func_v(t_input, v_input).squeeze(1) + v_correction(_t, _x)
-                    v_fit = v_fit - (self.hyperparams["sigma"] ** 2 / 2) * score_net(
-                        _t, _x, cond_expanded
-                    )
-
-                # Compute losses
-                L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
-                L_flow = torch.mean(
-                    (_t_orig * (1 - _t_orig)) * (v_fit * DT_data - _u) ** 2
-                )
-                L_reg = func_v.l2_reg() + func_v.fc1_reg()
-
-                # L2 regularization for correction network
-                L_reg_correction = 0.0
-                for param in v_correction.parameters():
-                    L_reg_correction += torch.sum(param**2)
-
-                # Loss combination logic
-                if step < 100:
-                    # Train only score initially
-                    L = self.hyperparams["alpha"] * L_score
-                elif step <= 500:
-                    # Mix score + flow + small reg
-                    L = (
-                        self.hyperparams["alpha"] * L_score
-                        + (1 - self.hyperparams["alpha"]) * L_flow
-                        + self.hyperparams["reg"] * L_reg
-                    )
-                else:
-                    # Full combined loss with correction reg
-                    L = (
-                        self.hyperparams["alpha"] * L_score
-                        + (1 - self.hyperparams["alpha"]) * L_flow
-                        + self.hyperparams["reg"] * L_reg
-                        + self.hyperparams["reg"] * L_reg_correction
-                    )
-
-                # Backprop and update
-                L.backward()
-                optimizer.step()
-
-                # Proximal step (group-lasso style)
-                with torch.no_grad():
-                    # Proximal operator for group lasso regularization
-                    w = func_v.fc1.weight
-                    d = dims[0]
-                    d_hidden = dims[1]
-                    wadj = w.view(d, d_hidden, d)
-                    tmp = (
-                        torch.sum(wadj**2, dim=1).sqrt()
-                        - self.hyperparams["gl_reg"] * 0.01
-                    )
-                    alpha_ = torch.clamp(tmp, min=0)
-                    v_ = torch.nn.functional.normalize(wadj, dim=1) * alpha_[:, None, :]
-                    w.copy_(v_.view(-1, d))
-
-                if step % 200 == 0:
-                    if not self.silent:
-                        print(
-                            f"    Step {step}/{self.hyperparams['n_steps']}, Loss: {L.item():.4f}"
-                        )
-                    elif (
-                        step % 1000 == 0
-                    ):  # Show progress every 1000 steps in silent mode
-                        print(f"    Step {step}/{self.hyperparams['n_steps']}")
-
-            if not self.silent:
-                print(f"  SF2M Debug - Training completed")
-
-            # Extract causal graph
-            func_v.eval()
+            # Proximal step (group-lasso style)
             with torch.no_grad():
-                # Get the causal graph from the velocity field
-                W_v_raw = func_v.causal_graph(w_threshold=0.0)
+                # Proximal operator for group lasso regularization
+                w = func_v.fc1.weight
+                d = dims[0]
+                d_hidden = dims[1]
+                wadj = w.view(d, d_hidden, d)
+                tmp = (
+                    torch.sum(wadj**2, dim=1).sqrt() - self.hyperparams["gl_reg"] * 0.01
+                )
+                alpha_ = torch.clamp(tmp, min=0)
+                v_ = torch.nn.functional.normalize(wadj, dim=1) * alpha_[:, None, :]
+                w.copy_(v_.view(-1, d))
 
-                # Handle both tensor and numpy array cases
-                if isinstance(W_v_raw, torch.Tensor):
-                    W_v_np = W_v_raw.cpu().numpy()
-                else:
-                    W_v_np = W_v_raw
-
-                if not self.silent:
-                    print(f"  SF2M Debug - Raw W_v shape: {W_v_np.shape}")
-
-                # Use consistent orientation based on our matrix convention understanding
-                # SF2M's causal_graph() returns W[i,j] meaning variable j influences variable i's dynamics
-                # Our convention: adjacency[i,j] means variable i → variable j
-                # Therefore, we use W.T to match our convention
-                predicted_adjacency = W_v_np.T
-
-                # Zero out diagonal values - we don't need self-loops
-                np.fill_diagonal(predicted_adjacency, 0)
-
+            if step % 200 == 0:
                 if not self.silent:
                     print(
-                        f"  SF2M Debug - Using W_v.T (transposed) based on matrix conventions"
+                        f"    Step {step}/{self.hyperparams['n_steps']}, Loss: {L.item():.4f}"
+                    )
+                elif step % 1000 == 0:  # Show progress every 1000 steps in silent mode
+                    print(f"    Step {step}/{self.hyperparams['n_steps']}")
+
+        if not self.silent:
+            print(f"  SF2M Debug - Training completed")
+
+        # Extract causal graph
+        func_v.eval()
+        with torch.no_grad():
+            # Get the causal graph from the velocity field
+            W_v_raw = func_v.causal_graph(w_threshold=0.0)
+
+            # Handle both tensor and numpy array cases
+            if isinstance(W_v_raw, torch.Tensor):
+                W_v_np = W_v_raw.cpu().numpy()
+            else:
+                W_v_np = W_v_raw
+
+            if not self.silent:
+                print(f"  SF2M Debug - Raw W_v shape: {W_v_np.shape}")
+
+            # Use consistent orientation based on our matrix convention understanding
+            # SF2M's causal_graph() returns W[i,j] meaning variable j influences variable i's dynamics
+            # Our convention: adjacency[i,j] means variable i → variable j
+            # Therefore, we use W.T to match our convention
+            predicted_adjacency = W_v_np.T
+
+            # Zero out diagonal values - we don't need self-loops
+            np.fill_diagonal(predicted_adjacency, 0)
+
+            if not self.silent:
+                print(
+                    f"  SF2M Debug - Using W_v.T (transposed) based on matrix conventions"
+                )
+
+            # If we have true adjacency, show both orientations for debugging but don't use for selection
+            if true_adjacency is not None:
+                if not self.silent:
+                    print(f"  SF2M Debug - Matrix comparison:")
+                    print("Ground Truth:")
+                    np.set_printoptions(precision=2, suppress=True)
+                    print(true_adjacency)
+
+                    print(f"SF2M direct:")
+                    W_v_direct = W_v_np.copy()
+                    np.fill_diagonal(W_v_direct, 0)
+                    print(W_v_direct)
+
+                    print(f"SF2M.T (used):")
+                    print(predicted_adjacency)
+
+                # Zero out diagonal for evaluation (self-loops not considered)
+                true_adj_eval = true_adjacency.copy()
+                np.fill_diagonal(true_adj_eval, 0)
+
+                # Evaluate version 1 (direct W_v)
+                pred_v1 = W_v_np.copy()
+                np.fill_diagonal(pred_v1, 0)
+                metrics_v1 = evaluate_causal_discovery(true_adj_eval, pred_v1)
+                if not self.silent:
+                    print(
+                        f"    Direct W_v: AUROC={metrics_v1['AUROC']:.4f}, AUPRC={metrics_v1['AUPRC']:.4f}"
                     )
 
-                # If we have true adjacency, show both orientations for debugging but don't use for selection
-                if true_adjacency is not None:
-                    if not self.silent:
-                        print(f"  SF2M Debug - Matrix comparison:")
-                        print("Ground Truth:")
-                        np.set_printoptions(precision=2, suppress=True)
-                        print(true_adjacency)
-
-                        print(f"SF2M direct:")
-                        W_v_direct = W_v_np.copy()
-                        np.fill_diagonal(W_v_direct, 0)
-                        print(W_v_direct)
-
-                        print(f"SF2M.T (used):")
-                        print(predicted_adjacency)
-
-                    # Zero out diagonal for evaluation (self-loops not considered)
-                    true_adj_eval = true_adjacency.copy()
-                    np.fill_diagonal(true_adj_eval, 0)
-
-                    # Evaluate version 1 (direct W_v)
-                    pred_v1 = W_v_np.copy()
-                    np.fill_diagonal(pred_v1, 0)
-                    metrics_v1 = evaluate_causal_discovery(true_adj_eval, pred_v1)
-                    if not self.silent:
-                        print(
-                            f"    Direct W_v: AUROC={metrics_v1['AUROC']:.4f}, AUPRC={metrics_v1['AUPRC']:.4f}"
-                        )
-
-                    # Evaluate version 2 (W_v.T) - this is what we're using
-                    metrics_v2 = evaluate_causal_discovery(
-                        true_adj_eval, predicted_adjacency
+                # Evaluate version 2 (W_v.T) - this is what we're using
+                metrics_v2 = evaluate_causal_discovery(
+                    true_adj_eval, predicted_adjacency
+                )
+                if not self.silent:
+                    print(
+                        f"    W_v.T (used): AUROC={metrics_v2['AUROC']:.4f}, AUPRC={metrics_v2['AUPRC']:.4f}"
                     )
-                    if not self.silent:
-                        print(
-                            f"    W_v.T (used): AUROC={metrics_v2['AUROC']:.4f}, AUPRC={metrics_v2['AUPRC']:.4f}"
-                        )
-
-        except Exception as e:
-            print(f"  SF2M Error in training: {e}")
-            import traceback
 
         self._training_time = time.time() - start_time
         return predicted_adjacency
@@ -692,18 +682,13 @@ def evaluate_causal_discovery(
     y_pred = np.abs(masked_pred.flatten())
 
     # Calculate metrics using sklearn (same as plotting.py)
-    try:
-        if len(np.unique(y_true)) < 2:
-            # Handle edge case: all edges are 0 or all edges are 1
-            auroc = float("nan")
-            auprc = float("nan")
-        else:
-            auroc = roc_auc_score(y_true, y_pred)
-            auprc = average_precision_score(y_true, y_pred)
-    except Exception as e:
-        print(f"Warning: Error calculating metrics: {e}")
+    if len(np.unique(y_true)) < 2:
+        # Handle edge case: all edges are 0 or all edges are 1
         auroc = float("nan")
         auprc = float("nan")
+    else:
+        auroc = roc_auc_score(y_true, y_pred)
+        auprc = average_precision_score(y_true, y_pred)
 
     return {
         "AUROC": auroc,
@@ -1107,11 +1092,11 @@ def main():
     # from hparam sweep, top config: n_steps=2000, batch_size=64, reg=1e-06, alpha=0.3, lr=0.001, knockout_hidden=256
     sf2m_config = SF2MConfig(
         # Base parameters for N=10 (will be scaled linearly)
-        base_n_steps=2000,
-        base_lr=0.001,
+        base_n_steps=4000,
+        base_lr=5e-4,
         base_alpha=0.3,
-        base_reg=1e-06,
-        base_gl_reg=0.02,
+        base_reg=5e-07,
+        base_gl_reg=0.01,
         base_knockout_hidden=256,
         base_score_hidden=[128, 128],
         base_correction_hidden=[64, 64],
@@ -1121,7 +1106,7 @@ def main():
     )
 
     # Define system sizes to test
-    system_sizes = [10, 20, 50]
+    system_sizes = [10, 20, 50, 100, 200]
 
     print(f"\nScaling experiment setup:")
     print(f"  System sizes: {system_sizes}")
