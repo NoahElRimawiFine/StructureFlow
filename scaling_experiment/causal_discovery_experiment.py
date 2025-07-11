@@ -33,6 +33,10 @@ from src.models.components.cond_mlp import MLP as CONDMLP
 from src.models.components.simple_mlp import MLP
 from src.models.components.optimal_transport import EntropicOTFM
 
+# Additional imports for NGM-NODE
+from torchdiffeq import odeint
+from geomloss import SamplesLoss
+
 
 def set_random_seeds(seed: int):
     """Set random seeds for reproducibility."""
@@ -644,6 +648,223 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
         return predicted_adjacency
 
 
+class NGMNodeMethod(CausalDiscoveryMethod):
+    """NGM-NODE implementation using Neural ODEs and optimal transport."""
+
+    def __init__(self, hyperparams: Dict[str, Any], silent: bool = False):
+        super().__init__("NGM-NODE")
+        self.hyperparams = hyperparams
+        self.needs_true_adjacency = True
+        self.model = None
+        self.silent = silent
+
+    def fit(
+        self, time_series_data: np.ndarray, true_adjacency: np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Fit NGM-NODE model using Neural ODEs and optimal transport.
+
+        Args:
+            time_series_data: Shape (num_timepoints, num_samples, num_vars)
+
+        Returns:
+            predicted_adjacency: Predicted adjacency matrix from Jacobian
+        """
+        start_time = time.time()
+
+        num_timepoints, num_samples, num_vars = time_series_data.shape
+        if not self.silent:
+            print(f"  NGM-NODE Debug - Input data shape: {time_series_data.shape}")
+
+        # Convert to list of tensors for each timepoint
+        data_by_timepoint = []
+        for t in range(num_timepoints):
+            data_t = torch.from_numpy(time_series_data[t]).float()
+            data_by_timepoint.append(data_t)
+
+        if not self.silent:
+            print(
+                f"  NGM-NODE Debug - Created {len(data_by_timepoint)} timepoint tensors"
+            )
+
+        # Set device
+        device = torch.device(self.hyperparams["device"])
+
+        # Create Neural ODE function using MLPODEF
+        dims = [num_vars, self.hyperparams["hidden_dim"], 1]
+        func_ode = MLPODEF(
+            dims=dims,
+            GL_reg=self.hyperparams["gl_reg"],
+            bias=True,
+        )
+        func_ode = func_ode.to(device)
+
+        if not self.silent:
+            print(f"  NGM-NODE Debug - Created MLPODEF with dims {dims}")
+
+        # Setup optimizer
+        optimizer = torch.optim.Adam(
+            func_ode.parameters(),
+            lr=self.hyperparams["lr"],
+        )
+
+        # Setup optimal transport loss
+        sinkhorn_loss = SamplesLoss("sinkhorn", p=2, blur=0.05)
+
+        if not self.silent:
+            print(
+                f"  NGM-NODE Debug - Starting training for {self.hyperparams['n_steps']} steps..."
+            )
+        else:
+            print(f"  NGM-NODE: Training {self.hyperparams['n_steps']} steps...")
+
+        # Training loop
+        num_transitions = num_timepoints - 1
+        transition_times = torch.tensor([0.0, 1.0], dtype=torch.float32).to(device)
+
+        for step in range(self.hyperparams["n_steps"]):
+            optimizer.zero_grad()
+
+            # 1. Sample a random transition
+            transition_idx = np.random.randint(0, num_transitions)
+
+            # 2. Sample random cells from start and end times
+            x0_data = data_by_timepoint[transition_idx]
+            x1_data = data_by_timepoint[transition_idx + 1]
+
+            batch_size = min(
+                self.hyperparams["batch_size"], x0_data.shape[0], x1_data.shape[0]
+            )
+
+            # Sample batches
+            indices_0 = torch.randint(0, x0_data.shape[0], (batch_size,))
+            indices_1 = torch.randint(0, x1_data.shape[0], (batch_size,))
+
+            x0_batch = x0_data[indices_0].to(device)  # Starting states
+            x1_observed = x1_data[indices_1].to(device)  # Target states
+
+            # 3. Use Neural ODE to predict where x0 goes
+            # Add batch dimension for ODE integration
+            x0_ode_input = x0_batch.unsqueeze(1)  # Shape: (batch_size, 1, num_vars)
+
+            # Integrate ODE forward in time
+            x_trajectory = odeint(func_ode, x0_ode_input, transition_times)
+            x1_predicted = x_trajectory[-1].squeeze(
+                1
+            )  # Final timepoint, remove time dim
+
+            # 4. Compare predicted vs observed distributions using optimal transport
+            loss = sinkhorn_loss(x1_predicted, x1_observed)
+
+            # Add regularization
+            if self.hyperparams.get("l2_reg", 0) > 0:
+                loss += self.hyperparams["l2_reg"] * func_ode.l2_reg()
+            if self.hyperparams.get("l1_reg", 0) > 0:
+                loss += self.hyperparams["l1_reg"] * func_ode.fc1_reg()
+
+            # 5. Backprop and update
+            loss.backward()
+            optimizer.step()
+
+            # Apply proximal operator for group lasso
+            with torch.no_grad():
+                w = func_ode.fc1.weight
+                d = dims[0]
+                d_hidden = dims[1]
+                wadj = w.view(d, d_hidden, d)
+                tmp = (
+                    torch.sum(wadj**2, dim=1).sqrt() - self.hyperparams["gl_reg"] * 0.01
+                )
+                alpha_ = torch.clamp(tmp, min=0)
+                v_ = torch.nn.functional.normalize(wadj, dim=1) * alpha_[:, None, :]
+                w.copy_(v_.view(-1, d))
+
+            if step % 200 == 0:
+                if not self.silent:
+                    print(
+                        f"    Step {step}/{self.hyperparams['n_steps']}, Loss: {loss.item():.4f}"
+                    )
+                elif step % 1000 == 0:
+                    print(f"    Step {step}/{self.hyperparams['n_steps']}")
+
+        if not self.silent:
+            print(f"  NGM-NODE Debug - Training completed, computing Jacobian...")
+
+        # Extract causal graph via Jacobian computation
+        func_ode.eval()
+
+        # Compute Jacobians across all timepoints and samples
+        jacobians = []
+
+        for t_idx in range(num_timepoints):
+            t_tensor = torch.tensor(t_idx * (1.0 / (num_timepoints - 1)), device=device)
+            data_t = data_by_timepoint[t_idx].to(device)
+
+            # Sample subset for Jacobian computation (can be expensive)
+            max_samples_for_jacobian = min(50, data_t.shape[0])
+            sample_indices = torch.randperm(data_t.shape[0])[:max_samples_for_jacobian]
+            samples_t = data_t[sample_indices]
+
+            for sample_idx in range(samples_t.shape[0]):
+                x_sample = samples_t[sample_idx].clone().detach().requires_grad_(True)
+
+                # Create function for this timepoint
+                x_input = x_sample.unsqueeze(0).unsqueeze(1)  # Add batch and time dims
+                t_input = t_tensor.unsqueeze(0).unsqueeze(1)  # Add batch and time dims
+
+                output = func_ode(t_input, x_input)
+                output = output.squeeze()
+
+                # Compute Jacobian for each output dimension
+                jacobian_sample = torch.zeros(num_vars, num_vars, device=device)
+
+                for i in range(num_vars):
+                    # Zero out previous gradients
+                    if x_sample.grad is not None:
+                        x_sample.grad.zero_()
+
+                    # Select the i-th output
+                    output_i = output[i] if output.dim() > 0 else output
+
+                    # Compute gradient of output_i w.r.t. x_sample
+                    grads = torch.autograd.grad(
+                        outputs=output_i,
+                        inputs=x_sample,
+                        retain_graph=True,
+                        create_graph=False,
+                        only_inputs=True,
+                    )[0]
+
+                    jacobian_sample[i, :] = grads
+
+                jacobians.append(jacobian_sample)
+
+        # Average Jacobians and negate (since dx/dt = -A*x convention)
+        if jacobians:
+            avg_jacobian = torch.stack(jacobians).mean(dim=0)
+            predicted_adjacency = (-avg_jacobian).cpu().numpy()
+        else:
+            predicted_adjacency = np.zeros((num_vars, num_vars))
+
+        # Zero out diagonal
+        np.fill_diagonal(predicted_adjacency, 0)
+
+        if not self.silent:
+            print(f"  NGM-NODE Debug - Computed Jacobian from {len(jacobians)} samples")
+            if true_adjacency is not None:
+                print(
+                    f"  NGM-NODE Debug - Predicted adjacency shape: {predicted_adjacency.shape}"
+                )
+                print("Ground Truth:")
+                np.set_printoptions(precision=2, suppress=True)
+                print(true_adjacency)
+                print("NGM-NODE Predicted:")
+                print(predicted_adjacency)
+
+        self._training_time = time.time() - start_time
+        return predicted_adjacency
+
+
 def maskdiag(A):
     """Mask diagonal elements to zero, following the approach in plotting.py."""
     A_masked = A.copy()
@@ -966,7 +1187,7 @@ def run_scaling_experiment(
     start_time = time.time()
 
     # Create fixed hyperparameters (same for all system sizes)
-    fixed_hyperparams = {
+    fixed_hyperparams_sf2m = {
         "n_steps": sf2m_config.base_n_steps,
         "lr": sf2m_config.base_lr,
         "alpha": sf2m_config.base_alpha,
@@ -980,14 +1201,23 @@ def run_scaling_experiment(
         "device": sf2m_config.device,
     }
 
+    # NGM-NODE hyperparameters (simpler, fewer steps due to ODE cost)
+    fixed_hyperparams_ngm = {
+        "n_steps": 1000,  # Fewer steps due to ODE integration cost
+        "lr": 0.005,
+        "gl_reg": 0.05,
+        "hidden_dim": 128,  # Single hidden layer size
+        "batch_size": 32,
+        "l2_reg": 0.01,
+        "l1_reg": 0.0,
+        "device": sf2m_config.device,
+    }
+
     print(
-        f"  steps={fixed_hyperparams['n_steps']}, knockout_hidden={fixed_hyperparams['knockout_hidden']}"
+        f"  SF2M steps={fixed_hyperparams_sf2m['n_steps']}, knockout_hidden={fixed_hyperparams_sf2m['knockout_hidden']}"
     )
     print(
-        f"  score_hidden={fixed_hyperparams['score_hidden']}, correction_hidden={fixed_hyperparams['correction_hidden']}"
-    )
-    print(
-        f"  lr={fixed_hyperparams['lr']}, alpha={fixed_hyperparams['alpha']}, reg={fixed_hyperparams['reg']}"
+        f"  NGM-NODE steps={fixed_hyperparams_ngm['n_steps']}, hidden_dim={fixed_hyperparams_ngm['hidden_dim']}"
     )
 
     for seed in seeds:
@@ -997,10 +1227,11 @@ def run_scaling_experiment(
                 f"\n[{current_exp}/{total_experiments}] System size: {num_vars}, Seed: {seed}"
             )
 
-            # Create methods with fixed configurations (same for all system sizes)
+            # Create methods with fixed configurations
             methods = [
                 CorrelationBasedMethod("pearson"),
-                DirectSF2MMethod(fixed_hyperparams, silent=True),
+                # DirectSF2MMethod(fixed_hyperparams_sf2m, silent=True),
+                NGMNodeMethod(fixed_hyperparams_ngm, silent=True),
             ]
 
             result = run_single_experiment_silent(num_vars, methods, seed)
