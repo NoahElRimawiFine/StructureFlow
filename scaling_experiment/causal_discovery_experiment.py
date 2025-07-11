@@ -28,8 +28,8 @@ from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.sf2m_module import SF2MLitModule
 
 # SF2M component imports for DirectSF2MMethod
-from src.models.components.base import MLPODEFKO
-from src.models.components.cond_mlp import MLP as CONDMLP, MLPFlow
+from src.models.components.base import MLPODEF
+from src.models.components.cond_mlp import MLP as CONDMLP
 from src.models.components.simple_mlp import MLP
 from src.models.components.optimal_transport import EntropicOTFM
 
@@ -417,15 +417,10 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
         # Create SF2M neural networks
         dims = [num_vars, self.hyperparams["knockout_hidden"], 1]
 
-        # No knockout masks for single wild-type dataset
-        knockout_masks = [np.ones((num_vars, num_vars), dtype=np.float32)]
-
-        func_v = MLPODEFKO(
+        func_v = MLPODEF(
             dims=dims,
             GL_reg=self.hyperparams["gl_reg"],
             bias=True,
-            knockout_masks=knockout_masks,
-            device=device,
         )
 
         score_net = CONDMLP(
