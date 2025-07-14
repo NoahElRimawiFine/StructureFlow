@@ -8,7 +8,7 @@ import os
 # Import from our scaling experiment
 from causal_discovery_experiment import (
     SF2MConfig,
-    DirectSF2MMethod,
+    StructureFlowMethod,
     CorrelationBasedMethod,
     run_single_experiment,
     set_fixed_cores,
@@ -49,7 +49,7 @@ def create_hparam_configs() -> List[Dict[str, Any]]:
     return configs
 
 
-def create_sf2m_method_from_hparams(hparams: Dict[str, Any]) -> DirectSF2MMethod:
+def create_sf2m_method_from_hparams(hparams: Dict[str, Any]) -> StructureFlowMethod:
     """Create SF2M method with specific hyperparameters."""
 
     # Create SF2M config with the hyperparameters
@@ -67,7 +67,7 @@ def create_sf2m_method_from_hparams(hparams: Dict[str, Any]) -> DirectSF2MMethod
         device="cpu",
     )
 
-    return DirectSF2MMethod(config, silent=True)  # Enable silent mode
+    return StructureFlowMethod(config, silent=True)  # Enable silent mode
 
 
 def run_hparam_sweep(
@@ -151,9 +151,9 @@ def run_hparam_sweep(
                         "config_id": config_idx,
                         "experiment_id": current_exp,
                         "total_experiments": total_experiments,
-                        "DirectSF2M_AUROC": float("nan"),
-                        "DirectSF2M_AUPRC": float("nan"),
-                        "DirectSF2M_training_time": float("nan"),
+                        "StructureFlow_AUROC": float("nan"),
+                        "StructureFlow_AUPRC": float("nan"),
+                        "StructureFlow_training_time": float("nan"),
                         "error": str(e),
                     }
 
@@ -193,7 +193,7 @@ def analyze_hparam_results(
     print(f"Full results saved to {output_file}")
 
     # Filter to SF2M results only for analysis
-    sf2m_results = results_df.dropna(subset=["DirectSF2M_AUROC"])
+    sf2m_results = results_df.dropna(subset=["StructureFlow_AUROC"])
 
     if len(sf2m_results) == 0:
         print("No successful SF2M results to analyze!")
@@ -209,9 +209,9 @@ def analyze_hparam_results(
         sf2m_results.groupby(hparam_cols)
         .agg(
             {
-                "DirectSF2M_AUROC": ["mean", "std", "count"],
-                "DirectSF2M_AUPRC": ["mean", "std"],
-                "DirectSF2M_training_time": ["mean", "std"],
+                "StructureFlow_AUROC": ["mean", "std", "count"],
+                "StructureFlow_AUPRC": ["mean", "std"],
+                "StructureFlow_training_time": ["mean", "std"],
             }
         )
         .round(4)
@@ -219,7 +219,7 @@ def analyze_hparam_results(
 
     print("\n=== TOP 10 CONFIGURATIONS BY AUPRC ===")
     top_configs = config_performance.sort_values(
-        ("DirectSF2M_AUPRC", "mean"), ascending=False
+        ("StructureFlow_AUPRC", "mean"), ascending=False
     ).head(10)
     print(top_configs)
 
@@ -238,9 +238,9 @@ def analyze_hparam_results(
                 sf2m_results.groupby(hparam)
                 .agg(
                     {
-                        "DirectSF2M_AUPRC": ["mean", "std", "count"],
-                        "DirectSF2M_AUROC": ["mean", "std"],
-                        "DirectSF2M_training_time": "mean",
+                        "StructureFlow_AUPRC": ["mean", "std", "count"],
+                        "StructureFlow_AUROC": ["mean", "std"],
+                        "StructureFlow_training_time": "mean",
                     }
                 )
                 .round(4)
@@ -255,9 +255,9 @@ def analyze_hparam_results(
         sf2m_results.groupby("num_vars")
         .agg(
             {
-                "DirectSF2M_AUPRC": ["mean", "std", "count"],
-                "DirectSF2M_AUROC": ["mean", "std"],
-                "DirectSF2M_training_time": ["mean", "std"],
+                "StructureFlow_AUPRC": ["mean", "std", "count"],
+                "StructureFlow_AUROC": ["mean", "std"],
+                "StructureFlow_training_time": ["mean", "std"],
             }
         )
         .round(4)
