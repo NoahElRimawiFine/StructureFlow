@@ -27,7 +27,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.sf2m_module import SF2MLitModule
 
-# SF2M component imports for DirectSF2MMethod
 from src.models.components.base import MLPODEF
 from src.models.components.cond_mlp import MLP as CONDMLP
 from src.models.components.simple_mlp import MLP
@@ -350,11 +349,11 @@ class SF2MConfig:
         return config
 
 
-class DirectSF2MMethod(CausalDiscoveryMethod):
+class StructureFlowMethod(CausalDiscoveryMethod):
     """Direct SF2M implementation using core components."""
 
     def __init__(self, hyperparams: Dict[str, Any], silent: bool = False):
-        super().__init__("DirectSF2M")
+        super().__init__("StructureFlow")
         self.hyperparams = hyperparams
         self.needs_true_adjacency = (
             True  # Flag to indicate this method needs true adjacency for evaluation
@@ -413,6 +412,7 @@ class DirectSF2MMethod(CausalDiscoveryMethod):
             dim=num_vars,
             device=device,
             held_out_time=None,
+            normalize_C=True,
         )
 
         if not self.silent:
@@ -943,7 +943,7 @@ def run_transpose_test():
         device="cpu",
     )
 
-    sf2m_method = DirectSF2MMethod(
+    sf2m_method = StructureFlowMethod(
         {
             "n_steps": sf2m_config.base_n_steps,
             "lr": sf2m_config.base_lr,
@@ -1186,8 +1186,8 @@ def run_scaling_experiment(
             # Create methods with fixed configurations
             methods = [
                 CorrelationBasedMethod("pearson"),
-                DirectSF2MMethod(fixed_hyperparams_sf2m, silent=True),
-                NGMNodeMethod(fixed_hyperparams_ngm, silent=True),
+                StructureFlowMethod(fixed_hyperparams_sf2m, silent=True),
+                # NGMNodeMethod(fixed_hyperparams_ngm, silent=True),
             ]
 
             result = run_single_experiment_silent(num_vars, methods, seed)
@@ -1288,7 +1288,7 @@ def main():
     )
 
     # Define system sizes to test
-    system_sizes = [10, 25, 50, 75]
+    system_sizes = [10, 25, 50, 100]
 
     print(f"\nScaling experiment setup:")
     print(f"  System sizes: {system_sizes}")
