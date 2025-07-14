@@ -7,17 +7,17 @@ import seaborn as sns
 def plot_scaling_results():
     """
     Plot scaling experiment results showing performance and timing vs system size.
-    Uses hardcoded data for DirectSF2M and NGM-NODE methods.
+    Uses hardcoded data for StructureFlow and NGM-NODE methods.
     """
 
     # Hardcoded data from the experiment results
     data = {
         "num_vars": [10, 25, 50, 75, 10, 25, 50, 75],
         "method": [
-            "DirectSF2M",
-            "DirectSF2M",
-            "DirectSF2M",
-            "DirectSF2M",
+            "StructureFlow",
+            "StructureFlow",
+            "StructureFlow",
+            "StructureFlow",
             "NGM-NODE",
             "NGM-NODE",
             "NGM-NODE",
@@ -52,9 +52,12 @@ def plot_scaling_results():
     df = pd.DataFrame(data)
 
     # Create mapping for display names
-    method_display_names = {"DirectSF2M": "StructureFlow", "NGM-NODE": "NGM NeuralODE"}
+    method_display_names = {
+        "StructureFlow": "StructureFlow",
+        "NGM-NODE": "NGM NeuralODE",
+    }
 
-    method_names = ["DirectSF2M", "NGM-NODE"]
+    method_names = ["StructureFlow", "NGM-NODE"]
     print(f"Found methods: {method_names}")
 
     # Set up the plotting style
@@ -175,10 +178,10 @@ def plot_auprc_comparison():
     data = {
         "num_vars": [10, 25, 50, 75, 10, 25, 50, 75],
         "method": [
-            "DirectSF2M",
-            "DirectSF2M",
-            "DirectSF2M",
-            "DirectSF2M",
+            "StructureFlow",
+            "StructureFlow",
+            "StructureFlow",
+            "StructureFlow",
             "NGM-NODE",
             "NGM-NODE",
             "NGM-NODE",
@@ -190,10 +193,13 @@ def plot_auprc_comparison():
 
     df = pd.DataFrame(data)
 
-    method_names = ["DirectSF2M", "NGM-NODE"]
+    method_names = ["StructureFlow", "NGM-NODE"]
 
     # Create mapping for display names
-    method_display_names = {"DirectSF2M": "StructureFlow", "NGM-NODE": "NGM NeuralODE"}
+    method_display_names = {
+        "StructureFlow": "StructureFlow",
+        "NGM-NODE": "NGM NeuralODE",
+    }
 
     # Group by num_vars for AUPRC
     plt.figure(figsize=(10, 6))
