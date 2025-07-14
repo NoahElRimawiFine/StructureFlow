@@ -1,5 +1,6 @@
 import os
 import argparse
+import random
 import numpy as np
 import pandas as pd
 import torch
@@ -32,9 +33,16 @@ DEFAULT_SCORE_HIDDEN = [100, 100]
 DEFAULT_CORRECTION_HIDDEN = [64, 64]
 DEFAULT_SIGMA = 1.0
 DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
-DEFAULT_SEED = 42
+DEFAULT_SEED = 1
 DEFAULT_RESULTS_DIR = "results"
 DEFAULT_USE_CORRECTION_MLP = True
+
+# --- Renge Specific Parameters ---
+DEFAULT_N_STEPS = 10000
+DEFAULT_LR = 0.0002
+DEFAULT_REG = 5e-8
+DEFAULT_ALPHA = 0.1
+DEFAULT_GL_REG = 0.02
 
 
 def main(args):
