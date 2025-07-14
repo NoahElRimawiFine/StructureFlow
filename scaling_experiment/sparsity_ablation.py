@@ -8,7 +8,7 @@ import seaborn as sns
 
 from causal_discovery_experiment import (
     SF2MConfig,
-    DirectSF2MMethod,
+    StructureFlowMethod,
     CorrelationBasedMethod,
     generate_causal_system,
     simulate_time_series,
@@ -128,7 +128,7 @@ def run_sparsity_experiment(
             # Test methods
             methods = [
                 CorrelationBasedMethod("pearson"),
-                DirectSF2MMethod(sf2m_config, silent=True),
+                StructureFlowMethod(sf2m_config, silent=True),
             ]
 
             # Store basic system info
@@ -144,43 +144,30 @@ def run_sparsity_experiment(
 
             # Test each method
             for method in methods:
-                try:
-                    start_method_time = time.time()
+                start_method_time = time.time()
 
-                    # Fit method
-                    if (
-                        hasattr(method, "needs_true_adjacency")
-                        and method.needs_true_adjacency
-                    ):
-                        predicted_adjacency = method.fit(
-                            time_series_data, true_adjacency
-                        )
-                    else:
-                        predicted_adjacency = method.fit(time_series_data)
+                # Fit method
+                if (
+                    hasattr(method, "needs_true_adjacency")
+                    and method.needs_true_adjacency
+                ):
+                    predicted_adjacency = method.fit(time_series_data, true_adjacency)
+                else:
+                    predicted_adjacency = method.fit(time_series_data)
 
-                    # Evaluate performance
-                    metrics = evaluate_causal_discovery(
-                        true_adjacency, predicted_adjacency
-                    )
-                    training_time = method.get_training_time()
+                # Evaluate performance
+                metrics = evaluate_causal_discovery(true_adjacency, predicted_adjacency)
+                training_time = method.get_training_time()
 
-                    # Store results
-                    result[f"{method.name}_AUROC"] = metrics["AUROC"]
-                    result[f"{method.name}_AUPRC"] = metrics["AUPRC"]
-                    result[f"{method.name}_training_time"] = training_time
-                    result[f"{method.name}_num_true_edges"] = metrics["num_true_edges"]
+                # Store results
+                result[f"{method.name}_AUROC"] = metrics["AUROC"]
+                result[f"{method.name}_AUPRC"] = metrics["AUPRC"]
+                result[f"{method.name}_training_time"] = training_time
+                result[f"{method.name}_num_true_edges"] = metrics["num_true_edges"]
 
-                    print(
-                        f"    {method.name}: AUROC={metrics['AUROC']:.4f}, AUPRC={metrics['AUPRC']:.4f}, Time={training_time:.2f}s"
-                    )
-
-                except Exception as e:
-                    print(f"    ERROR with {method.name}: {e}")
-                    # Store NaN values for failed methods
-                    result[f"{method.name}_AUROC"] = float("nan")
-                    result[f"{method.name}_AUPRC"] = float("nan")
-                    result[f"{method.name}_training_time"] = float("nan")
-                    result[f"{method.name}_num_true_edges"] = float("nan")
+                print(
+                    f"    {method.name}: AUROC={metrics['AUROC']:.4f}, AUPRC={metrics['AUPRC']:.4f}, Time={training_time:.2f}s"
+                )
 
             all_results.append(result)
 
@@ -377,7 +364,7 @@ def main():
     sparsity_levels = [0.02, 0.05, 0.2, 0.4, 0.8]
 
     # Generate random seeds
-    random_seeds = [random.randint(0, 10000) for _ in range(5)]
+    random_seeds = [random.randint(0, 10000) for _ in range(3)]
 
     print(f"Experiment setup:")
     print(f"  Fixed dimensionality: N=20")
