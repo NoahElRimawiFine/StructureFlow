@@ -33,13 +33,20 @@ class BridgeMatcher:
 
 
 class EntropicOTFM:
-    def __init__(self, x, t_idx, dt, sigma, T, dim, device, held_out_time=None):
-        def entropic_ot_plan(x0, x1, eps):
+    def __init__(
+        self, x, t_idx, dt, sigma, T, dim, device, held_out_time=None, normalize_C=False
+    ):
+        def entropic_ot_plan(x0, x1, eps, normalize_C=False):
             C = pot.utils.euclidean_distances(x0, x1, squared=True) / 2
+
+            if normalize_C:
+                C = C / C.max()
             p, q = torch.full((x0.shape[0],), 1 / x0.shape[0]), torch.full(
                 (x1.shape[0],), 1 / x1.shape[0]
             )
-            return pot.sinkhorn(p, q, C, eps, method="sinkhorn", numItermax=5000)
+            sinkhorn_ot = pot.sinkhorn(p, q, C, eps, method="sinkhorn", numItermax=5000)
+
+            return sinkhorn_ot
 
         self.sigma = sigma
         self.bm = BridgeMatcher()
@@ -52,18 +59,22 @@ class EntropicOTFM:
         self.Ts = []
         self.held_out_time = held_out_time
         self.has_bridge_over_held_out = False
-        
+        self.normalize_C = normalize_C
+
         # construct EOT plans
         for i in range(self.T - 1):
-            if self.held_out_time is not None and (i == self.held_out_time or i+1 == self.held_out_time):
+            if self.held_out_time is not None and (
+                i == self.held_out_time or i + 1 == self.held_out_time
+            ):
                 self.Ts.append(None)
-                
+
                 # Create a bridge over the held-out time if it's the first encounter
                 if i == self.held_out_time and not self.has_bridge_over_held_out:
                     self.bridge_over_held_out = entropic_ot_plan(
-                        self.x[self.t_idx == i-1, :],
-                        self.x[self.t_idx == i+1, :],
+                        self.x[self.t_idx == i - 1, :],
+                        self.x[self.t_idx == i + 1, :],
                         2 * self.dt * self.sigma**2,
+                        self.normalize_C,
                     )
                     self.has_bridge_over_held_out = True
             else:
@@ -72,6 +83,7 @@ class EntropicOTFM:
                         self.x[self.t_idx == i, :],
                         self.x[self.t_idx == i + 1, :],
                         self.dt * self.sigma**2,
+                        self.normalize_C,
                     )
                 )
 
@@ -88,8 +100,8 @@ class EntropicOTFM:
                     # Use the bridge spanning the held-out timepoint
                     with torch.no_grad():
                         x0, x1 = self.bm.sample_plan(
-                            self.x[self.t_idx == i-1, :],
-                            self.x[self.t_idx == i+1, :],
+                            self.x[self.t_idx == i - 1, :],
+                            self.x[self.t_idx == i + 1, :],
                             self.bridge_over_held_out,
                             batch_size,
                         )
@@ -99,7 +111,9 @@ class EntropicOTFM:
                     )
                     _x.append(x)
                     _s.append(s)
-                    _t.append((i-1 + ts*2) * self.dt)  # Scale ts to span 2 timesteps
+                    _t.append(
+                        (i - 1 + ts * 2) * self.dt
+                    )  # Scale ts to span 2 timesteps
                     _t_orig.append(ts)
                     _u.append(u)
                     i += 1
@@ -131,6 +145,7 @@ class EntropicOTFM:
             torch.vstack(_t_orig),
         )
 
+
 class OTPlanSampler:
     """OTPlanSampler implements sampling coordinates according to an squared L2 OT plan with
     different implementations of the plan calculation."""
@@ -150,7 +165,9 @@ class OTPlanSampler:
         elif method == "sinkhorn":
             self.ot_fn = partial(pot.sinkhorn, reg=reg)
         elif method == "unbalanced":
-            self.ot_fn = partial(pot.unbalanced.sinkhorn_knopp_unbalanced, reg=reg, reg_m=reg_m)
+            self.ot_fn = partial(
+                pot.unbalanced.sinkhorn_knopp_unbalanced, reg=reg, reg_m=reg_m
+            )
         elif method == "partial":
             self.ot_fn = partial(pot.partial.entropic_partial_wasserstein, reg=reg)
         else:
