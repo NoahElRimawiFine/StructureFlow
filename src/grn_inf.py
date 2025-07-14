@@ -10,7 +10,11 @@ import matplotlib.pyplot as plt
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.sf2m_module import SF2MLitModule
 from src.models.rf_module import ReferenceFittingModule
-from src.models.components.plotting import compute_global_jacobian, plot_auprs, log_causal_graph_matrices
+from src.models.components.plotting import (
+    compute_global_jacobian,
+    plot_auprs,
+    log_causal_graph_matrices,
+)
 
 # Default parameters
 DEFAULT_DATA_PATH = "data/"
@@ -26,11 +30,12 @@ DEFAULT_GL_REG = 0.04
 DEFAULT_KNOCKOUT_HIDDEN = 100
 DEFAULT_SCORE_HIDDEN = [100, 100]
 DEFAULT_CORRECTION_HIDDEN = [64, 64]
-DEFAULT_SIGMA = 1.0 
+DEFAULT_SIGMA = 1.0
 DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 DEFAULT_SEED = 42
 DEFAULT_RESULTS_DIR = "results"
 DEFAULT_USE_CORRECTION_MLP = True
+
 
 def main(args):
     # Extract configuration from arguments
@@ -44,21 +49,18 @@ def main(args):
     CORRECTION_REG = args.correction_reg
     GL_REG = args.gl_reg
     KNOCKOUT_HIDDEN = args.knockout_hidden
-    SCORE_HIDDEN = [int(x) for x in args.score_hidden.split(',')]
-    CORRECTION_HIDDEN = [int(x) for x in args.correction_hidden.split(',')]
+    SCORE_HIDDEN = [int(x) for x in args.score_hidden.split(",")]
+    CORRECTION_HIDDEN = [int(x) for x in args.correction_hidden.split(",")]
     SIGMA = args.sigma
     DEVICE = args.device
     SEED = args.seed
     RESULTS_DIR = args.results_dir
     MODEL_TYPE = args.model_type
     USE_CORRECTION_MLP = args.use_correction_mlp
-    
+
     # Create results directory with model type and seed info
-    RESULTS_DIR = os.path.join(
-        RESULTS_DIR, 
-        f"{DATASET_TYPE}_{MODEL_TYPE}_seed{SEED}"
-    )
-    
+    RESULTS_DIR = os.path.join(RESULTS_DIR, f"{DATASET_TYPE}_{MODEL_TYPE}_seed{SEED}")
+
     seed_everything(SEED, workers=True)
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
@@ -75,11 +77,11 @@ def main(args):
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
-    
+
     full_adatas = datamodule.get_subset_adatas()
     if not full_adatas:
         raise ValueError("No datasets loaded.")
-    T_max = int(max(adata.obs['t'].max() for adata in full_adatas))
+    T_max = int(max(adata.obs["t"].max() for adata in full_adatas))
     T_times = T_max + 1
     DT_data = 1.0 / T_times
 
@@ -89,18 +91,18 @@ def main(args):
 
     # --- 2. Create and Train Model ---
     print(f"Creating model...")
-    
+
     model = None
-    
+
     if MODEL_TYPE == "rf":
         print("Using Reference Fitting model...")
         # Initialize RF model
         model = ReferenceFittingModule(use_cuda=(DEVICE == "cuda"))
-        
+
         # Fit the model
         print("Fitting RF model...")
         model.fit_model(full_adatas, datamodule.kos)
-        
+
         # No Lightning Trainer used for RF
         print("RF model fitting complete.")
 
@@ -108,7 +110,7 @@ def main(args):
         # Configure correct flags based on MODEL_TYPE
         use_mlp = MODEL_TYPE == "mlp_baseline"
         use_correction = USE_CORRECTION_MLP and not use_mlp
-        
+
         model = SF2MLitModule(
             datamodule=datamodule,
             T=T_times,
@@ -129,7 +131,7 @@ def main(args):
             use_mlp_baseline=use_mlp,
             use_correction_mlp=use_correction,
         )
-        
+
         # Train the model with Lightning
         print("Setting up Trainer...")
         # logger = TensorBoardLogger(RESULTS_DIR, name="grn_training", default_hp_metric=False)
@@ -143,7 +145,7 @@ def main(args):
             enable_progress_bar=True,
             log_every_n_steps=100,
         )
-        
+
         print(f"Training model for {N_STEPS} steps...")
         trainer.fit(model, datamodule=datamodule)
         print("Training complete.")
@@ -154,8 +156,10 @@ def main(args):
     if MODEL_TYPE != "rf":
         # Compute the global Jacobian for SF2M models
         with torch.no_grad():
-            A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=DT_data, device=DEVICE)
-        
+            A_estim = compute_global_jacobian(
+                model.func_v, model.adatas, dt=DT_data, device=DEVICE
+            )
+
         # Get the causal graph from the model
         W_v = model.func_v.causal_graph(w_threshold=0.0).T
     else:
@@ -165,26 +169,26 @@ def main(args):
 
     # Get the ground truth matrix
     true_matrix = datamodule.true_matrix
-    
+
     # Special handling for Renge dataset to align gene sets
     if DATASET_TYPE == "Renge":
         # A_estim = A_estim.T
         # W_v = W_v.T
         # Get gene names from the dataset
         gene_names = datamodule.adatas[0].var_names
-        
+
         # Get reference network rows and columns
         ref_rows = true_matrix.index
         ref_cols = true_matrix.columns
-        
+
         # Create DataFrames for the estimated graphs with all genes
         A_estim_df = pd.DataFrame(A_estim, index=gene_names, columns=gene_names)
         W_v_df = pd.DataFrame(W_v, index=gene_names, columns=gene_names)
-        
+
         # Extract the exact subset that corresponds to the reference network dimensions
         A_estim_subset = A_estim_df.loc[ref_rows, ref_cols]
         W_v_subset = W_v_df.loc[ref_rows, ref_cols]
-        
+
         # Convert to numpy arrays for evaluation
         A_estim = A_estim_subset.values
         W_v = W_v_subset.values
@@ -192,43 +196,118 @@ def main(args):
     else:
         # For synthetic data, use matrices directly
         A_true = true_matrix.values
-        
-    plot_auprs(W_v, A_estim, A_true, mask_diagonal=True if DATASET_TYPE != "Renge" else False)
-    log_causal_graph_matrices(A_estim, W_v, A_true, mask_diagonal=True if DATASET_TYPE != "Renge" else False)
+
+    plot_auprs(
+        W_v, A_estim, A_true, mask_diagonal=True if DATASET_TYPE != "Renge" else False
+    )
+    log_causal_graph_matrices(
+        A_estim, W_v, A_true, mask_diagonal=True if DATASET_TYPE != "Renge" else False
+    )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GRN inference from single-cell data")
-    
+
     # Data parameters
-    parser.add_argument("--data_path", type=str, default=DEFAULT_DATA_PATH, help="Path to data directory")
-    parser.add_argument("--dataset_type", type=str, default=DEFAULT_DATASET_TYPE, choices=["Synthetic", "Curated"], help="Type of dataset to use")
-    
+    parser.add_argument(
+        "--data_path",
+        type=str,
+        default=DEFAULT_DATA_PATH,
+        help="Path to data directory",
+    )
+    parser.add_argument(
+        "--dataset_type",
+        type=str,
+        default=DEFAULT_DATASET_TYPE,
+        choices=["Synthetic", "Curated", "Renge"],
+        help="Type of dataset to use",
+    )
+
     # Model parameters
-    parser.add_argument("--model_type", type=str, default=DEFAULT_MODEL_TYPE, choices=["sf2m", "mlp_baseline", "rf"], help="Type of model to use")
-    parser.add_argument("--use_correction_mlp", action="store_true", default=DEFAULT_USE_CORRECTION_MLP, help="Whether to use correction MLP for SF2M")
-    
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        default=DEFAULT_MODEL_TYPE,
+        choices=["sf2m", "mlp_baseline", "rf"],
+        help="Type of model to use",
+    )
+    parser.add_argument(
+        "--use_correction_mlp",
+        action="store_true",
+        default=DEFAULT_USE_CORRECTION_MLP,
+        help="Whether to use correction MLP for SF2M",
+    )
+
     # Training parameters
-    parser.add_argument("--n_steps", type=int, default=DEFAULT_N_STEPS, help="Number of training steps")
-    parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Batch size")
+    parser.add_argument(
+        "--n_steps", type=int, default=DEFAULT_N_STEPS, help="Number of training steps"
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Batch size"
+    )
     parser.add_argument("--lr", type=float, default=DEFAULT_LR, help="Learning rate")
-    parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA, help="Alpha weighting for score vs flow loss")
-    parser.add_argument("--reg", type=float, default=DEFAULT_REG, help="Regularization for flow model")
-    parser.add_argument("--correction_reg", type=float, default=DEFAULT_CORRECTION_REG, help="Regularization for correction network")
-    parser.add_argument("--gl_reg", type=float, default=DEFAULT_GL_REG, help="Group Lasso regularization strength")
-    
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=DEFAULT_ALPHA,
+        help="Alpha weighting for score vs flow loss",
+    )
+    parser.add_argument(
+        "--reg", type=float, default=DEFAULT_REG, help="Regularization for flow model"
+    )
+    parser.add_argument(
+        "--correction_reg",
+        type=float,
+        default=DEFAULT_CORRECTION_REG,
+        help="Regularization for correction network",
+    )
+    parser.add_argument(
+        "--gl_reg",
+        type=float,
+        default=DEFAULT_GL_REG,
+        help="Group Lasso regularization strength",
+    )
+
     # Model architecture parameters
-    parser.add_argument("--knockout_hidden", type=int, default=DEFAULT_KNOCKOUT_HIDDEN, help="Knockout hidden dimension")
-    parser.add_argument("--score_hidden", type=str, default=",".join(map(str, DEFAULT_SCORE_HIDDEN)), help="Score hidden dimensions (comma-separated)")
-    parser.add_argument("--correction_hidden", type=str, default=",".join(map(str, DEFAULT_CORRECTION_HIDDEN)), help="Correction hidden dimensions (comma-separated)")
-    
+    parser.add_argument(
+        "--knockout_hidden",
+        type=int,
+        default=DEFAULT_KNOCKOUT_HIDDEN,
+        help="Knockout hidden dimension",
+    )
+    parser.add_argument(
+        "--score_hidden",
+        type=str,
+        default=",".join(map(str, DEFAULT_SCORE_HIDDEN)),
+        help="Score hidden dimensions (comma-separated)",
+    )
+    parser.add_argument(
+        "--correction_hidden",
+        type=str,
+        default=",".join(map(str, DEFAULT_CORRECTION_HIDDEN)),
+        help="Correction hidden dimensions (comma-separated)",
+    )
+
     # Simulation parameters
-    parser.add_argument("--sigma", type=float, default=DEFAULT_SIGMA, help="Noise level for simulation")
-    
+    parser.add_argument(
+        "--sigma", type=float, default=DEFAULT_SIGMA, help="Noise level for simulation"
+    )
+
     # Other parameters
-    parser.add_argument("--device", type=str, default=DEFAULT_DEVICE, choices=["cpu", "cuda"], help="Device to use")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=DEFAULT_DEVICE,
+        choices=["cpu", "cuda"],
+        help="Device to use",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed")
-    parser.add_argument("--results_dir", type=str, default=DEFAULT_RESULTS_DIR, help="Directory to save results")
-    
+    parser.add_argument(
+        "--results_dir",
+        type=str,
+        default=DEFAULT_RESULTS_DIR,
+        help="Directory to save results",
+    )
+
     args = parser.parse_args()
     main(args)
