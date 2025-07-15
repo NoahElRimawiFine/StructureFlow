@@ -1119,15 +1119,17 @@ def run_scaling_experiment(
     system_sizes: List[int],
     sf2m_config: SF2MConfig,
     seeds: List[int] = [42],
+    sparsity_levels: List[float] = [0.1, 0.2, 0.4],
     num_cores: int = 4,
 ) -> pd.DataFrame:
     """
-    Run causal discovery scaling experiment with fixed hyperparameters.
+    Run causal discovery scaling experiment with fixed hyperparameters across multiple sparsity levels.
 
     Args:
         system_sizes: List of system sizes to test
         sf2m_config: SF2M configuration object (uses base config for all sizes)
         seeds: List of random seeds for multiple runs
+        sparsity_levels: List of edge probabilities to test for each system size
         num_cores: Number of cores to use for reproducible timing
 
     Returns:
@@ -1137,7 +1139,7 @@ def run_scaling_experiment(
     set_fixed_cores(num_cores)
 
     all_results = []
-    total_experiments = len(seeds) * len(system_sizes)
+    total_experiments = len(seeds) * len(system_sizes) * len(sparsity_levels)
     current_exp = 0
 
     start_time = time.time()
@@ -1173,33 +1175,112 @@ def run_scaling_experiment(
         f"  SF2M steps={fixed_hyperparams_sf2m['n_steps']}, knockout_hidden={fixed_hyperparams_sf2m['knockout_hidden']}"
     )
     print(
-        f"  NGM-NODE steps={fixed_hyperparams_ngm['n_steps']}, hidden_dim={fixed_hyperparams_ngm['hidden_dim']}"
+        f"  NGM-NODE steps={fixed_hyperparams_ngm['n_steps']}, hidden_dim={fixed_hyperparams_ngm['hidden_dim']} (limited to N≤100)"
     )
+    print(f"  Sparsity levels: {sparsity_levels}")
 
     for seed in seeds:
         for num_vars in system_sizes:
-            current_exp += 1
-            print(
-                f"\n[{current_exp}/{total_experiments}] System size: {num_vars}, Seed: {seed}"
-            )
+            for sparsity in sparsity_levels:
+                current_exp += 1
+                print(
+                    f"\n[{current_exp}/{total_experiments}] System size: {num_vars}, Seed: {seed}, Sparsity: {sparsity:.2f}"
+                )
 
-            # Create methods with fixed configurations
-            methods = [
-                CorrelationBasedMethod("pearson"),
-                StructureFlowMethod(fixed_hyperparams_sf2m, silent=True),
-                # NGMNodeMethod(fixed_hyperparams_ngm, silent=True),
-            ]
+                methods = [
+                    CorrelationBasedMethod("pearson"),
+                    StructureFlowMethod(fixed_hyperparams_sf2m, silent=True),
+                ]
 
-            result = run_single_experiment_silent(num_vars, methods, seed)
-            result["experiment_id"] = current_exp
-            result["total_experiments"] = total_experiments
-            all_results.append(result)
+                # Only add NGM-NODE for system sizes <= 100
+                if num_vars <= 100:
+                    methods.append(NGMNodeMethod(fixed_hyperparams_ngm, silent=True))
+                    print(f"  Including NGM-NODE for N={num_vars}")
+                else:
+                    print(f"  Skipping NGM-NODE for N={num_vars} (too large)")
+
+                result = run_single_experiment_with_sparsity(
+                    num_vars, methods, seed, sparsity
+                )
+                result["experiment_id"] = current_exp
+                result["total_experiments"] = total_experiments
+                all_results.append(result)
 
     total_time = time.time() - start_time
     print(f"\nTotal experiment time: {total_time:.2f}s")
 
     results_df = pd.DataFrame(all_results)
     return results_df
+
+
+def run_single_experiment_with_sparsity(
+    num_vars: int,
+    methods: List[CausalDiscoveryMethod],
+    seed: int = 42,
+    sparsity: float = 0.2,
+) -> Dict[str, Any]:
+    """
+    Run causal discovery experiment for a single system size with specified sparsity.
+
+    Args:
+        num_vars: Number of variables in the system
+        methods: List of causal discovery methods to test
+        seed: Random seed
+        sparsity: Edge probability for graph generation
+
+    Returns:
+        results: Dictionary containing results for all methods
+    """
+    # Generate causal system with specified sparsity
+    true_adjacency, dynamics_matrix = generate_causal_system(
+        num_vars, edge_prob=sparsity, seed=seed
+    )
+
+    # Simulate time series data
+    time_series_data = simulate_time_series(dynamics_matrix, seed=seed)
+
+    # Calculate actual sparsity metrics
+    total_possible_edges = num_vars * (num_vars - 1)  # Exclude diagonal
+    actual_edges = np.sum(np.abs(true_adjacency) > 0) - np.sum(
+        np.diag(np.abs(true_adjacency)) > 0
+    )
+    actual_sparsity = actual_edges / total_possible_edges
+
+    # Basic system info
+    results = {
+        "num_vars": num_vars,
+        "seed": seed,
+        "sparsity_target": sparsity,
+        "sparsity_actual": actual_sparsity,
+        "true_edges": actual_edges,
+        "edge_density": actual_sparsity,
+        "max_eigenvalue_real": np.max(np.real(np.linalg.eigvals(dynamics_matrix))),
+    }
+
+    # Test each method
+    for method in methods:
+        # Fit method and get predictions
+        if hasattr(method, "needs_true_adjacency") and method.needs_true_adjacency:
+            predicted_adjacency = method.fit(time_series_data, true_adjacency)
+        else:
+            predicted_adjacency = method.fit(time_series_data)
+
+        # Evaluate performance
+        metrics = evaluate_causal_discovery(true_adjacency, predicted_adjacency)
+        training_time = method.get_training_time()
+
+        # Store results
+        results[f"{method.name}_AUROC"] = metrics["AUROC"]
+        results[f"{method.name}_AUPRC"] = metrics["AUPRC"]
+        results[f"{method.name}_training_time"] = training_time
+        results[f"{method.name}_num_true_edges"] = metrics["num_true_edges"]
+
+        # Print performance metrics
+        print(
+            f"    {method.name}: AUROC={metrics['AUROC']:.4f}, AUPRC={metrics['AUPRC']:.4f}, Time={training_time:.4f}s"
+        )
+
+    return results
 
 
 def save_and_print_results(
@@ -1290,21 +1371,29 @@ def main():
     # Define system sizes to test
     system_sizes = [10, 25, 50, 100, 200, 500]
 
+    # Define sparsity levels to test
+    sparsity_levels = [0.05, 0.2, 0.4]  # Low, medium, high density graphs
+
     print(f"\nScaling experiment setup:")
     print(f"  System sizes: {system_sizes}")
-    print(f"  Seeds per size: 5 (for averaging over different random graphs)")
-    print(f"  Total experiments: {len(system_sizes) * 5}")
+    print(f"  Sparsity levels: {sparsity_levels}")
+    print(f"  Seeds per size/sparsity: 5 (for averaging over different random graphs)")
+    print(f"  Total experiments: {len(system_sizes) * len(sparsity_levels) * 5}")
     print(f"  Fixed hyperparameters (no scaling with system size)")
 
     # Run experiments
     print(f"\nStarting scaling experiment with {NUM_CORES} cores...")
 
     # Generate 5 random seeds
-    random_seeds = [random.randint(0, 10000) for _ in range(5)]
+    random_seeds = [random.randint(0, 10000) for _ in range(3)]
     print(f"Using random seeds: {random_seeds}")
 
     results_df = run_scaling_experiment(
-        system_sizes, sf2m_config, seeds=random_seeds, num_cores=NUM_CORES
+        system_sizes,
+        sf2m_config,
+        seeds=random_seeds,
+        sparsity_levels=sparsity_levels,
+        num_cores=NUM_CORES,
     )
 
     # Save results and print summary
