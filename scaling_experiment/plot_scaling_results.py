@@ -87,6 +87,8 @@ def plot_scaling_results():
     ax1.grid(True, alpha=0.3)
     ax1.set_ylim(0.5, 1.0)
     ax1.set_xscale("log")
+    ax1.set_xticks([10, 25, 50, 100, 200, 500])
+    ax1.set_xticklabels([10, 25, 50, 100, 200, 500])
 
     # Plot 2: Training Time vs System Size
     for sparsity in [0.05, 0.20, 0.40]:
@@ -128,6 +130,8 @@ def plot_scaling_results():
     ax2.grid(True, alpha=0.3)
     ax2.set_yscale("log")
     ax2.set_xscale("log")
+    ax2.set_xticks([10, 25, 50, 100, 200, 500])
+    ax2.set_xticklabels([10, 25, 50, 100, 200, 500])
 
     # Adjust layout
     plt.tight_layout()
