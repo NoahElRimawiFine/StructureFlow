@@ -2,95 +2,80 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+import io
 
 
 def plot_scaling_results():
     """
     Plot scaling experiment results showing performance and timing vs system size.
-    Uses hardcoded data for StructureFlow and NGM-NODE methods.
+    Uses CSV data with different sparsity levels for StructureFlow and NGM-NODE methods.
     """
 
-    # Hardcoded data from the experiment results
-    data = {
-        "num_vars": [10, 25, 50, 75, 10, 25, 50, 75],
-        "method": [
-            "StructureFlow",
-            "StructureFlow",
-            "StructureFlow",
-            "StructureFlow",
-            "NGM-NODE",
-            "NGM-NODE",
-            "NGM-NODE",
-            "NGM-NODE",
-        ],
-        "AUROC_mean": [0.8798, 0.8241, 0.7757, 0.5583, 0.7881, 0.6517, 0.5586, 0.5298],
-        "AUROC_std": [0.0546, 0.0262, 0.0340, 0.0366, 0.0740, 0.0337, 0.0077, 0.0123],
-        "AUPRC_mean": [0.6435, 0.5690, 0.5026, 0.2448, 0.5694, 0.3386, 0.2348, 0.2159],
-        "AUPRC_std": [0.0871, 0.0553, 0.0490, 0.0289, 0.1135, 0.0642, 0.0105, 0.0048],
-        "training_time_mean": [
-            58.1914,
-            82.5819,
-            146.6012,
-            183.6806,
-            333.1977,
-            1009.2917,
-            2496.8094,
-            3651.4100,
-        ],
-        "training_time_std": [
-            0.6159,
-            6.8351,
-            12.1040,
-            2.4694,
-            5.7312,
-            14.1373,
-            98.9156,
-            449.3659,
-        ],
-    }
+    # CSV data from the experiment results
+    csv_data = """seed,system_size,sparsity,structureflow_auroc,structureflow_time,ngmnode_auroc,ngmnode_time
+3728,10,0.05,0.9863,58.5515,0.9536,316.0287
+3728,10,0.20,0.9290,58.6428,0.7500,339.1738
+3728,10,0.40,0.8109,58.4385,0.7761,342.7522
+3728,25,0.05,0.9758,94.6083,0.8202,1061.2054
+3728,25,0.20,0.8890,97.4592,0.6722,1054.7041
+3728,25,0.40,0.7393,79.8138,0.6249,934.0664
+3728,50,0.05,0.9483,145.0283,0.6417,3170.8114
+3728,50,0.20,0.7869,122.5391,0.5677,2773.2565
+3728,50,0.40,0.6382,121.8200,0.5204,1252.6854
+3728,100,0.05,0.9543,248.4641,0.5311,10463.3073
+3728,100,0.20,0.7491,235.3687,0.5203,2967.9328
+3728,100,0.40,0.6158,232.6693,0.5080,2409.0556
+3728,200,0.05,0.6071,577.1567,,
+3728,200,0.20,0.6872,569.9031,,
+3728,200,0.40,0.5705,570.0570,,
+3728,500,0.05,0.6351,4965.4467,,
+3728,500,0.20,0.5277,5328.5185,,
+3728,500,0.40,0.5106,5315.9313,,"""
 
-    df = pd.DataFrame(data)
-
-    # Create mapping for display names
-    method_display_names = {
-        "StructureFlow": "StructureFlow",
-        "NGM-NODE": "NGM NeuralODE",
-    }
-
-    method_names = ["StructureFlow", "NGM-NODE"]
-    print(f"Found methods: {method_names}")
+    df = pd.read_csv(io.StringIO(csv_data))
 
     # Set up the plotting style
     plt.style.use("default")
-    sns.set_palette("husl")
+
+    # Define colors and line styles
+    colors = {"StructureFlow": "#1f77b4", "NGM-NODE": "#ff7f0e"}
+    line_styles = {0.05: "-", 0.20: "--", 0.40: ":"}
+    sparsity_labels = {0.05: "5% sparse", 0.20: "20% sparse", 0.40: "40% sparse"}
 
     # Create figure with two subplots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
     # Plot 1: AUROC vs System Size
-    for method in method_names:
-        method_data = df[df["method"] == method]
-        display_name = method_display_names.get(method, method)
+    for sparsity in [0.05, 0.20, 0.40]:
+        sparsity_data = df[df["sparsity"] == sparsity]
 
-        x = method_data["num_vars"]
-        y_mean = method_data["AUROC_mean"]
-        y_std = method_data["AUROC_std"]
-
-        # Assume n=4 samples for standard error calculation
-        n_samples = 4
-        y_stderr = y_std / np.sqrt(n_samples)
-
-        # Plot mean with error bars
-        ax1.errorbar(
-            x,
-            y_mean,
-            yerr=y_stderr,
+        # StructureFlow
+        x_sf = sparsity_data["system_size"]
+        y_sf = sparsity_data["structureflow_auroc"]
+        ax1.plot(
+            x_sf,
+            y_sf,
+            color=colors["StructureFlow"],
+            linestyle=line_styles[sparsity],
             marker="o",
             linewidth=2,
-            markersize=8,
-            label=display_name,
-            capsize=5,
-            capthick=2,
+            markersize=6,
+            label=f"StructureFlow ({sparsity_labels[sparsity]})",
+        )
+
+        # NGM-NODE (filter out NaN values)
+        ngm_data = sparsity_data.dropna(subset=["ngmnode_auroc"])
+        x_ngm = ngm_data["system_size"]
+        y_ngm = ngm_data["ngmnode_auroc"]
+        ax1.plot(
+            x_ngm,
+            y_ngm,
+            color=colors["NGM-NODE"],
+            linestyle=line_styles[sparsity],
+            marker="s",
+            linewidth=2,
+            markersize=6,
+            label=f"NGM NeuralODE ({sparsity_labels[sparsity]})",
         )
 
     ax1.set_xlabel("System Size (Number of Variables)", fontsize=12)
@@ -98,42 +83,51 @@ def plot_scaling_results():
     ax1.set_title(
         "Causal Discovery Performance vs System Size", fontsize=14, fontweight="bold"
     )
-    ax1.legend(fontsize=11)
+    ax1.legend(fontsize=9, loc="best")
     ax1.grid(True, alpha=0.3)
     ax1.set_ylim(0.5, 1.0)
+    ax1.set_xscale("log")
 
     # Plot 2: Training Time vs System Size
-    for method in method_names:
-        method_data = df[df["method"] == method]
-        display_name = method_display_names.get(method, method)
+    for sparsity in [0.05, 0.20, 0.40]:
+        sparsity_data = df[df["sparsity"] == sparsity]
 
-        x = method_data["num_vars"]
-        y_mean = method_data["training_time_mean"]
-        y_std = method_data["training_time_std"]
+        # StructureFlow
+        x_sf = sparsity_data["system_size"]
+        y_sf = sparsity_data["structureflow_time"]
+        ax2.plot(
+            x_sf,
+            y_sf,
+            color=colors["StructureFlow"],
+            linestyle=line_styles[sparsity],
+            marker="o",
+            linewidth=2,
+            markersize=6,
+            label=f"StructureFlow ({sparsity_labels[sparsity]})",
+        )
 
-        # Assume n=4 samples for standard error calculation
-        n_samples = 4
-        y_stderr = y_std / np.sqrt(n_samples)
-
-        # Plot mean with error bars
-        ax2.errorbar(
-            x,
-            y_mean,
-            yerr=y_stderr,
+        # NGM-NODE (filter out NaN values)
+        ngm_data = sparsity_data.dropna(subset=["ngmnode_time"])
+        x_ngm = ngm_data["system_size"]
+        y_ngm = ngm_data["ngmnode_time"]
+        ax2.plot(
+            x_ngm,
+            y_ngm,
+            color=colors["NGM-NODE"],
+            linestyle=line_styles[sparsity],
             marker="s",
             linewidth=2,
-            markersize=8,
-            label=display_name,
-            capsize=5,
-            capthick=2,
+            markersize=6,
+            label=f"NGM NeuralODE ({sparsity_labels[sparsity]})",
         )
 
     ax2.set_xlabel("System Size (Number of Variables)", fontsize=12)
     ax2.set_ylabel("Training Time (seconds)", fontsize=12)
     ax2.set_title("Training Time vs System Size", fontsize=14, fontweight="bold")
-    ax2.legend(fontsize=11)
+    ax2.legend(fontsize=9, loc="best")
     ax2.grid(True, alpha=0.3)
     ax2.set_yscale("log")
+    ax2.set_xscale("log")
 
     # Adjust layout
     plt.tight_layout()
@@ -143,26 +137,30 @@ def plot_scaling_results():
     print("Plots saved to scaling_experiment_plots.png")
 
     # Show summary statistics
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 80)
     print("SCALING EXPERIMENT SUMMARY")
-    print("=" * 60)
+    print("=" * 80)
 
-    for method in method_names:
-        display_name = method_display_names.get(method, method)
-        print(f"\n{display_name}:")
-        method_data = df[df["method"] == method]
+    for sparsity in [0.05, 0.20, 0.40]:
+        print(f"\nSparsity: {sparsity_labels[sparsity]}")
+        print("-" * 40)
+        sparsity_data = df[df["sparsity"] == sparsity]
 
-        for _, row in method_data.iterrows():
-            n_vars = int(row["num_vars"])
-            auroc_mean = row["AUROC_mean"]
-            auroc_std = row["AUROC_std"]
-            time_mean = row["training_time_mean"]
-            time_std = row["training_time_std"]
+        for _, row in sparsity_data.iterrows():
+            system_size = int(row["system_size"])
+            sf_auroc = row["structureflow_auroc"]
+            sf_time = row["structureflow_time"]
+            ngm_auroc = row["ngmnode_auroc"] if pd.notna(row["ngmnode_auroc"]) else None
+            ngm_time = row["ngmnode_time"] if pd.notna(row["ngmnode_time"]) else None
 
             print(
-                f"  N={n_vars:2d}: AUROC={auroc_mean:.4f}±{auroc_std:.4f}, "
-                f"Time={time_mean:6.1f}±{time_std:5.1f}s"
+                f"  N={system_size:3d}: StructureFlow AUROC={sf_auroc:.4f}, Time={sf_time:6.1f}s",
+                end="",
             )
+            if ngm_auroc is not None:
+                print(f" | NGM-NODE AUROC={ngm_auroc:.4f}, Time={ngm_time:6.1f}s")
+            else:
+                print(" | NGM-NODE: N/A")
 
     # Show the plots
     plt.show()
@@ -172,82 +170,16 @@ def plot_scaling_results():
 
 def plot_auprc_comparison():
     """
-    Create an additional plot comparing AUPRC vs system size.
+    Note: AUPRC data not available in the new dataset.
+    This function is kept for compatibility but will show a message.
     """
-    # Same hardcoded data
-    data = {
-        "num_vars": [10, 25, 50, 75, 10, 25, 50, 75],
-        "method": [
-            "StructureFlow",
-            "StructureFlow",
-            "StructureFlow",
-            "StructureFlow",
-            "NGM-NODE",
-            "NGM-NODE",
-            "NGM-NODE",
-            "NGM-NODE",
-        ],
-        "AUPRC_mean": [0.6435, 0.5690, 0.5026, 0.2448, 0.5694, 0.3386, 0.2348, 0.2159],
-        "AUPRC_std": [0.0871, 0.0553, 0.0490, 0.0289, 0.1135, 0.0642, 0.0105, 0.0048],
-    }
-
-    df = pd.DataFrame(data)
-
-    method_names = ["StructureFlow", "NGM-NODE"]
-
-    # Create mapping for display names
-    method_display_names = {
-        "StructureFlow": "StructureFlow",
-        "NGM-NODE": "NGM NeuralODE",
-    }
-
-    # Group by num_vars for AUPRC
-    plt.figure(figsize=(10, 6))
-
-    for method in method_names:
-        method_data = df[df["method"] == method]
-        display_name = method_display_names.get(method, method)
-
-        x = method_data["num_vars"]
-        y_mean = method_data["AUPRC_mean"]
-        y_std = method_data["AUPRC_std"]
-
-        # Assume n=4 samples for standard error calculation
-        n_samples = 4
-        y_stderr = y_std / np.sqrt(n_samples)
-
-        plt.errorbar(
-            x,
-            y_mean,
-            yerr=y_stderr,
-            marker="D",
-            linewidth=2,
-            markersize=8,
-            label=display_name,
-            capsize=5,
-            capthick=2,
-        )
-
-    plt.xlabel("System Size (Number of Variables)", fontsize=12)
-    plt.ylabel("AUPRC", fontsize=12)
-    plt.title(
-        "Area Under Precision-Recall Curve vs System Size",
-        fontsize=14,
-        fontweight="bold",
-    )
-    plt.legend(fontsize=11)
-    plt.grid(True, alpha=0.3)
-    plt.ylim(0, 1.0)
-
-    # Save AUPRC plot
-    plt.savefig("scaling_experiment_auprc_plot.png", dpi=300, bbox_inches="tight")
-    print("AUPRC plot saved to scaling_experiment_auprc_plot.png")
-    plt.show()
+    print("AUPRC data not available in the new dataset.")
+    return None
 
 
 if __name__ == "__main__":
     # Create the main plots
     fig, df = plot_scaling_results()
 
-    # Create additional AUPRC plot
+    # AUPRC comparison not available with new data
     plot_auprc_comparison()
