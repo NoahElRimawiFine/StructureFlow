@@ -1385,7 +1385,7 @@ def main():
     print(f"\nStarting scaling experiment with {NUM_CORES} cores...")
 
     # Generate 5 random seeds
-    random_seeds = [random.randint(0, 10000) for _ in range(3)]
+    random_seeds = [random.randint(0, 10000) for _ in range(2)]
     print(f"Using random seeds: {random_seeds}")
 
     results_df = run_scaling_experiment(
