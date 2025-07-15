@@ -246,6 +246,7 @@ class SF2MLitModule(LightningModule):
                 dim=x_tensor.shape[1],
                 device=self.device,
                 held_out_time=held_out_time,
+                normalize_C=False,
             )
             otfms.append(model)
 
