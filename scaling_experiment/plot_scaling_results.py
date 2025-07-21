@@ -48,7 +48,25 @@ def plot_scaling_results():
 200,2502,0.4,0.39977386934673365,15911,0.39977386934673365,6.696018599710984,0.6306827180548562,0.5518513860566123,7.34396767616272,15911,0.574681301138012,0.47429580458434983,571.5179307460785,15911,,,,,33,36
 500,2502,0.05,0.050569138276553106,12617,0.050569138276553106,3.7046298903105104,0.9528146534159547,0.49974282880661985,62.05327916145325,12617,0.6193330312429121,0.14535419062724012,5360.002261638641,12617,,,,,34,36
 500,2502,0.2,0.2014188376753507,50254,0.2014188376753507,8.180315170301121,0.6895586017834803,0.3970475162183286,61.09390330314636,50254,0.5291851691465888,0.2208703164645075,5353.444791316986,50254,,,,,35,36
-500,2502,0.4,0.40139078156312624,100147,0.40139078156312624,11.074895782446818,0.5797805580917403,0.49229326803046286,60.75722599029541,100147,0.5108339833222751,0.4111183272903037,5351.249730587006,100147,,,,,36,36"""
+500,2502,0.4,0.40139078156312624,100147,0.40139078156312624,11.074895782446818,0.5797805580917403,0.49229326803046286,60.75722599029541,100147,0.5108339833222751,0.4111183272903037,5351.249730587006,100147,,,,,36,36
+10,3728,0.05,0.05,5,0.05,0.0,,,,,0.9863,0.5889,58.5515,,0.9536,0.7143,316.0287,,37,54
+10,3728,0.2,0.2,18,0.2,0.0,,,,,0.9290,0.5838,58.6428,,0.7500,0.3324,339.1738,,38,54
+10,3728,0.4,0.4,36,0.4,0.0,,,,,0.8109,0.6799,58.4385,,0.7761,0.6428,342.7522,,39,54
+25,3728,0.05,0.05,30,0.05,0.0,,,,,0.9758,0.5849,94.6083,,0.8202,0.2659,1061.2054,,40,54
+25,3728,0.2,0.2,120,0.2,0.0,,,,,0.8890,0.5729,97.4592,,0.6722,0.3174,1054.7041,,41,54
+25,3728,0.4,0.4,240,0.4,0.0,,,,,0.7393,0.6392,79.8138,,0.6249,0.4913,934.0664,,42,54
+50,3728,0.05,0.05,123,0.05,0.0,,,,,0.9483,0.5154,145.0283,,0.6417,0.1137,3170.8114,,43,54
+50,3728,0.2,0.2,490,0.2,0.0,,,,,0.7869,0.4816,122.5391,,0.5677,0.2288,2773.2565,,44,54
+50,3728,0.4,0.4,980,0.4,0.0,,,,,0.6382,0.5677,121.8200,,0.5204,0.4118,1252.6854,,45,54
+100,3728,0.05,0.05,495,0.05,0.0,,,,,0.9543,0.5147,248.4641,,0.5311,0.0535,10463.3073,,46,54
+100,3728,0.2,0.2,1980,0.2,0.0,,,,,0.7491,0.4620,235.3687,,0.5203,0.2061,2967.9328,,47,54
+100,3728,0.4,0.4,3960,0.4,0.0,,,,,0.6158,0.5219,232.6693,,0.5080,0.3973,2409.0556,,48,54
+200,3728,0.05,0.05,1995,0.05,0.0,,,,,0.6071,0.1962,577.1567,,,,,49,54
+200,3728,0.2,0.2,7980,0.2,0.0,,,,,0.6872,0.3768,569.9031,,,,,50,54
+200,3728,0.4,0.4,15960,0.4,0.0,,,,,0.5705,0.4719,570.0570,,,,,51,54
+500,3728,0.05,0.05,12475,0.05,0.0,,,,,0.6351,0.1589,4965.4467,,,,,52,54
+500,3728,0.2,0.2,49900,0.2,0.0,,,,,0.5277,0.2181,5328.5185,,,,,53,54
+500,3728,0.4,0.4,99800,0.4,0.0,,,,,0.5106,0.4087,5315.9313,,,,,54,54"""
 
     df = pd.read_csv(io.StringIO(csv_data))
 
@@ -83,20 +101,34 @@ def plot_scaling_results():
         columns={"num_vars": "system_size", "sparsity_target": "sparsity"}
     )
 
+    return stats_df
+
+
+def plot_scaling_results_with_confidence():
+    """
+    Create plots with confidence intervals using alpha fills.
+    """
+    stats_df = plot_scaling_results()
+
     # Set up the plotting style
     plt.style.use("default")
 
-    # Define colors and line styles
-    colors = {"StructureFlow": "#1f77b4", "NGM-NODE": "#ff7f0e"}
-    line_styles = {0.05: "-", 0.2: "--", 0.4: ":"}
+    # Define red color palette for sparsities and line styles for models
+    sparsity_colors = {
+        0.05: "#8B0000",
+        0.2: "#DC143C",
+        0.4: "#FF6347",
+    }  # Dark red to light red
+    method_styles = {"StructureFlow": "-", "NGM-NODE": "--"}
     sparsity_labels = {0.05: "5% sparse", 0.2: "20% sparse", 0.4: "40% sparse"}
 
     # Create figure with three subplots
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
 
-    # Plot 1: AUROC vs System Size
+    # Plot 1: AUROC vs System Size with confidence intervals
     for sparsity in [0.05, 0.2, 0.4]:
         sparsity_data = stats_df[stats_df["sparsity"] == sparsity]
+        color = sparsity_colors[sparsity]
 
         # StructureFlow
         x_sf = sparsity_data["system_size"]
@@ -104,19 +136,17 @@ def plot_scaling_results():
         y_err_sf = sparsity_data["StructureFlow_AUROC_std"] / np.sqrt(
             sparsity_data["StructureFlow_AUROC_count"]
         )
-        ax1.errorbar(
+        ax1.plot(
             x_sf,
             y_sf,
-            yerr=y_err_sf,
-            color=colors["StructureFlow"],
-            linestyle=line_styles[sparsity],
-            marker="o",
+            color=color,
+            linestyle=method_styles["StructureFlow"],
             linewidth=2,
+            marker="o",
             markersize=6,
-            capsize=3,
-            capthick=1,
             label=f"StructureFlow ({sparsity_labels[sparsity]})",
         )
+        ax1.fill_between(x_sf, y_sf - y_err_sf, y_sf + y_err_sf, color=color, alpha=0.2)
 
         # NGM-NODE (filter out NaN values)
         ngm_data = sparsity_data.dropna(subset=["NGM-NODE_AUROC_mean"])
@@ -125,18 +155,194 @@ def plot_scaling_results():
         y_err_ngm = ngm_data["NGM-NODE_AUROC_std"] / np.sqrt(
             ngm_data["NGM-NODE_AUROC_count"]
         )
-        ax1.errorbar(
+        ax1.plot(
             x_ngm,
             y_ngm,
-            yerr=y_err_ngm,
-            color=colors["NGM-NODE"],
-            linestyle=line_styles[sparsity],
-            marker="s",
+            color=color,
+            linestyle=method_styles["NGM-NODE"],
             linewidth=2,
+            marker="s",
             markersize=6,
-            capsize=3,
-            capthick=1,
-            label=f"NGM NeuralODE ({sparsity_labels[sparsity]})",
+            label=f"NGM-NODE ({sparsity_labels[sparsity]})",
+        )
+        ax1.fill_between(
+            x_ngm, y_ngm - y_err_ngm, y_ngm + y_err_ngm, color=color, alpha=0.2
+        )
+
+    ax1.set_xlabel("System Size (Number of Variables)", fontsize=12)
+    ax1.set_ylabel("AUROC", fontsize=12)
+    ax1.set_title("AUROC vs System Size", fontsize=14, fontweight="bold")
+    ax1.legend(fontsize=8, loc="best")
+    ax1.grid(True, alpha=0.3)
+    ax1.set_ylim(0.5, 1.0)
+    ax1.set_xscale("log")
+    ax1.set_xticks([10, 25, 50, 100, 200, 500])
+    ax1.set_xticklabels([10, 25, 50, 100, 200, 500])
+
+    # Plot 2: AUPRC vs System Size with confidence intervals
+    for sparsity in [0.05, 0.2, 0.4]:
+        sparsity_data = stats_df[stats_df["sparsity"] == sparsity]
+        color = sparsity_colors[sparsity]
+
+        # StructureFlow
+        x_sf = sparsity_data["system_size"]
+        y_sf = sparsity_data["StructureFlow_AUPRC_mean"]
+        y_err_sf = sparsity_data["StructureFlow_AUPRC_std"] / np.sqrt(
+            sparsity_data["StructureFlow_AUPRC_count"]
+        )
+        ax2.plot(
+            x_sf,
+            y_sf,
+            color=color,
+            linestyle=method_styles["StructureFlow"],
+            linewidth=2,
+            marker="o",
+            markersize=6,
+            label=f"StructureFlow ({sparsity_labels[sparsity]})",
+        )
+        ax2.fill_between(x_sf, y_sf - y_err_sf, y_sf + y_err_sf, color=color, alpha=0.2)
+
+        # NGM-NODE (filter out NaN values)
+        ngm_data = sparsity_data.dropna(subset=["NGM-NODE_AUPRC_mean"])
+        x_ngm = ngm_data["system_size"]
+        y_ngm = ngm_data["NGM-NODE_AUPRC_mean"]
+        y_err_ngm = ngm_data["NGM-NODE_AUPRC_std"] / np.sqrt(
+            ngm_data["NGM-NODE_AUPRC_count"]
+        )
+        ax2.plot(
+            x_ngm,
+            y_ngm,
+            color=color,
+            linestyle=method_styles["NGM-NODE"],
+            linewidth=2,
+            marker="s",
+            markersize=6,
+            label=f"NGM-NODE ({sparsity_labels[sparsity]})",
+        )
+        ax2.fill_between(
+            x_ngm, y_ngm - y_err_ngm, y_ngm + y_err_ngm, color=color, alpha=0.2
+        )
+
+    ax2.set_xlabel("System Size (Number of Variables)", fontsize=12)
+    ax2.set_ylabel("AUPRC", fontsize=12)
+    ax2.set_title("AUPRC vs System Size", fontsize=14, fontweight="bold")
+    ax2.legend(fontsize=8, loc="best")
+    ax2.grid(True, alpha=0.3)
+    ax2.set_ylim(0.0, 1.0)
+    ax2.set_xscale("log")
+    ax2.set_xticks([10, 25, 50, 100, 200, 500])
+    ax2.set_xticklabels([10, 25, 50, 100, 200, 500])
+
+    # Plot 3: Training Time vs System Size (averaged over sparsity levels)
+    sf_avg_data = (
+        stats_df.groupby("system_size")["StructureFlow_training_time_mean"]
+        .mean()
+        .reset_index()
+    )
+    ax3.plot(
+        sf_avg_data["system_size"],
+        sf_avg_data["StructureFlow_training_time_mean"],
+        color="#8B0000",
+        linestyle="-",
+        marker="o",
+        linewidth=2,
+        markersize=8,
+        label="StructureFlow",
+    )
+
+    ngm_avg_data = (
+        stats_df.dropna(subset=["NGM-NODE_training_time_mean"])
+        .groupby("system_size")["NGM-NODE_training_time_mean"]
+        .mean()
+        .reset_index()
+    )
+    ax3.plot(
+        ngm_avg_data["system_size"],
+        ngm_avg_data["NGM-NODE_training_time_mean"],
+        color="#8B0000",
+        linestyle="--",
+        marker="s",
+        linewidth=2,
+        markersize=8,
+        label="NGM-NODE",
+    )
+
+    ax3.set_xlabel("System Size (Number of Variables)", fontsize=12)
+    ax3.set_ylabel("Training Time (seconds)", fontsize=12)
+    ax3.set_title("Training Time vs System Size", fontsize=14, fontweight="bold")
+    ax3.legend(fontsize=9, loc="best")
+    ax3.grid(True, alpha=0.3)
+    ax3.set_yscale("log")
+    ax3.set_xscale("log")
+    ax3.set_xticks([10, 25, 50, 100, 200, 500])
+    ax3.set_xticklabels([10, 25, 50, 100, 200, 500])
+
+    plt.tight_layout()
+    plt.savefig(
+        "scaling_experiment_plots_with_confidence.png", dpi=300, bbox_inches="tight"
+    )
+    plt.savefig("scaling_experiment_plots_with_confidence.pdf", bbox_inches="tight")
+    print(
+        "Plots with confidence intervals saved to scaling_experiment_plots_with_confidence.png and .pdf"
+    )
+    plt.show()
+
+    return fig, stats_df
+
+
+def plot_scaling_results_clean():
+    """
+    Create clean plots without confidence intervals.
+    """
+    stats_df = plot_scaling_results()
+
+    # Set up the plotting style
+    plt.style.use("default")
+
+    # Define red color palette for sparsities and line styles for models
+    sparsity_colors = {
+        0.05: "#8B0000",
+        0.2: "#DC143C",
+        0.4: "#FF6347",
+    }  # Dark red to light red
+    method_styles = {"StructureFlow": "-", "NGM-NODE": "--"}
+    sparsity_labels = {0.05: "5% sparse", 0.2: "20% sparse", 0.4: "40% sparse"}
+
+    # Create figure with three subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
+
+    # Plot 1: AUROC vs System Size
+    for sparsity in [0.05, 0.2, 0.4]:
+        sparsity_data = stats_df[stats_df["sparsity"] == sparsity]
+        color = sparsity_colors[sparsity]
+
+        # StructureFlow
+        x_sf = sparsity_data["system_size"]
+        y_sf = sparsity_data["StructureFlow_AUROC_mean"]
+        ax1.plot(
+            x_sf,
+            y_sf,
+            color=color,
+            linestyle=method_styles["StructureFlow"],
+            linewidth=2,
+            marker="o",
+            markersize=6,
+            label=f"StructureFlow ({sparsity_labels[sparsity]})",
+        )
+
+        # NGM-NODE (filter out NaN values)
+        ngm_data = sparsity_data.dropna(subset=["NGM-NODE_AUROC_mean"])
+        x_ngm = ngm_data["system_size"]
+        y_ngm = ngm_data["NGM-NODE_AUROC_mean"]
+        ax1.plot(
+            x_ngm,
+            y_ngm,
+            color=color,
+            linestyle=method_styles["NGM-NODE"],
+            linewidth=2,
+            marker="s",
+            markersize=6,
+            label=f"NGM-NODE ({sparsity_labels[sparsity]})",
         )
 
     ax1.set_xlabel("System Size (Number of Variables)", fontsize=12)
@@ -152,24 +358,19 @@ def plot_scaling_results():
     # Plot 2: AUPRC vs System Size
     for sparsity in [0.05, 0.2, 0.4]:
         sparsity_data = stats_df[stats_df["sparsity"] == sparsity]
+        color = sparsity_colors[sparsity]
 
         # StructureFlow
         x_sf = sparsity_data["system_size"]
         y_sf = sparsity_data["StructureFlow_AUPRC_mean"]
-        y_err_sf = sparsity_data["StructureFlow_AUPRC_std"] / np.sqrt(
-            sparsity_data["StructureFlow_AUPRC_count"]
-        )
-        ax2.errorbar(
+        ax2.plot(
             x_sf,
             y_sf,
-            yerr=y_err_sf,
-            color=colors["StructureFlow"],
-            linestyle=line_styles[sparsity],
-            marker="o",
+            color=color,
+            linestyle=method_styles["StructureFlow"],
             linewidth=2,
+            marker="o",
             markersize=6,
-            capsize=3,
-            capthick=1,
             label=f"StructureFlow ({sparsity_labels[sparsity]})",
         )
 
@@ -177,21 +378,15 @@ def plot_scaling_results():
         ngm_data = sparsity_data.dropna(subset=["NGM-NODE_AUPRC_mean"])
         x_ngm = ngm_data["system_size"]
         y_ngm = ngm_data["NGM-NODE_AUPRC_mean"]
-        y_err_ngm = ngm_data["NGM-NODE_AUPRC_std"] / np.sqrt(
-            ngm_data["NGM-NODE_AUPRC_count"]
-        )
-        ax2.errorbar(
+        ax2.plot(
             x_ngm,
             y_ngm,
-            yerr=y_err_ngm,
-            color=colors["NGM-NODE"],
-            linestyle=line_styles[sparsity],
-            marker="s",
+            color=color,
+            linestyle=method_styles["NGM-NODE"],
             linewidth=2,
+            marker="s",
             markersize=6,
-            capsize=3,
-            capthick=1,
-            label=f"NGM NeuralODE ({sparsity_labels[sparsity]})",
+            label=f"NGM-NODE ({sparsity_labels[sparsity]})",
         )
 
     ax2.set_xlabel("System Size (Number of Variables)", fontsize=12)
@@ -205,7 +400,6 @@ def plot_scaling_results():
     ax2.set_xticklabels([10, 25, 50, 100, 200, 500])
 
     # Plot 3: Training Time vs System Size (averaged over sparsity levels)
-    # Calculate averages for StructureFlow
     sf_avg_data = (
         stats_df.groupby("system_size")["StructureFlow_training_time_mean"]
         .mean()
@@ -214,15 +408,14 @@ def plot_scaling_results():
     ax3.plot(
         sf_avg_data["system_size"],
         sf_avg_data["StructureFlow_training_time_mean"],
-        color=colors["StructureFlow"],
+        color="#8B0000",
         linestyle="-",
         marker="o",
         linewidth=2,
         markersize=8,
-        label="StructureFlow (avg across sparsities)",
+        label="StructureFlow",
     )
 
-    # Calculate averages for NGM-NODE (only where data exists)
     ngm_avg_data = (
         stats_df.dropna(subset=["NGM-NODE_training_time_mean"])
         .groupby("system_size")["NGM-NODE_training_time_mean"]
@@ -232,12 +425,12 @@ def plot_scaling_results():
     ax3.plot(
         ngm_avg_data["system_size"],
         ngm_avg_data["NGM-NODE_training_time_mean"],
-        color=colors["NGM-NODE"],
-        linestyle="-",
+        color="#8B0000",
+        linestyle="--",
         marker="s",
         linewidth=2,
         markersize=8,
-        label="NGM NeuralODE (avg across sparsities)",
+        label="NGM-NODE",
     )
 
     ax3.set_xlabel("System Size (Number of Variables)", fontsize=12)
@@ -250,14 +443,23 @@ def plot_scaling_results():
     ax3.set_xticks([10, 25, 50, 100, 200, 500])
     ax3.set_xticklabels([10, 25, 50, 100, 200, 500])
 
-    # Adjust layout
     plt.tight_layout()
+    plt.savefig("scaling_experiment_plots_clean.png", dpi=300, bbox_inches="tight")
+    plt.savefig("scaling_experiment_plots_clean.pdf", bbox_inches="tight")
+    print("Clean plots saved to scaling_experiment_plots_clean.png and .pdf")
+    plt.show()
 
-    # Save the plots
-    plt.savefig("scaling_experiment_plots.png", dpi=300, bbox_inches="tight")
-    print("Plots saved to scaling_experiment_plots.png")
+    return fig, stats_df
 
-    # Show summary statistics
+
+def plot_scaling_results_summary():
+    """
+    Print summary statistics for the scaling experiment.
+    """
+    stats_df = plot_scaling_results()
+
+    sparsity_labels = {0.05: "5% sparse", 0.2: "20% sparse", 0.4: "40% sparse"}
+
     print("\n" + "=" * 80)
     print("SCALING EXPERIMENT SUMMARY")
     print("=" * 80)
@@ -317,24 +519,14 @@ def plot_scaling_results():
             else:
                 print(" | NGM-NODE: N/A")
 
-    # Show the plots
-    plt.show()
-
-    return fig, stats_df
-
-
-def plot_auprc_comparison():
-    """
-    Note: AUPRC data not available in the new dataset.
-    This function is kept for compatibility but will show a message.
-    """
-    print("AUPRC data not available in the new dataset.")
-    return None
-
 
 if __name__ == "__main__":
-    # Create the main plots
-    fig, stats_df = plot_scaling_results()
+    # Create both versions of the plots
+    print("Creating plots with confidence intervals...")
+    fig_conf, stats_df = plot_scaling_results_with_confidence()
 
-    # AUPRC comparison not available with new data
-    plot_auprc_comparison()
+    print("\nCreating clean plots...")
+    fig_clean, _ = plot_scaling_results_clean()
+
+    # Print summary statistics
+    plot_scaling_results_summary()
