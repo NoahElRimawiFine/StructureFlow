@@ -286,7 +286,7 @@ def main():
     # Run hyperparameter sweep
     results_df = run_hparam_sweep(
         hparam_configs=hparam_configs,
-        system_sizes=[20],
+        system_sizes=[50],
         seeds=[random.randint(0, 10000) for _ in range(3)],
         num_cores=32,
         include_baseline=False,
