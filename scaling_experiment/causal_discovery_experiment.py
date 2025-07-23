@@ -1060,7 +1060,10 @@ def run_single_experiment(
 
 
 def run_single_experiment_silent(
-    num_vars: int, methods: List[CausalDiscoveryMethod], seed: int = 42
+    num_vars: int,
+    methods: List[CausalDiscoveryMethod],
+    seed: int = 42,
+    sparsity: float = 0.2,
 ) -> Dict[str, Any]:
     """
     Run causal discovery experiment for a single system size with minimal output.
@@ -1075,7 +1078,9 @@ def run_single_experiment_silent(
         results: Dictionary containing results for all methods
     """
     # Generate causal system
-    true_adjacency, dynamics_matrix = generate_causal_system(num_vars, seed=seed)
+    true_adjacency, dynamics_matrix = generate_causal_system(
+        num_vars, edge_prob=sparsity, seed=seed
+    )
 
     # Simulate time series data
     time_series_data = simulate_time_series(dynamics_matrix, seed=seed)
