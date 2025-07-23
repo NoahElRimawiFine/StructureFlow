@@ -67,7 +67,11 @@ def create_sf2m_method_from_hparams(hparams: Dict[str, Any]) -> StructureFlowMet
         device="cpu",
     )
 
-    return StructureFlowMethod(config, silent=True)  # Enable silent mode
+    # Get the actual hyperparameter dictionary for a system size of 20
+    # (since we're testing on system_sizes=[20] in the main function)
+    hyperparams_dict = config.get_scaled_config(num_vars=20)
+
+    return StructureFlowMethod(hyperparams_dict, silent=True)  # Enable silent mode
 
 
 def run_hparam_sweep(
