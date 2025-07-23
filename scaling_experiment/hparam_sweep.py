@@ -24,12 +24,12 @@ def create_hparam_configs() -> List[Dict[str, Any]]:
 
     # Define hyperparameter search space (dummy values - user will replace)
     hparam_space = {
-        "n_steps": [1000, 2000, 5000],
-        "batch_size": [64, 128],
+        "n_steps": [2000, 4000],
+        "batch_size": [64],
         "reg": [1e-6, 1e-5, 1e-4],
         "alpha": [0.1, 0.3],
         "lr": [1e-3, 3e-3, 5e-3],
-        "knockout_hidden": [128, 256],
+        "knockout_hidden": [256],
     }
 
     print(f"Hyperparameter search space:")
