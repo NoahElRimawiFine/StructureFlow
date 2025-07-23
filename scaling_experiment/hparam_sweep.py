@@ -76,6 +76,7 @@ def run_hparam_sweep(
     seeds: List[int] = [42, 123, 456, 789, 999],
     num_cores: int = 4,
     include_baseline: bool = True,
+    sparsity: float = 0.2,
 ) -> pd.DataFrame:
     """
     Run hyperparameter sweep across multiple configurations, system sizes, and seeds.
@@ -130,7 +131,9 @@ def run_hparam_sweep(
                 # Run single experiment
                 try:
                     # Import the run_single_experiment_silent function
-                    result = run_single_experiment_silent(num_vars, methods, seed)
+                    result = run_single_experiment_silent(
+                        num_vars, methods, seed, sparsity=sparsity
+                    )
 
                     # Add hyperparameter information to results
                     for param_name, param_value in hparams.items():
@@ -283,14 +286,15 @@ def main():
     # Run hyperparameter sweep
     results_df = run_hparam_sweep(
         hparam_configs=hparam_configs,
-        system_sizes=[10],
+        system_sizes=[20],
         seeds=[
             random.randint(0, 1000),
             random.randint(0, 1000),
             random.randint(0, 1000),
         ],
-        num_cores=4,
+        num_cores=32,
         include_baseline=False,
+        sparsity=0.05,
     )
 
     # Analyze results
