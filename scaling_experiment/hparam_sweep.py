@@ -52,24 +52,20 @@ def create_hparam_configs() -> List[Dict[str, Any]]:
 def create_sf2m_method_from_hparams(hparams: Dict[str, Any]) -> StructureFlowMethod:
     """Create SF2M method with specific hyperparameters."""
 
-    # Create SF2M config with the hyperparameters
-    config = SF2MConfig(
-        base_n_steps=hparams["n_steps"],
-        base_lr=hparams["lr"],
-        base_alpha=hparams["alpha"],
-        base_reg=hparams["reg"],
-        base_gl_reg=0.02,  # Keep fixed for now
-        base_knockout_hidden=hparams["knockout_hidden"],
-        base_score_hidden=[64, 64],  # Keep fixed for now
-        base_correction_hidden=[32, 32],  # Keep fixed for now
-        base_batch_size=hparams["batch_size"],
-        sigma=1.0,
-        device="cpu",
-    )
-
-    # Get the actual hyperparameter dictionary for a system size of 20
-    # (since we're testing on system_sizes=[20] in the main function)
-    hyperparams_dict = config.get_scaled_config(num_vars=20)
+    # Create hyperparameter dictionary directly without scaling
+    hyperparams_dict = {
+        "n_steps": hparams["n_steps"],
+        "lr": hparams["lr"],
+        "alpha": hparams["alpha"],
+        "reg": hparams["reg"],
+        "gl_reg": 0.02,  # Keep fixed for now
+        "knockout_hidden": hparams["knockout_hidden"],
+        "score_hidden": [64, 64],  # Keep fixed for now
+        "correction_hidden": [32, 32],  # Keep fixed for now
+        "batch_size": hparams["batch_size"],
+        "sigma": 1.0,
+        "device": "cpu",
+    }
 
     return StructureFlowMethod(hyperparams_dict, silent=True)  # Enable silent mode
 
