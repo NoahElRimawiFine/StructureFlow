@@ -255,9 +255,10 @@ class SF2MConfig:
         device: str = "cpu",
         scaling_factor: float = 1.0,
         size_specific_configs: Dict[int, Dict[str, Any]] = None,
+        sparsity_configs: Dict[str, Dict[str, Any]] = None,
     ):
         """
-        Initialize SF2M configuration with scaling options.
+        Initialize SF2M configuration with scaling options and sparsity-aware hyperparameters.
 
         Args:
             base_*: Base hyperparameters for small systems (used for auto-scaling)
@@ -265,6 +266,10 @@ class SF2MConfig:
             size_specific_configs: Dictionary mapping system size to specific hyperparameters
                                  Example: {10: {'n_steps': 3000, 'lr': 1e-3, 'gl_reg': 0.02},
                                           50: {'n_steps': 8000, 'lr': 5e-4, 'gl_reg': 0.05}}
+            sparsity_configs: Dictionary mapping sparsity level to specific hyperparameters
+                             Example: {'low': {'gl_reg': 0.08, 'reg': 1e-5},  # <0.15 sparsity
+                                      'medium': {'gl_reg': 0.04, 'reg': 5e-6}, # 0.15-0.35 sparsity
+                                      'high': {'gl_reg': 0.02, 'reg': 1e-6}}   # >0.35 sparsity
         """
         self.base_n_steps = base_n_steps
         self.base_lr = base_lr
@@ -280,8 +285,49 @@ class SF2MConfig:
         self.scaling_factor = scaling_factor
         self.size_specific_configs = size_specific_configs or {}
 
-    def get_scaled_config(self, num_vars: int) -> Dict[str, Any]:
-        """Get scaled hyperparameters based on system size with linear scaling."""
+        # Sparsity-aware configurations
+        self.sparsity_configs = sparsity_configs or {
+            "low": {
+                "gl_reg": 0.08,
+                "reg": 1e-5,
+            },  # Dense graphs need stronger sparsity regularization
+            "medium": {
+                "gl_reg": 0.04,
+                "reg": 5e-6,
+            },  # Medium density graphs use default
+            "high": {
+                "gl_reg": 0.02,
+                "reg": 1e-6,
+            },  # Sparse graphs need weaker sparsity regularization
+        }
+
+    def _classify_sparsity(self, actual_sparsity: float) -> str:
+        """
+        Classify sparsity level based on actual edge density.
+
+        Args:
+            actual_sparsity: Actual edge density (num_edges / total_possible_edges)
+
+        Returns:
+            sparsity_class: 'low', 'medium', or 'high' sparsity class
+        """
+        if actual_sparsity < 0.15:
+            return "high"  # High sparsity = few edges
+        elif actual_sparsity < 0.35:
+            return "medium"
+        else:
+            return "low"  # Low sparsity = many edges
+
+    def get_scaled_config(
+        self, num_vars: int, sparsity_level: float = None
+    ) -> Dict[str, Any]:
+        """Get scaled hyperparameters based on system size and optionally sparsity level.
+
+        Args:
+            num_vars: Number of variables in the system
+            sparsity_level: Edge density level (can be target edge probability or actual density)
+                           Used to select appropriate sparsity-aware hyperparameters
+        """
 
         # If specific config exists for this size, use it as base
         if num_vars in self.size_specific_configs:
@@ -331,20 +377,35 @@ class SF2MConfig:
             int(dim * scaling_factor) for dim in self.base_correction_hidden
         ]
 
-        # Keep other hyperparameters fixed (they were optimized for this problem)
+        # Start with base hyperparameters
         config = {
             "n_steps": n_steps,
-            "lr": self.base_lr,  # Keep fixed
-            "alpha": self.base_alpha,  # Keep fixed
-            "reg": self.base_reg,  # Keep fixed
-            "gl_reg": self.base_gl_reg,  # Keep fixed
+            "lr": self.base_lr,
+            "alpha": self.base_alpha,
+            "reg": self.base_reg,
+            "gl_reg": self.base_gl_reg,
             "knockout_hidden": knockout_hidden,
             "score_hidden": score_hidden,
             "correction_hidden": correction_hidden,
             "sigma": self.sigma,
             "device": self.device,
-            "batch_size": self.base_batch_size,  # Keep fixed
+            "batch_size": self.base_batch_size,
         }
+
+        # Apply sparsity-specific adjustments if sparsity level is provided
+        if sparsity_level is not None:
+            sparsity_class = self._classify_sparsity(sparsity_level)
+            sparsity_overrides = self.sparsity_configs.get(sparsity_class, {})
+
+            if sparsity_overrides:
+                print(
+                    f"Applying sparsity-aware config for {sparsity_class} sparsity (density={sparsity_level:.3f}): {sparsity_overrides}"
+                )
+                config.update(sparsity_overrides)
+            else:
+                print(
+                    f"Using default hyperparameters for {sparsity_class} sparsity (density={sparsity_level:.3f})"
+                )
 
         return config
 
@@ -1128,11 +1189,11 @@ def run_scaling_experiment(
     num_cores: int = 4,
 ) -> pd.DataFrame:
     """
-    Run causal discovery scaling experiment with fixed hyperparameters across multiple sparsity levels.
+    Run causal discovery scaling experiment with sparsity-aware hyperparameters across multiple sparsity levels.
 
     Args:
         system_sizes: List of system sizes to test
-        sf2m_config: SF2M configuration object (uses base config for all sizes)
+        sf2m_config: SF2M configuration object (uses sparsity-aware configs)
         seeds: List of random seeds for multiple runs
         sparsity_levels: List of edge probabilities to test for each system size
         num_cores: Number of cores to use for reproducible timing
@@ -1149,39 +1210,7 @@ def run_scaling_experiment(
 
     start_time = time.time()
 
-    # Create fixed hyperparameters (same for all system sizes)
-    fixed_hyperparams_sf2m = {
-        "n_steps": sf2m_config.base_n_steps,
-        "lr": sf2m_config.base_lr,
-        "alpha": sf2m_config.base_alpha,
-        "reg": sf2m_config.base_reg,
-        "gl_reg": sf2m_config.base_gl_reg,
-        "knockout_hidden": sf2m_config.base_knockout_hidden,
-        "score_hidden": sf2m_config.base_score_hidden,
-        "correction_hidden": sf2m_config.base_correction_hidden,
-        "batch_size": sf2m_config.base_batch_size,
-        "sigma": sf2m_config.sigma,
-        "device": sf2m_config.device,
-    }
-
-    # NGM-NODE hyperparameters (simpler, fewer steps due to ODE cost)
-    fixed_hyperparams_ngm = {
-        "n_steps": 4000,  # Fewer steps due to ODE integration cost
-        "lr": 0.005,
-        "gl_reg": 0.05,
-        "hidden_dim": 128,  # Single hidden layer size
-        "batch_size": 64,
-        "l2_reg": 0.01,
-        "l1_reg": 0.0,
-        "device": sf2m_config.device,
-    }
-
-    print(
-        f"  SF2M steps={fixed_hyperparams_sf2m['n_steps']}, knockout_hidden={fixed_hyperparams_sf2m['knockout_hidden']}"
-    )
-    print(
-        f"  NGM-NODE steps={fixed_hyperparams_ngm['n_steps']}, hidden_dim={fixed_hyperparams_ngm['hidden_dim']} (limited to N≤100)"
-    )
+    print(f"  Sparsity-aware SF2M configs: {sf2m_config.sparsity_configs}")
     print(f"  Sparsity levels: {sparsity_levels}")
 
     for seed in seeds:
@@ -1192,20 +1221,44 @@ def run_scaling_experiment(
                     f"\n[{current_exp}/{total_experiments}] System size: {num_vars}, Seed: {seed}, Sparsity: {sparsity:.2f}"
                 )
 
+                # Get sparsity-aware SF2M hyperparameters using target sparsity
+                sf2m_hyperparams = sf2m_config.get_scaled_config(num_vars, sparsity)
+
+                # Generate system after getting hyperparameters
+                true_adjacency, dynamics_matrix = generate_causal_system(
+                    num_vars, edge_prob=sparsity, seed=seed
+                )
+
+                # NGM-NODE hyperparameters (simpler, fewer steps due to ODE cost)
+                ngm_hyperparams = {
+                    "n_steps": 4000,  # Fewer steps due to ODE integration cost
+                    "lr": 0.005,
+                    "gl_reg": 0.05,
+                    "hidden_dim": 128,  # Single hidden layer size
+                    "batch_size": 64,
+                    "l2_reg": 0.01,
+                    "l1_reg": 0.0,
+                    "device": sf2m_config.device,
+                }
+
                 methods = [
                     CorrelationBasedMethod("pearson"),
-                    StructureFlowMethod(fixed_hyperparams_sf2m, silent=True),
+                    StructureFlowMethod(sf2m_hyperparams, silent=True),
                 ]
 
                 # Only add NGM-NODE for system sizes <= 100
                 if num_vars <= 100:
-                    methods.append(NGMNodeMethod(fixed_hyperparams_ngm, silent=True))
+                    methods.append(NGMNodeMethod(ngm_hyperparams, silent=True))
                     print(f"  Including NGM-NODE for N={num_vars}")
                 else:
                     print(f"  Skipping NGM-NODE for N={num_vars} (too large)")
 
-                result = run_single_experiment_with_sparsity(
-                    num_vars, methods, seed, sparsity
+                # Simulate data
+                time_series_data = simulate_time_series(dynamics_matrix, seed=seed)
+
+                # Run experiment with simplified sparsity handling
+                result = run_single_experiment_with_target_sparsity(
+                    num_vars, methods, seed, sparsity, true_adjacency, time_series_data
                 )
                 result["experiment_id"] = current_exp
                 result["total_experiments"] = total_experiments
@@ -1218,33 +1271,29 @@ def run_scaling_experiment(
     return results_df
 
 
-def run_single_experiment_with_sparsity(
+def run_single_experiment_with_target_sparsity(
     num_vars: int,
     methods: List[CausalDiscoveryMethod],
-    seed: int = 42,
-    sparsity: float = 0.2,
+    seed: int,
+    target_sparsity: float,
+    true_adjacency: np.ndarray,
+    time_series_data: np.ndarray,
 ) -> Dict[str, Any]:
     """
-    Run causal discovery experiment for a single system size with specified sparsity.
+    Run causal discovery experiment using target sparsity level.
 
     Args:
         num_vars: Number of variables in the system
         methods: List of causal discovery methods to test
         seed: Random seed
-        sparsity: Edge probability for graph generation
+        target_sparsity: Target edge probability used for graph generation
+        true_adjacency: True adjacency matrix
+        time_series_data: Precomputed time series data
 
     Returns:
         results: Dictionary containing results for all methods
     """
-    # Generate causal system with specified sparsity
-    true_adjacency, dynamics_matrix = generate_causal_system(
-        num_vars, edge_prob=sparsity, seed=seed
-    )
-
-    # Simulate time series data
-    time_series_data = simulate_time_series(dynamics_matrix, seed=seed)
-
-    # Calculate actual sparsity metrics
+    # Calculate actual edge metrics from the generated graph
     total_possible_edges = num_vars * (num_vars - 1)  # Exclude diagonal
     actual_edges = np.sum(np.abs(true_adjacency) > 0) - np.sum(
         np.diag(np.abs(true_adjacency)) > 0
@@ -1255,11 +1304,11 @@ def run_single_experiment_with_sparsity(
     results = {
         "num_vars": num_vars,
         "seed": seed,
-        "sparsity_target": sparsity,
+        "sparsity_target": target_sparsity,
         "sparsity_actual": actual_sparsity,
         "true_edges": actual_edges,
         "edge_density": actual_sparsity,
-        "max_eigenvalue_real": np.max(np.real(np.linalg.eigvals(dynamics_matrix))),
+        "max_eigenvalue_real": np.max(np.real(np.linalg.eigvals(true_adjacency.T))),
     }
 
     # Test each method
@@ -1357,7 +1406,7 @@ def main():
     print("SF2M CAUSAL DISCOVERY SCALING EXPERIMENT")
     print("=" * 60)
 
-    # from hparam sweep, top config: n_steps=2000, batch_size=64, reg=1e-06, alpha=0.3, lr=0.001, knockout_hidden=256
+    # Create SF2M configuration with sparsity-aware hyperparameters
     sf2m_config = SF2MConfig(
         # Base parameters for N=10 (will be scaled linearly)
         base_n_steps=4000,
@@ -1371,6 +1420,17 @@ def main():
         base_batch_size=64,
         sigma=1.0,
         device="cpu",
+        sparsity_configs={
+            "low": {  # High density graphs (>35% edge density) need weaker sparsity regularization
+                "reg": 5e-7,
+            },
+            "medium": {  # Medium density graphs (15-35% edge density) use near-default
+                "reg": 1e-6,
+            },
+            "high": {  # Sparse graphs (<15% edge density) need stronger sparsity regularization
+                "reg": 5e-6,
+            },
+        },
     )
 
     # Define system sizes to test
@@ -1379,17 +1439,18 @@ def main():
     # Define sparsity levels to test
     sparsity_levels = [0.05, 0.2, 0.4]  # Low, medium, high density graphs
 
-    print(f"\nScaling experiment setup:")
+    print(f"\nSparsity-aware scaling experiment setup:")
     print(f"  System sizes: {system_sizes}")
     print(f"  Sparsity levels: {sparsity_levels}")
-    print(f"  Seeds per size/sparsity: 5 (for averaging over different random graphs)")
-    print(f"  Total experiments: {len(system_sizes) * len(sparsity_levels) * 5}")
-    print(f"  Fixed hyperparameters (no scaling with system size)")
+    print(f"  Seeds per size/sparsity: 3 (for averaging over different random graphs)")
+    print(f"  Total experiments: {len(system_sizes) * len(sparsity_levels) * 3}")
+    print(f"  Sparsity-aware hyperparameters:")
 
-    # Run experiments
+    for sparsity_class, config in sf2m_config.sparsity_configs.items():
+        print(f"    {sparsity_class} sparsity: {config}")
+
     print(f"\nStarting scaling experiment with {NUM_CORES} cores...")
 
-    # Generate 5 random seeds
     random_seeds = [random.randint(0, 10000) for _ in range(3)]
     print(f"Using random seeds: {random_seeds}")
 
