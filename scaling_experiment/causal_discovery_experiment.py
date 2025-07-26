@@ -1415,7 +1415,7 @@ def main():
     system_sizes = [10, 25, 50, 100, 200, 500]
 
     # Define sparsity levels to test
-    sparsity_levels = [0.05, 0.2, 0.4]  # Low, medium, high density graphs
+    sparsity_levels = [0.05]  # Low, medium, high density graphs
 
     print(f"\nSparsity-aware experiment setup:")
     print(f"  System sizes: {system_sizes}")
