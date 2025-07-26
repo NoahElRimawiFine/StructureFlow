@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env
 set -euo pipefail
 
 PYTHON="${PYTHON:-python}"                      

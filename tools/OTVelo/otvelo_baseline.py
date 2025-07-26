@@ -211,6 +211,15 @@ def main():
     Tv_corr -= np.diag(np.diag(Tv_corr))
     true_mat -= np.diag(np.diag(true_mat))
 
+    Tv_Granger, Tv_Granger_slices = OT_lagged_correlation(vel_all_signed, vel_sign, Ts_prior, stimulation=True, 
+                                 elastic_Net=True,l1_opt=0.5,tune=False,signed=True, return_slice=True )       
+
+    Tv_Granger = Tv_Granger - np.diag( np.diag(Tv_Granger) )
+    plt.imshow(Tv_Granger, cmap='RdBu_r', vmin=-1, vmax=1)
+    plt.gca().invert_yaxis()
+    plt.title('OTVelo‑Granger')
+    plt.show()
+
     # fig, ax = plt.subplots(1, 2, figsize=(10, 4), sharex=True, sharey=True)
 
     # im0 = ax[0].imshow(Tv_corr, cmap='RdBu_r', vmin=-1, vmax=1)
@@ -230,12 +239,18 @@ def main():
     mask = ~np.eye(Tv_corr.shape[0], dtype=bool)
 
     y_true  = (true_mat[mask] != 0).astype(int)    
-    y_score = np.abs(Tv_corr[mask])              
+    y_score = np.abs(Tv_corr[mask])
+    y_score_granger = np.abs(Tv_Granger[mask])
+
 
     aupr = average_precision_score(y_true, y_score)
     auroc = roc_auc_score(y_true, y_score)
-    print(f"AUROC (unsigned edges) : {auroc:.4f}")
-    print(f"AUPR (unsigned edges) : {aupr:.4f}")
+    print(f"AUROC OT_corr (unsigned edges) : {auroc:.4f}")
+    print(f"AUPR OT_corr (unsigned edges) : {aupr:.4f}")
+    aupr_granger = average_precision_score(y_true, y_score_granger)
+    auroc_granger = roc_auc_score(y_true, y_score_granger)
+    print(f"AUROC OT_Granger (unsigned edges) : {auroc_granger:.4f}")
+    print(f"AUPR OT_Granger (unsigned edges) : {aupr_granger:.4f}")
 
 
 if __name__ == "__main__":
