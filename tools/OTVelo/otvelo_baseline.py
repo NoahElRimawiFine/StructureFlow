@@ -8,6 +8,8 @@ from pathlib import Path
 import anndata as ad, scanpy as sc
 from typing import Dict, Any
 import argparse
+import torch
+import random
 
 from otvelo.utils_Velo import *
 
@@ -23,11 +25,28 @@ parser.add_argument("--subset",
                     choices=["wt", "ko", "all"], default="wt",
                     help="which replicates to load: "
                          "'wt' (wild‑type), 'ko' (knock‑outs), or 'all'")
+parser.add_argument("--backbone", type=str, default="dyn-BF",
+                    help="backbone name, e.g. 'dyn-BF', 'dyn-TF'")
+
+parser.add_argument("--seed", type=int, default=42,
+                    help="random seed for reproducibility")
+
 args = parser.parse_args()
-print(args.subset)
+
+seed = args.seed
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)    
+if torch.backends.cudnn.is_available():
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False  
+random.seed(seed)
+sklearn.utils.check_random_state(seed)
+
+
 
 ROOT_SYN = Path(__file__).resolve().parents[2] / "data" / "Synthetic"
-backbone = "dyn-BF"
+backbone = args.backbone
 
 def discover_subset(root: Path, backbone: str, subset: str):
     """
@@ -152,7 +171,6 @@ def load_synth_dataset(name: str, n_bins: int = 5) -> Dict[str, Any]:
 
 def main(): 
     ds = [load_synth_dataset(p, n_bins=5) for p in paths]
-    print(f"[INFO] loaded {len(ds)} datasets")
     adatas     = [d["adata"] for d in ds]  
 
     adata_big = ad.concat(adatas, axis=0, join="inner",
@@ -175,7 +193,6 @@ def main():
     Nt     = 5                                
 
     print("counts shape :", counts.shape)     
-    print("labels uniq  :", np.unique(labels)) 
 
     Ts_prior, _ = solve_prior(counts, counts,
                           Nt, labels,
@@ -194,18 +211,18 @@ def main():
     Tv_corr -= np.diag(np.diag(Tv_corr))
     true_mat -= np.diag(np.diag(true_mat))
 
-    fig, ax = plt.subplots(1, 2, figsize=(10, 4), sharex=True, sharey=True)
+    # fig, ax = plt.subplots(1, 2, figsize=(10, 4), sharex=True, sharey=True)
 
-    im0 = ax[0].imshow(Tv_corr, cmap='RdBu_r', vmin=-1, vmax=1)
-    ax[0].invert_yaxis()
-    ax[0].set_title('OTVelo‑Corr')
+    # im0 = ax[0].imshow(Tv_corr, cmap='RdBu_r', vmin=-1, vmax=1)
+    # ax[0].invert_yaxis()
+    # ax[0].set_title('OTVelo‑Corr')
 
-    im1 = ax[1].imshow(true_mat, cmap='RdBu_r', vmin=-1, vmax=1)
-    ax[1].invert_yaxis()
-    ax[1].set_title('Reference network')
+    # im1 = ax[1].imshow(true_mat, cmap='RdBu_r', vmin=-1, vmax=1)
+    # ax[1].invert_yaxis()
+    # ax[1].set_title('Reference network')
 
-    plt.tight_layout()
-    plt.show()
+    # plt.tight_layout()
+    # plt.show()
 
 
     from sklearn.metrics import average_precision_score, roc_auc_score
