@@ -215,10 +215,10 @@ def main():
                                  elastic_Net=True,l1_opt=0.5,tune=False,signed=True, return_slice=True )       
 
     Tv_Granger = Tv_Granger - np.diag( np.diag(Tv_Granger) )
-    plt.imshow(Tv_Granger, cmap='RdBu_r', vmin=-1, vmax=1)
-    plt.gca().invert_yaxis()
-    plt.title('OTVelo‑Granger')
-    plt.show()
+    # plt.imshow(Tv_Granger, cmap='RdBu_r', vmin=-1, vmax=1)
+    # plt.gca().invert_yaxis()
+    # plt.title('OTVelo‑Granger')
+    # plt.show()
 
     # fig, ax = plt.subplots(1, 2, figsize=(10, 4), sharex=True, sharey=True)
 
