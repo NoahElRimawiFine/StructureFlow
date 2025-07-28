@@ -169,8 +169,7 @@ def main():
     
     true_mat = ds[0]["ref_network"].T
 
-    data_train = [torch.tensor(c, dtype=torch.float32)
-              for c in coords_all]
+    data_train = [torch.tensor(c, dtype=torch.float32, device='cuda' if torch.cuda.is_available() else 'cpu') for c in coords_all]
     
     for i, arr in enumerate(coords_all):
         print(f"bin {i}: {arr.shape[0]} cells   dim={arr.shape[1]}")
