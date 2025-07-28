@@ -7,6 +7,7 @@ import copy
 from pathlib import Path
 import anndata as ad, scanpy as sc
 from typing import Dict, Any
+import scipy.sparse as sp
 import argparse
 import torch
 import random
@@ -101,7 +102,8 @@ def to_tigon_coords(adata: ad.AnnData):
     coords_all = []
     for tb in sorted(adata.obs["t"].unique()):
         sl = adata[adata.obs.t == tb]
-        coords_all.append(sl.obsm["X_umap"])
+        X = sl.X.A if sp.issparse(sl.X) else sl.X   
+        coords_all.append(X)
     return coords_all
 
 
@@ -270,6 +272,22 @@ def main():
         'Sigma': Sigma
     }, ckpt_path)
     print('Stored ckpt at {}'.format(ckpt_path))
+
+    if args.save_dir is not None:
+        if not os.path.exists(args.save_dir):
+            os.makedirs(args.save_dir)
+        ckpt_path = os.path.join(args.save_dir, 'ckpt_EMT.pth')
+        if os.path.exists(ckpt_path):
+            checkpoint = torch.load(ckpt_path,map_location=torch.device('cpu'))
+            func.load_state_dict(checkpoint['func_state_dict'])
+            print('Loaded ckpt from {}'.format(ckpt_path))
+    
+    time_pt = 0
+    z_t = data_train[time_pt]
+    gene_list = adata_big.var.index.to_list()
+    plot_jac_v(func,z_t,time_pt,'Average_jac_d0.pdf', gene_list,args,device)
+
+
 
 
 
