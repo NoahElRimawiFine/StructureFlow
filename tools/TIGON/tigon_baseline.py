@@ -176,7 +176,7 @@ def main():
         print(f"bin {i}: {arr.shape[0]} cells   dim={arr.shape[1]}")
     
     args = create_args()
-    device = torch.device('cuda' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"[INFO] using device {device}")
 
     integral_time = args.timepoints
