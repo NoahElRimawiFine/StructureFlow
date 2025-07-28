@@ -28,7 +28,7 @@ _parser.add_argument("--subset", choices=["wt", "ko", "all"], default="wt",
 # training hyper‑params
 _parser.add_argument("--timepoints", default="0.0,0.25,0.5,0.75,1.0",
                      help="comma‑sep list of numeric times; length = #bins")
-_parser.add_argument("--niters", type=int, default=5000)
+_parser.add_argument("--niters", type=int, default=100)
 _parser.add_argument("--lr", type=float, default=3e-3)
 _parser.add_argument("--hidden-dim", type=int, default=16)
 _parser.add_argument("--n-hiddens", type=int, default=4)
@@ -47,6 +47,10 @@ _parser.add_argument("--n-bins", type=int, default=5,
 
 args = _parser.parse_args()
 args.timepoints = [float(x) for x in args.timepoints.split(",")]
+
+run_id = f"{args.backbone}_{args.subset}_{args.seed}"
+args.save_dir = Path(args.save_dir) / run_id
+args.save_dir.mkdir(parents=True, exist_ok=True)
 
 seed = args.seed
 np.random.seed(seed)
@@ -229,7 +233,7 @@ def main():
     if args.save_dir is not None:
         if not os.path.exists(args.save_dir):
             os.makedirs(args.save_dir)
-        ckpt_path = os.path.join(args.save_dir, 'ckpt.pth')
+        ckpt_path = Path(args.save_dir) / "ckpt.pth"
         if os.path.exists(ckpt_path):
             checkpoint = torch.load(ckpt_path)
             func.load_state_dict(checkpoint['func_state_dict'])
@@ -258,7 +262,7 @@ def main():
             
             
             if itr % 500 == 0:
-                ckpt_path = os.path.join(args.save_dir, 'ckpt_itr{}.pth'.format(itr))
+                ckpt_path = Path(args.save_dir) / "ckpt_itr{}.pth".format(itr)
                 torch.save({'func_state_dict': func.state_dict()}, ckpt_path)
                 print('Iter {}, Stored ckpt at {}'.format(itr, ckpt_path))
                 
@@ -267,7 +271,7 @@ def main():
 
     except KeyboardInterrupt:
         if args.save_dir is not None:
-            ckpt_path = os.path.join(args.save_dir, 'ckpt.pth')
+            ckpt_path = Path(args.save_dir) / "ckpt.pth"
             torch.save({
                 'func_state_dict': func.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
@@ -276,7 +280,7 @@ def main():
     print('Training complete after {} iters.'.format(itr))
     
     
-    ckpt_path = os.path.join(args.save_dir, 'ckpt.pth')
+    ckpt_path = Path(args.save_dir) / "ckpt.pth"
     torch.save({
         'func_state_dict': func.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
@@ -291,7 +295,7 @@ def main():
     if args.save_dir is not None:
         if not os.path.exists(args.save_dir):
             os.makedirs(args.save_dir)
-        ckpt_path = os.path.join(args.save_dir, 'ckpt_EMT.pth')
+        ckpt_path = Path(args.save_dir) / "ckpt.pth"
         if os.path.exists(ckpt_path):
             checkpoint = torch.load(ckpt_path,map_location=torch.device('cpu'))
             func.load_state_dict(checkpoint['func_state_dict'])
@@ -300,38 +304,20 @@ def main():
     time_pt = 0
     z_t = data_train[time_pt]
     gene_list = adata_big.var.index.to_list()
-    plot_jac_v(func,z_t,time_pt,'Average_jac_d0.pdf', gene_list,args,device)
-
-
-
-
-
-
-
-    # plt.imshow(Tv_Granger, cmap='RdBu_r', vmin=-1, vmax=1)
-    # plt.gca().invert_yaxis()
-    # plt.title('OTVelo‑Granger')
-    # plt.show()
-
-    # fig, ax = plt.subplots(1, 2, figsize=(10, 4), sharex=True, sharey=True)
-
-    # im0 = ax[0].imshow(Tv_corr, cmap='RdBu_r', vmin=-1, vmax=1)
-    # ax[0].invert_yaxis()
-    # ax[0].set_title('OTVelo‑Corr')
-
-    # im1 = ax[1].imshow(true_mat, cmap='RdBu_r', vmin=-1, vmax=1)
-    # ax[1].invert_yaxis()
-    # ax[1].set_title('Reference network')
-
-    # plt.tight_layout()
-    # plt.show()
-
+    jac = plot_jac_v(func,z_t,time_pt,'Average_jac_d0.pdf', gene_list,args,device)
 
     from sklearn.metrics import average_precision_score, roc_auc_score
 
-    mask = ~np.eye(true_mat.shape[0], dtype=bool)
+    true_mat -= np.diag(np.diag(true_mat))
 
-    y_true  = (true_mat[mask] != 0).astype(int)    
+    y_true  = (true_mat != 0).astype(int)
+    y_pred  = (jac != 0).astype(int)
+
+    print(y_true, '\n', y_pred)
+
+    ap = average_precision_score(y_true, y_pred)
+    auc = roc_auc_score(y_true, y_pred)
+    print(f"AP: {ap:.4f}, AUC: {auc:.4f}")
 
 
 
