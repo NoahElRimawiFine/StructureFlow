@@ -18,19 +18,35 @@ import matplotlib.pyplot as plt
 
 import warnings
 warnings.filterwarnings("ignore")
-parser = argparse.ArgumentParser(description="OTVelo baseline script")
+_parser = argparse.ArgumentParser(description="TIGON synthetic runner")
 
-parser.add_argument("--subset",
-                    choices=["wt", "ko", "all"], default="wt",
-                    help="which replicates to load: "
-                         "'wt' (wild‑type), 'ko' (knock‑outs), or 'all'")
-parser.add_argument("--backbone", type=str, default="dyn-BF",
-                    help="backbone name, e.g. 'dyn-BF', 'dyn-TF'")
+# dataset layout
+_parser.add_argument("--backbone", default="dyn-BF",
+                     help="dyn‑BF, dyn‑TF, … (folder name inside data/Synthetic)")
+_parser.add_argument("--subset", choices=["wt", "ko", "all"], default="wt",
+                     help="replicate subset to use")
+# training hyper‑params
+_parser.add_argument("--timepoints", default="0.0,0.25,0.5,0.75,1.0",
+                     help="comma‑sep list of numeric times; length = #bins")
+_parser.add_argument("--niters", type=int, default=5000)
+_parser.add_argument("--lr", type=float, default=3e-3)
+_parser.add_argument("--hidden-dim", type=int, default=16)
+_parser.add_argument("--n-hiddens", type=int, default=4)
+_parser.add_argument("--activation", choices=["Tanh", "relu", "elu", "leakyrelu"],
+                     default="Tanh")
+_parser.add_argument("--num-samples", type=int, default=100,
+                     help="#points to sample per epoch")
+# I/O
+_parser.add_argument("--input-dir", default="Input/")
+_parser.add_argument("--save-dir", default="Output/")
+_parser.add_argument("--gpu", type=int, default=0)
+_parser.add_argument("--seed", type=int, default=1)
+# misc
+_parser.add_argument("--n-bins", type=int, default=5,
+                     help="how many pseudotime bins to make")
 
-parser.add_argument("--seed", type=int, default=42,
-                    help="random seed for reproducibility")
-
-args = parser.parse_args()
+args = _parser.parse_args()
+args.timepoints = [float(x) for x in args.timepoints.split(",")]
 
 seed = args.seed
 np.random.seed(seed)
@@ -176,7 +192,6 @@ def main():
     for i, arr in enumerate(coords_all):
         print(f"bin {i}: {arr.shape[0]} cells   dim={arr.shape[1]}")
     
-    args = create_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"[INFO] using device {device}")
 
