@@ -24,11 +24,11 @@ def create_hparam_configs() -> List[Dict[str, Any]]:
 
     # Define hyperparameter search space (dummy values - user will replace)
     hparam_space = {
-        "n_steps": [2000, 4000],
+        "n_steps": [4000],
         "batch_size": [64],
-        "reg": [1e-6, 1e-5, 1e-4],
-        "alpha": [0.1, 0.3],
-        "lr": [1e-3, 3e-3, 5e-3],
+        "reg": [5e-5, 1e-6, 5e-6, 1e-7, 5e-7],
+        "alpha": [0.3],
+        "lr": [5e-4],
         "knockout_hidden": [256],
     }
 
@@ -286,8 +286,8 @@ def main():
     # Run hyperparameter sweep
     results_df = run_hparam_sweep(
         hparam_configs=hparam_configs,
-        system_sizes=[50],
-        seeds=[random.randint(0, 10000) for _ in range(3)],
+        system_sizes=[200],
+        seeds=[random.randint(0, 10000) for _ in range(1)],
         num_cores=32,
         include_baseline=False,
         sparsity=0.05,
