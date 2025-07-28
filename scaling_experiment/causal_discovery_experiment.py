@@ -1406,7 +1406,7 @@ def main():
                 "reg": 1e-6,
             },
             "high": {  # Sparse graphs (<15% edge density) need stronger sparsity regularization
-                "reg": 1e-6,
+                "reg": 1e-7,
             },
         },
     )
@@ -1430,7 +1430,8 @@ def main():
 
     print(f"\nStarting experiment with {NUM_CORES} cores...")
 
-    random_seeds = [random.randint(0, 10000) for _ in range(3)]
+    # random_seeds = [random.randint(0, 10000) for _ in range(3)]
+    random_seeds = [4852, 2502, 3728]
     print(f"Using random seeds: {random_seeds}")
 
     results_df = run_sparsity_experiment(
