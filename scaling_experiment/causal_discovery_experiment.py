@@ -1319,7 +1319,7 @@ def run_sparsity_experiment(
                 # RF hyperparameters (matching ReferenceFittingModule defaults)
                 rf_hyperparams = {
                     "lr": 0.1,
-                    "iter": 1000,  # Default from ReferenceFittingModule
+                    "iter": 300,
                     "reg_sinkhorn": 0.1,
                     "reg_A": 1e-3,
                     "reg_A_elastic": 0,
