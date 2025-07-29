@@ -37,7 +37,7 @@ from torchdiffeq import odeint
 from geomloss import SamplesLoss
 
 # Additional imports for RF
-from src.models.components.rf import Estimator as RFEstimator
+from src.models.rf_module import ReferenceFittingModule
 
 
 def set_random_seeds(seed: int):
@@ -864,7 +864,7 @@ class NGMNodeMethod(CausalDiscoveryMethod):
 
 
 class ReferenceFittingMethod(CausalDiscoveryMethod):
-    """Reference Fitting implementation using optimal transport."""
+    """Reference Fitting implementation using ReferenceFittingModule."""
 
     def __init__(self, hyperparams: Dict[str, Any], silent: bool = False):
         super().__init__("ReferenceFitting")
@@ -877,7 +877,7 @@ class ReferenceFittingMethod(CausalDiscoveryMethod):
         self, time_series_data: np.ndarray, true_adjacency: np.ndarray = None
     ) -> np.ndarray:
         """
-        Fit RF model using optimal transport between timepoints.
+        Fit RF model using ReferenceFittingModule.
 
         Args:
             time_series_data: Shape (num_timepoints, num_samples, num_vars)
@@ -898,47 +898,30 @@ class ReferenceFittingMethod(CausalDiscoveryMethod):
                 f"  RF Debug - Created AnnData: {adata.shape}, times: {adata.obs['t'].unique()}"
             )
 
-        # Create RF estimator with wild-type data only (no knockouts)
-        # Use the same defaults as ReferenceFittingModule
-        estimator = RFEstimator(
-            [adata],
-            [None],
-            lr=self.hyperparams.get("lr", 0.1),
-            iter=self.hyperparams.get("iter", 1000),
-            reg_sinkhorn=self.hyperparams.get("reg_sinkhorn", 0.1),
-            reg_A=self.hyperparams.get("reg_A", 1e-3),
-            reg_A_elastic=self.hyperparams.get("reg_A_elastic", 0),
-            ot_coupling=self.hyperparams.get("ot_coupling", True),
-            n_pca_components=min(
-                self.hyperparams.get("n_pca_components", 10), num_vars
-            ),
-            device=self.hyperparams.get("device", "cpu"),
-            optimizer=self.hyperparams.get("optimizer", torch.optim.Adam),
-            num_timepoints=num_timepoints,
-        )
+        # Create ReferenceFittingModule (following grn_inf.py pattern)
+        use_cuda = self.hyperparams.get("device", "cpu") != "cpu"
+        iter_count = self.hyperparams.get("iter", 1000)
+
+        model = ReferenceFittingModule(use_cuda=use_cuda, iter=iter_count)
 
         if not self.silent:
-            print(
-                f"  RF Debug - Starting training for {self.hyperparams.get('iter', 1000)} iterations..."
-            )
+            print(f"  RF Debug - Starting training for {iter_count} iterations...")
         else:
-            print(f"  RF: Training {self.hyperparams.get('iter', 1000)} iterations...")
+            print(f"  RF: Training {iter_count} iterations...")
 
-        # Fit the model
-        A_matrix = estimator.fit(
-            print_iter=200 if not self.silent else 1000,
-            alg="alternating",
-            update_couplings_iter=250,
-        )
+        # Fit the model with wild-type data only (no knockouts)
+        # Use list of single adata and single None knockout
+        adatas = [adata]
+        kos = [None]  # Wild-type data
+
+        model.fit_model(adatas, kos, also_wt=False)
 
         if not self.silent:
             print(f"  RF Debug - Training completed")
 
-        # Extract adjacency matrix
-        if isinstance(A_matrix, torch.Tensor):
-            predicted_adjacency = A_matrix.cpu().numpy()
-        else:
-            predicted_adjacency = A_matrix
+        # Extract adjacency matrix (following grn_inf.py pattern)
+        model.eval()
+        predicted_adjacency = model.get_interaction_matrix().detach().cpu().numpy()
 
         # Zero out diagonal values
         np.fill_diagonal(predicted_adjacency, 0)
@@ -1336,7 +1319,7 @@ def run_sparsity_experiment(
                 # RF hyperparameters (matching ReferenceFittingModule defaults)
                 rf_hyperparams = {
                     "lr": 0.1,
-                    "iter": 2000,  # Default from ReferenceFittingModule
+                    "iter": 1000,  # Default from ReferenceFittingModule
                     "reg_sinkhorn": 0.1,
                     "reg_A": 1e-3,
                     "reg_A_elastic": 0,
@@ -1367,7 +1350,7 @@ def run_sparsity_experiment(
                         )
 
                 if "rf" in methods_to_run:
-                    methods.append(ReferenceFittingMethod(rf_hyperparams, silent=True))
+                    methods.append(ReferenceFittingMethod(rf_hyperparams, silent=False))
                     print(f"  Including RF for N={num_vars}")
 
                 if not methods:
@@ -1564,7 +1547,8 @@ def main(methods_to_run: List[str] = None):
     system_sizes = [10, 25, 50, 100, 200, 500]
 
     # Define sparsity levels to test
-    sparsity_levels = [0.05, 0.2, 0.4]  # Low, medium, high density graphs
+    # sparsity_levels = [0.05, 0.2, 0.4]  # Low, medium, high density graphs
+    sparsity_levels = [0.2]
 
     print(f"\nSparsity-aware experiment setup:")
     print(f"  System sizes: {system_sizes}")
@@ -1580,7 +1564,8 @@ def main(methods_to_run: List[str] = None):
     print(f"\nStarting experiment with {NUM_CORES} cores...")
 
     # random_seeds = [random.randint(0, 10000) for _ in range(3)]
-    random_seeds = [4852, 2502, 3728]
+    # random_seeds = [4852, 2502, 3728]
+    random_seeds = [2502]
     print(f"Using random seeds: {random_seeds}")
 
     results_df = run_sparsity_experiment(
