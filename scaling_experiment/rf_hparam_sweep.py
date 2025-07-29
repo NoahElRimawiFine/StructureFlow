@@ -28,8 +28,8 @@ def create_rf_hparam_configs() -> List[Dict[str, Any]]:
 
     # Define RF hyperparameter search space based on ReferenceFittingModule options
     rf_hparam_space = {
-        "lr": [0.1, 0.2],  # Learning rate for optimizer
-        "iter": [500, 1000, 1500],  # Number of iterations
+        "lr": [0.05, 0.1, 0.2],  # Learning rate for optimizer
+        "iter": [50, 100, 150, 200, 300],  # Number of iterations
         "reg_sinkhorn": [0.01, 0.05, 0.1, 0.2],  # Sinkhorn regularization
         "reg_A": [1e-5, 1e-4, 1e-3, 5e-3, 1e-2],  # Adjacency matrix regularization
         "reg_A_elastic": [0],  # Keep elastic regularization at 0 for now
