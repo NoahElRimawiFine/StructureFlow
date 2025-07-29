@@ -11,4 +11,10 @@ base_cmd  = [sys.executable, "tigon_baseline.py",
 for bb, sub in itertools.product(backbones, subsets):
     print(f"\n=== RUN {bb}  subset={sub} ===")
     cmd = base_cmd + ["--backbone", bb, "--subset", sub]
-    subprocess.run(cmd, check=True)
+    print("running", " ".join(cmd))
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"[ERROR] {cmd} → exit {e.returncode}")
+        print(e.stderr)              
+        continue
