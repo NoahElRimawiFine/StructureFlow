@@ -4,11 +4,11 @@ set -euo pipefail
 PYTHON="${PYTHON:-python}"                      
 SCRIPT="${SCRIPT:-otvelo_baseline.py}"
 DATA_ROOT="${DATA_ROOT:-../../data/Synthetic}"       
-HSC_PATH="${HSC_PATH:-../../data/Curated/HSC}"        
-SEEDS=(1 2 3 4 5)                        
+HSC_PATH="${HSC_PATH:-../../data/Curated}"        
+SEEDS=(1)                        
 T_BINS=5                                         
 
-backbones=(dyn-BF dyn-TF dyn-SW dyn-CY)
+backbones=(dyn-LL)
 
 echo
 echo "Running OTVelo baseline"
