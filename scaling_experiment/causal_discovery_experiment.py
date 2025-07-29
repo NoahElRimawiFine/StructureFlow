@@ -1316,15 +1316,15 @@ def run_sparsity_experiment(
                     "device": sf2m_config.device,
                 }
 
-                # RF hyperparameters (matching ReferenceFittingModule defaults)
+                # RF hyperparameters (optimized from hparam sweep)
                 rf_hyperparams = {
-                    "lr": 0.1,
-                    "iter": 300,
-                    "reg_sinkhorn": 0.1,
-                    "reg_A": 1e-3,
+                    "lr": 0.20,
+                    "iter": 100,
+                    "reg_sinkhorn": 0.20,
+                    "reg_A": 0.00010,
                     "reg_A_elastic": 0,
                     "ot_coupling": True,
-                    "n_pca_components": 10,  # Will be limited by num_vars in the method
+                    "n_pca_components": 10,
                     "device": sf2m_config.device,
                     "optimizer": torch.optim.Adam,
                 }
@@ -1547,8 +1547,7 @@ def main(methods_to_run: List[str] = None):
     system_sizes = [10, 25, 50, 100, 200, 500]
 
     # Define sparsity levels to test
-    # sparsity_levels = [0.05, 0.2, 0.4]  # Low, medium, high density graphs
-    sparsity_levels = [0.2]
+    sparsity_levels = [0.05, 0.2, 0.4]  # Low, medium, high density graphs
 
     print(f"\nSparsity-aware experiment setup:")
     print(f"  System sizes: {system_sizes}")
@@ -1564,8 +1563,7 @@ def main(methods_to_run: List[str] = None):
     print(f"\nStarting experiment with {NUM_CORES} cores...")
 
     # random_seeds = [random.randint(0, 10000) for _ in range(3)]
-    # random_seeds = [4852, 2502, 3728]
-    random_seeds = [2502]
+    random_seeds = [4852, 2502, 3728]
     print(f"Using random seeds: {random_seeds}")
 
     results_df = run_sparsity_experiment(
