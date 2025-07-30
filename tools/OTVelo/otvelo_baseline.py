@@ -10,6 +10,17 @@ from typing import Dict, Any
 import argparse
 import torch
 import random
+import dcor
+import glob
+import os
+import scipy.sparse as sp
+from sklearn.model_selection import LeaveOneOut
+from sklearn.metrics import mean_squared_error
+from scipy.stats import wasserstein_distance   
+from functools import partial        
+import  ot                                           
+from sklearn.metrics.pairwise import pairwise_kernels
+import math
 
 from otvelo.utils_Velo import *
 
@@ -31,6 +42,11 @@ parser.add_argument("--backbone", type=str, default="dyn-BF",
 parser.add_argument("--seed", type=int, default=42,
                     help="random seed for reproducibility")
 
+parser.add_argument("--dataset",
+                    choices=["synthetic", "renge"], default="synthetic",
+                    help="'synthetic' (default) or 'renge' real dataset")
+
+
 args = parser.parse_args()
 
 seed = args.seed
@@ -44,8 +60,10 @@ random.seed(seed)
 sklearn.utils.check_random_state(seed)
 
 
-
-ROOT_SYN = Path(__file__).resolve().parents[2] / "data" / "Synthetic"
+if args.backbone not in ["dyn-BF", "dyn-TF", "dyn-SW", "dyn-CY", "dyn-LL"]: 
+    ROOT_SYN = Path(__file__).resolve().parents[2] / "data" / "Curated"
+else:
+    ROOT_SYN = Path(__file__).resolve().parents[2] / "data" / "Synthetic"
 backbone = args.backbone
 
 def discover_subset(root: Path, backbone: str, subset: str):
@@ -99,20 +117,111 @@ def load_adata(path: Path) -> ad.AnnData:
 def bin_timepoints(adata: ad.AnnData, t_bins: np.ndarray) -> None:
     adata.obs["t"] = np.digitize(adata.obs.t_sim, t_bins) - 1
 
+def dense_array(mat) -> np.ndarray:
+    """Return a plain 2-D float32 ndarray from any AnnData .X slice."""
+    if sp.issparse(mat):                 # CSR/CSC etc.
+        return mat.toarray().astype(np.float32)
+    if isinstance(mat, np.matrix):       # numpy.matrix
+        return np.asarray(mat, dtype=np.float32)
+    return np.asarray(mat, dtype=np.float32)
+
 def to_otvelo_arrays(adata: ad.AnnData):
     counts_all = []
     labels_vec  = []
     for tb in sorted(adata.obs["t"].unique()):
         sl = adata[adata.obs.t == tb]
-        X  = sl.X.A if hasattr(sl.X, "A") else sl.X         
-        X  = X.T                                           
+        X  = dense_array(sl.X)           # (n_cells × n_genes)
+        if X.ndim != 2:
+            raise ValueError(f"slice at t={tb} is not 2-D, got shape {X.shape}")
+        
+        X  = X.T
+        print(type(X)) 
+        print(X.shape)                                          
         counts_all.append(X)
         labels_vec.extend([tb] * X.shape[1])
 
-    counts   = np.hstack(counts_all)                
+    counts = np.concatenate(counts_all, axis=1)                
     labels   = np.asarray(labels_vec)[None, :]        
     Nt       = len(counts_all)
     return counts_all, counts, labels, Nt
+
+def load_renge_dataset(
+        n_bins: int = 4,                
+        data_dir: Path = Path("../../data/Renge")
+    ) -> dict[str, Any]:
+    """
+    Returns the same dict keys as load_synth_dataset()
+    """
+    X = pd.read_csv('../../data/Renge/X_renge_d2_80.csv', index_col=0)
+    E = pd.read_csv('../../data/Renge/E_renge_d2_80.csv', index_col=0)
+
+    adata_ = ad.AnnData(E)
+    adata_.obs["condition"] = None
+    adata_.obs.loc[X.index[X.iloc[:, :-1].T.sum(0) == 0], "condition"] = "wt"
+    idx_ko = X.index[X.iloc[:, :-1].T.sum(0) == 1]
+    adata_.obs.loc[idx_ko, "condition"] = X.columns[np.argmax(X.loc[idx_ko, :].iloc[:, :-1], -1)]
+    sc.pp.pca(adata_)
+    sc.pp.neighbors(adata_)
+    adata_.obs["t"] = X.t
+    adata  = sc.read_h5ad(data_dir / "hipsc.h5ad")
+    # use gene symbols as var_names
+    dists_ko = pd.Series({k : dcor.energy_distance(adata.obsm["X_pca"][adata.obs.ko == "WT", :], adata.obsm["X_pca"][adata.obs.ko == k, :]) for k in adata.obs.ko.unique()})
+    adata_tf = adata.copy()
+    mask = adata_tf.var["gene"].isin(E.columns).values
+    adata_tf = adata_tf[:, mask].copy()
+    adata_tf.var_names = adata_tf.var["gene"]
+    
+    _kos = list(dists_ko.sort_values()[::-1][range(8)].index)
+    
+    _adatas = []
+    for k in _kos:
+        _adatas.append(adata_tf[adata_tf.obs.ko == k, :].copy())
+        _adatas[-1].X = np.asarray(_adatas[-1].X.todense(), dtype = np.float64)
+        _adatas[-1].obs.t -= 2
+        _adatas[-1].var.index = _adatas[-1].var.gene
+    if _kos[0] == "WT":
+        _kos[0] = None 
+
+    # Construct reference 
+    refs = {}
+    for f in glob.glob("../../data/Renge/chip_1kb/*.tsv"):
+        print(f)
+        gene = os.path.splitext(os.path.basename(f))[0].split(".")[0]
+        df = pd.read_csv(f, sep = "\t")
+        df.index = df.Target_genes
+        # if len(df.columns[df.columns.str.contains("iPS_cells|ES_cells")]) == 0:
+        #     print(pd.unique(df.columns.str.split("|").str[1]))
+        y = pd.Series(df.loc[:, df.columns.str.contains("iPS_cells")].values.mean(-1), index = df.index)
+        # y = pd.Series(df.iloc[:, 2:].values.mean(-1), index = df.index) 
+        # y = pd.Series(df.iloc[:, 1], index = df.index) 
+        refs[gene] = y
+
+    A_ref = pd.DataFrame(refs).T
+    A_ref[np.isnan(A_ref.values)] = 0
+    print(A_ref)
+
+    tfs = A_ref.index
+    tfs_no_ko = [i for i in tfs if i not in _kos]
+    tfs_ko = [i for i in tfs if i in _kos]
+
+    # build counts_all
+    print(adata_tf)
+    counts_all, counts, labels, Nt = to_otvelo_arrays(adata_tf)
+    print("counts_all lens :", [c.shape for c in counts_all])
+    print("counts shape     :", counts.shape)
+    print("labels shape     :", labels.shape)
+    print("Nt               :", Nt)
+    assert counts.shape[1] == labels.shape[1]
+
+    # no ground–truth GRN available → None
+    return dict(
+        adata       = adata_tf,
+        counts_all  = counts_all,
+        counts      = counts,
+        labels      = labels,
+        Nt          = Nt,
+        ref_network = A_ref,
+    )
 
 
 def load_synth_dataset(name: str, n_bins: int = 5) -> Dict[str, Any]:
@@ -160,6 +269,12 @@ def load_synth_dataset(name: str, n_bins: int = 5) -> Dict[str, Any]:
 
     counts_all, counts, labels, Nt = to_otvelo_arrays(adata)
 
+    print("counts_all lens :", [c.shape for c in counts_all])
+    print("counts shape     :", counts.shape)
+    print("labels shape     :", labels.shape)
+    print("Nt               :", Nt)
+    assert counts.shape[1] == labels.shape[1]
+
     return dict(
         adata=adata,
         counts_all=counts_all,
@@ -169,30 +284,320 @@ def load_synth_dataset(name: str, n_bins: int = 5) -> Dict[str, Any]:
         ref_network=true_mat,
     )
 
-def main(): 
-    ds = [load_synth_dataset(p, n_bins=5) for p in paths]
-    adatas     = [d["adata"] for d in ds]  
+def loocv_score_single(left_out_idx,
+                       counts,               # genes × cells
+                       labels,               # 1 × cells
+                       Nt, dt,
+                       pca, alpha, eps_samp):
+    """
+    Remove one column from `counts`, re-fit couplings, then predict the
+    left-out column’s next-time-step expression profile via barycentric
+    projection.  Return reconstruction MSE in the original gene space.
+    """
+    # ------------------------------------------------------------------
+    # 1) Split
+    keep_mask       = np.ones(counts.shape[1], dtype=bool)
+    keep_mask[left_out_idx] = False
 
-    adata_big = ad.concat(adatas, axis=0, join="inner",
-                      label="rep", keys=[p.name for p in paths],
-                      index_unique=None)
+    counts_train    = counts[:, keep_mask]
+    labels_train    = labels[:, keep_mask]
+
+    # ------------------------------------------------------------------
+    # 2) Re-solve the OT couplings on the *training* cells
+    Ts_prior, _     = solve_prior(counts_train,
+                                  counts_train,
+                                  Nt, labels_train,
+                                  eps_samp=eps_samp,
+                                  alpha=alpha)
+
+    # ------------------------------------------------------------------
+    # 3) Predict the held-out cell’s gene counts at the *next* time step
+    t0              = labels[0, left_out_idx]          # its time bin
+    if t0 == Nt-1:                                     # last bin → skip
+        return np.nan
+
+    # cells that share the left-out cell’s time bin (in training set):
+    same_bin_mask   = (labels_train == t0).flatten()
+    X_bin           = counts_train[:, same_bin_mask]   # genes × n_bin
+
+    # barycentric projection onto next time bin
+    proj            = X_bin @ Ts_prior[t0].T
+    # pick the *nearest* projected column as prediction
+    pred_col        = proj[:, np.argmin(
+                                 np.linalg.norm(proj - counts[:, left_out_idx][:,None],
+                                                axis=0))]
+    # ------------------------------------------------------------------
+    # 4) Scoring in gene space or PCA space
+    mse_gene        = mean_squared_error(counts[:, left_out_idx], pred_col)
+    mse_pca         = mean_squared_error(
+                          pca.transform(counts[:, left_out_idx][None, :]),
+                          pca.transform(pred_col[None, :])
+                     )
+    return mse_gene, mse_pca
+
+def wasserstein(
+    x0: torch.Tensor, x1: torch.Tensor, method: str = "exact", reg: float = 0.05
+) -> float:
+    """Compute Wasserstein-2 distance between two distributions."""
+    # Set up the OT function
+    if method == "exact":
+        ot_fn = ot.emd2
+    elif method == "sinkhorn":
+        ot_fn = partial(ot.sinkhorn2, reg=reg)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    # Get uniform weights for the samples
+    a = ot.unif(x0.shape[0])
+    b = ot.unif(x1.shape[0])
+
+    # Reshape if needed
+    if x0.ndim > 2:
+        x0 = x0.reshape(x0.shape[0], -1)
+    if x1.ndim > 2:
+        x1 = x1.reshape(x1.shape[0], -1)
+
+    # Compute cost matrix (squared Euclidean distance)
+    M = torch.cdist(x0, x1) ** 2
+
+    # Compute Wasserstein distance
+    ret = ot_fn(a, b, M.detach().cpu().numpy(), numItermax=1e7)
+
+    # Return square root for W2 distance
+    return math.sqrt(ret)
+
+def rbf_kernel(X, Y, gamma=None):
+    if X.dim() > 2: X = X.reshape(X.shape[0], -1)
+    if Y.dim() > 2: Y = Y.reshape(Y.shape[0], -1)
+    d = X.shape[1]
+    if gamma is None:
+        gamma = 1.0 / d
+    dist_sq = torch.cdist(X, Y)**2
+    K = torch.exp(-gamma * dist_sq)
+    return K, gamma
+
+def mmd_squared(X, Y, kernel=rbf_kernel, sigma_list=None, **kernel_args):
+    if X.dim() > 2: X = X.reshape(X.shape[0], -1)
+    if Y.dim() > 2: Y = Y.reshape(Y.shape[0], -1)
     
-    true_mat = ds[0]["ref_network"].T
+    if sigma_list is None:
+        sigma_list = [0.01, 0.1, 1, 10, 100]
+    
+    mmd_values = []
+    
+    for sigma in sigma_list:
+        gamma = 1.0 / (2 * sigma**2)
+        
+        K_XX, _ = kernel(X, X, gamma=gamma)
+        K_YY, _ = kernel(Y, Y, gamma=gamma)
+        K_XY, _ = kernel(X, Y, gamma=gamma)
+        
+        term1 = K_XX.mean()
+        term2 = K_YY.mean()
+        term3 = K_XY.mean()
+        
+        mmd2 = term1 + term2 - 2 * term3
+        mmd_values.append(mmd2.clamp(min=0))
+    
+    avg_mmd = torch.stack(mmd_values).mean().item()
+    return avg_mmd
 
-    counts_all = []     
-    labels_vec = []      
+def solve_prior_strict(counts, counts_pca, Nt, labels,
+                       eps_samp, alpha=0.5, normalize_C=False):
+    """
+    Like utils_Velo.solve_prior but:
+      - skips any interval where one side is empty
+      - if do_bridge=True, builds an fGW bridge on the first missing interval
+    """
+    import ot
+    from ot.gromov import entropic_fused_gromov_wasserstein
 
-    for t in range(5):
-        sl  = adata_big[adata_big.obs.t == t]
-        X   = (sl.X.A if hasattr(sl.X, "A") else sl.X).T   
-        counts_all.append(X)
-        labels_vec.extend([t] * X.shape[1])
+    Ts, log = [None]*(Nt-1), [np.nan]*(Nt-1)
+    bridged = False
 
-    counts = np.hstack(counts_all)           
-    labels = np.asarray(labels_vec)[None, :]  
-    Nt     = 5                                
+    for t in range(Nt-1):
+        idx_t  = np.where(labels == t)[1]
+        idx_t1 = np.where(labels == t+1)[1]
 
-    print("counts shape :", counts.shape)     
+        # Case A: both sides nonempty -> normal fGW
+        if len(idx_t) and len(idx_t1):
+            X1 = counts[:, idx_t ].T
+            X2 = counts[:, idx_t1].T
+            M  = ot.dist(counts_pca[:, idx_t ].T, counts_pca[:, idx_t1].T)
+            if normalize_C: M /= M.max()
+            # graph distances
+            nnb = max(1, min(int(.2*X1.shape[0]), int(.2*X2.shape[0]), 50))
+            D1 = compute_graph_distances(X1, nnb, metric="euclidean")
+            D2 = compute_graph_distances(X2, nnb, metric="euclidean")
+            if D1.max() and D2.max():
+                D1 /= D1.max(); D2 /= D2.max()
+            else:
+                a = 0.0
+            T, logt = entropic_fused_gromov_wasserstein(
+                        M, D1, D2, epsilon=eps_samp,
+                        alpha=alpha, log=True)
+            Ts[t]  = T / T.sum()
+            log[t] = logt["fgw_dist"]
+            continue
+
+        # Case B: interval touches held-out -> bridge *once* if possible
+        if not bridged and len(idx_t) == 0 and len(idx_t1):
+            # build bridge between (t-1) and (t+1)
+            if t>0 and t+1< Nt and np.any(labels==t-1) and np.any(labels==t+1):
+                idx_prev = np.where(labels==t-1)[1]
+                idx_next = np.where(labels == t+1)[1]
+                X1 = counts[:, idx_prev].T
+                X2 = counts[:, idx_next].T
+                M  = ot.dist(counts_pca[:, idx_prev].T,
+                             counts_pca[:, idx_next].T)
+                if normalize_C: M /= M.max()
+                nnb = max(1, min(int(.2*X1.shape[0]), int(.2*X2.shape[0]), 50))
+                D1 = compute_graph_distances(X1, nnb, metric="euclidean")
+                D2 = compute_graph_distances(X2, nnb, metric="euclidean")
+                if D1.max() and D2.max():
+                    D1 /= D1.max(); D2 /= D2.max()
+                else:
+                    a = 0.0
+                T, logt = entropic_fused_gromov_wasserstein(
+                            M, D1, D2, epsilon=eps_samp,
+                            alpha=alpha, log=True)
+                Ts[t]  = T / T.sum()
+                log[t] = logt["fgw_dist"]
+                bridged = True
+            # otherwise leave Ts[t] = None
+        # else leave Ts[t] = None
+
+    return Ts, log
+
+
+# ────────────────────────────────────────────────────────────
+# 2) Robust two-step barycentric that always lines up dims
+# ────────────────────────────────────────────────────────────
+def barycentric_two_step(counts_all, Ts, t_star):
+    """
+    Bridge from t*-1 → t*+1 without ever using t* cells in training.
+    Automatically handles coupling orientation.
+    """
+    T_next = Ts[t_star]
+    if T_next is None:
+        raise RuntimeError(f"No bridge coupling for t*={t_star}")
+
+    counts_src = counts_all[t_star - 1]    # genes × n_src
+    counts_tgt = counts_all[t_star + 1]    # genes × n_tgt
+    n_src = counts_src.shape[1]
+    n_tgt = counts_tgt.shape[1]
+
+    # Case A: rows = src, cols = tgt
+    if T_next.shape == (n_src, n_tgt):
+        X_pred = T_next @ counts_tgt.T        # → (n_src × genes)
+    # Case B: rows = tgt, cols = src
+    elif T_next.shape == (n_tgt, n_src):
+        X_pred = T_next.T @ counts_tgt.T      # → (n_src × genes)
+    else:
+        raise ValueError(
+            f"Coupling shape {T_next.shape} doesn't match "
+            f"(n_src={n_src}, n_tgt={n_tgt})"
+        )
+
+    return X_pred.T  # → (genes × n_src)
+
+
+# ────────────────────────────────────────────────────────────
+# 3) Plug into your LOTO evaluation
+# ────────────────────────────────────────────────────────────
+def otvelo_loto_one_fold(counts_all, t_star, *, eps=1e-2, alpha=0.5, pca):
+    Nt = len(counts_all)
+
+    # drop held-out t* cells for training
+    mask = np.concatenate([np.full(blk.shape[1], tt != t_star)
+                           for tt, blk in enumerate(counts_all)])
+    counts_flat = np.hstack(counts_all)[:, mask]
+    labels_flat = np.concatenate([np.full(blk.shape[1], tt)
+                                  for tt, blk in enumerate(counts_all)])[mask][None, :]
+    counts_pca  = pca.transform(counts_flat.T).T
+
+    # strict solve_prior with skip+bridge
+    Ts, _ = solve_prior_strict(counts_flat, counts_pca,
+                               Nt, labels_flat,
+                               eps_samp=eps, alpha=alpha,
+                               normalize_C=True)
+
+    # predict via 2-step barycentric
+    X_pred = barycentric_two_step(counts_all, Ts, t_star)  # genes × #src_cells
+    X_true = counts_all[t_star]                            # genes × #true_cells
+
+    # compare in PCA space
+    Xp = pca.transform(X_pred.T)
+    Xt = pca.transform(X_true.T)
+    Xp = torch.from_numpy(Xp).float() 
+    Xt = torch.from_numpy(Xt).float()
+    w2  = wasserstein(Xp, Xt)
+    _, gamma   = rbf_kernel(Xp, Xt)
+    mmd = mmd_squared(Xp, Xt, gamma=gamma)
+    return w2, mmd
+
+def main(): 
+    if args.dataset == "synthetic":
+        ds = [load_synth_dataset(p, n_bins=5) for p in paths]
+        adatas     = [d["adata"] for d in ds]  
+
+        adata_big = ad.concat(adatas, axis=0, join="inner",
+                        label="rep", keys=[p.name for p in paths],
+                        index_unique=None)
+        
+        true_mat = ds[0]["ref_network"].T
+
+        counts_all = []     
+        labels_vec = []      
+
+        for t in range(5):
+            sl  = adata_big[adata_big.obs.t == t]
+            X   = (sl.X.A if hasattr(sl.X, "A") else sl.X).T   
+            counts_all.append(X)
+            labels_vec.extend([t] * X.shape[1])
+
+        counts = np.hstack(counts_all)           
+        labels = np.asarray(labels_vec)[None, :]
+        Nt     = 5 
+
+        dt          = [1]*(Nt-1)
+        group_labels= [str(i) for i in range(Nt)]
+
+        counts_pca, pca = visualize_pca(counts, labels, group_labels, viz_opt="pca")
+
+        # ── 3. Fold loop: leave one TIME-POINT out ─────────────────────────
+        folds = []
+        for held_out_t in range(1, Nt):          # 0 & Nt not held out
+            print(f"\n===== OTVelo – hold-out t={held_out_t} =====")
+
+            w2, mmd = otvelo_loto_one_fold(counts_all,
+                               held_out_t,
+                               eps=1e-2, alpha=0.5,
+                               pca=pca)
+            folds.append({"t": held_out_t, "w2": w2, "mmd2": mmd})
+            print(f"t={held_out_t}:  W₂={w2:.4f}   MMD²={mmd:.4e}")
+
+        df = pd.DataFrame(folds)
+        print("\nMean W₂  :", df.w2.mean())
+        print("Mean MMD²:", df.mmd2.mean())
+
+    elif args.dataset == "renge":
+        ds = load_renge_dataset()
+        ds = copy.deepcopy(ds)
+        counts_all = ds["counts_all"]
+        counts     = ds["counts"]
+        labels     = ds["labels"]
+        Nt         = ds["Nt"]
+        true_mat   = ds["ref_network"]
+
+        cells_per_bin = [X.shape[1] for X in counts_all]
+        old_to_new = {old: new for new, old in enumerate(sorted(np.unique(labels)))}
+
+        labels = np.vectorize(old_to_new.get)(labels)  
+        Nt     = len(old_to_new)                        
+        assert labels.min() == 0 and labels.max() == Nt-1
+    else:
+        raise ValueError("--dataset must be 'synthetic' or 'renge'") 
 
     Ts_prior, _ = solve_prior(counts, counts,
                           Nt, labels,
@@ -209,38 +614,35 @@ def main():
                                  elastic_Net=False,tune=False,signed=True, return_slice=True)
 
     Tv_corr -= np.diag(np.diag(Tv_corr))
-    true_mat -= np.diag(np.diag(true_mat))
+
+    if args.dataset != "renge":
+        true_mat -= np.diag(np.diag(true_mat))
+    else:
+        A_renge = pd.read_csv("../../data/Renge/A_renge_output.csv", index_col=0)
+        genes_common = pd.Index(set(true_mat.columns).intersection(set(A_renge.index)))
+        print(genes_common)
+        tfs = true_mat.index
+        y_true = (true_mat.loc[tfs, genes_common] > 0).values.flatten()
 
     Tv_Granger, Tv_Granger_slices = OT_lagged_correlation(vel_all_signed, vel_sign, Ts_prior, stimulation=True, 
-                                 elastic_Net=True,l1_opt=0.5,tune=False,signed=True, return_slice=True )       
+                                 elastic_Net=True,l1_opt=0.1,tune=False,signed=True, return_slice=True )       
 
     Tv_Granger = Tv_Granger - np.diag( np.diag(Tv_Granger) )
-    # plt.imshow(Tv_Granger, cmap='RdBu_r', vmin=-1, vmax=1)
-    # plt.gca().invert_yaxis()
-    # plt.title('OTVelo‑Granger')
-    # plt.show()
-
-    # fig, ax = plt.subplots(1, 2, figsize=(10, 4), sharex=True, sharey=True)
-
-    # im0 = ax[0].imshow(Tv_corr, cmap='RdBu_r', vmin=-1, vmax=1)
-    # ax[0].invert_yaxis()
-    # ax[0].set_title('OTVelo‑Corr')
-
-    # im1 = ax[1].imshow(true_mat, cmap='RdBu_r', vmin=-1, vmax=1)
-    # ax[1].invert_yaxis()
-    # ax[1].set_title('Reference network')
-
-    # plt.tight_layout()
-    # plt.show()
-
 
     from sklearn.metrics import average_precision_score, roc_auc_score
+    if args.dataset != 'renge':
+        mask = ~np.eye(Tv_corr.shape[0], dtype=bool)
+        y_true  = (true_mat[mask] != 0).astype(int)   
+        y_score = np.abs(Tv_corr[mask])
+        y_score_granger = np.abs(Tv_Granger[mask])
+    else:
+        y_true = (true_mat.loc[tfs, genes_common] > 0).values.flatten()
+        genes_panel = ds['adata'].var.index
+        Tv_corr_df = pd.DataFrame(Tv_corr, index=genes_panel, columns=genes_panel)
+        Tv_Granger_df = pd.DataFrame(Tv_Granger, index=genes_panel, columns=genes_panel)
+        y_score = np.abs(Tv_corr_df.loc[tfs, genes_common]).values.flatten()
+        y_score_granger = np.abs(Tv_Granger_df.loc[tfs, genes_common]).values.flatten()
 
-    mask = ~np.eye(Tv_corr.shape[0], dtype=bool)
-
-    y_true  = (true_mat[mask] != 0).astype(int)    
-    y_score = np.abs(Tv_corr[mask])
-    y_score_granger = np.abs(Tv_Granger[mask])
 
 
     aupr = average_precision_score(y_true, y_score)
