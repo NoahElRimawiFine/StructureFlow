@@ -36,6 +36,9 @@ from src.models.components.optimal_transport import EntropicOTFM
 from torchdiffeq import odeint
 from geomloss import SamplesLoss
 
+# Additional imports for RF
+from src.models.rf_module import ReferenceFittingModule
+
 
 def set_random_seeds(seed: int):
     """Set random seeds for reproducibility."""
@@ -860,6 +863,84 @@ class NGMNodeMethod(CausalDiscoveryMethod):
         return predicted_adjacency
 
 
+class ReferenceFittingMethod(CausalDiscoveryMethod):
+    """Reference Fitting implementation using ReferenceFittingModule."""
+
+    def __init__(self, hyperparams: Dict[str, Any], silent: bool = False):
+        super().__init__("ReferenceFitting")
+        self.hyperparams = hyperparams
+        self.needs_true_adjacency = True
+        self.model = None
+        self.silent = silent
+
+    def fit(
+        self, time_series_data: np.ndarray, true_adjacency: np.ndarray = None
+    ) -> np.ndarray:
+        """
+        Fit RF model using ReferenceFittingModule.
+
+        Args:
+            time_series_data: Shape (num_timepoints, num_samples, num_vars)
+
+        Returns:
+            predicted_adjacency: Predicted adjacency matrix from RF
+        """
+        start_time = time.time()
+
+        num_timepoints, num_samples, num_vars = time_series_data.shape
+        if not self.silent:
+            print(f"  RF Debug - Input data shape: {time_series_data.shape}")
+
+        # Convert to AnnData format
+        adata = create_anndata_from_time_series(time_series_data)
+        if not self.silent:
+            print(
+                f"  RF Debug - Created AnnData: {adata.shape}, times: {adata.obs['t'].unique()}"
+            )
+
+        # Create ReferenceFittingModule (following grn_inf.py pattern)
+        use_cuda = self.hyperparams.get("device", "cpu") != "cpu"
+        iter_count = self.hyperparams.get("iter", 1000)
+
+        model = ReferenceFittingModule(use_cuda=use_cuda, iter=iter_count)
+
+        if not self.silent:
+            print(f"  RF Debug - Starting training for {iter_count} iterations...")
+        else:
+            print(f"  RF: Training {iter_count} iterations...")
+
+        # Fit the model with wild-type data only (no knockouts)
+        # Use list of single adata and single None knockout
+        adatas = [adata]
+        kos = [None]  # Wild-type data
+
+        model.fit_model(adatas, kos, also_wt=False)
+
+        if not self.silent:
+            print(f"  RF Debug - Training completed")
+
+        # Extract adjacency matrix (following grn_inf.py pattern)
+        model.eval()
+        predicted_adjacency = model.get_interaction_matrix().detach().cpu().numpy()
+
+        # Zero out diagonal values
+        np.fill_diagonal(predicted_adjacency, 0)
+
+        if not self.silent:
+            print(
+                f"  RF Debug - Extracted adjacency matrix shape: {predicted_adjacency.shape}"
+            )
+            if true_adjacency is not None:
+                print("Ground Truth:")
+                np.set_printoptions(precision=2, suppress=True)
+                print(true_adjacency)
+                print("RF Predicted:")
+                print(predicted_adjacency)
+
+        self._training_time = time.time() - start_time
+        return predicted_adjacency
+
+
 def maskdiag(A):
     """Mask diagonal elements to zero, following the approach in plotting.py."""
     A_masked = A.copy()
@@ -1130,7 +1211,7 @@ def run_single_experiment_silent(
         "seed": seed,
         "true_edges": np.sum(np.abs(true_adjacency) > 0),
         "edge_density": np.sum(np.abs(true_adjacency) > 0) / (num_vars * num_vars),
-        "max_eigenvalue_real": np.max(np.real(np.linalg.eigvals(dynamics_matrix))),
+        "max_eigenvalue_real": np.max(np.real(np.linalg.eigvals(true_adjacency.T))),
     }
 
     # Test each method
@@ -1165,6 +1246,7 @@ def run_sparsity_experiment(
     seeds: List[int] = [42],
     sparsity_levels: List[float] = [0.1, 0.2, 0.4],
     num_cores: int = 4,
+    methods_to_run: List[str] = None,
 ) -> pd.DataFrame:
     """
     Run causal discovery experiment with sparsity-aware hyperparameters across multiple system sizes and sparsity levels.
@@ -1175,10 +1257,24 @@ def run_sparsity_experiment(
         seeds: List of random seeds for multiple runs
         sparsity_levels: List of edge probabilities to test for each system size
         num_cores: Number of cores to use for reproducible timing
+        methods_to_run: List of method names to run. Options: ["correlation", "sf2m", "ngm-node", "rf"].
+                       If None, runs all methods based on system size constraints.
 
     Returns:
         results_df: DataFrame containing all experimental results
     """
+    # Set default methods if none specified
+    if methods_to_run is None:
+        methods_to_run = ["correlation", "sf2m", "ngm-node", "rf"]
+
+    # Validate method names
+    valid_methods = ["correlation", "sf2m", "ngm-node", "rf"]
+    for method in methods_to_run:
+        if method not in valid_methods:
+            raise ValueError(
+                f"Invalid method '{method}'. Valid methods: {valid_methods}"
+            )
+
     # Set fixed cores for reproducible runtime analysis
     set_fixed_cores(num_cores)
 
@@ -1188,6 +1284,7 @@ def run_sparsity_experiment(
 
     start_time = time.time()
 
+    print(f"  Methods to run: {methods_to_run}")
     print(f"  Sparsity-aware SF2M configs: {sf2m_config.sparsity_configs}")
     print(f"  Sparsity levels: {sparsity_levels}")
 
@@ -1219,17 +1316,46 @@ def run_sparsity_experiment(
                     "device": sf2m_config.device,
                 }
 
-                methods = [
-                    CorrelationBasedMethod("pearson"),
-                    StructureFlowMethod(sf2m_hyperparams, silent=True),
-                ]
+                # RF hyperparameters (optimized from hparam sweep)
+                rf_hyperparams = {
+                    "lr": 0.20,
+                    "iter": 100,
+                    "reg_sinkhorn": 0.20,
+                    "reg_A": 0.00010,
+                    "reg_A_elastic": 0,
+                    "ot_coupling": True,
+                    "n_pca_components": 10,
+                    "device": sf2m_config.device,
+                    "optimizer": torch.optim.Adam,
+                }
 
-                # Only add NGM-NODE for system sizes <= 100
-                if num_vars <= 100:
-                    methods.append(NGMNodeMethod(ngm_hyperparams, silent=True))
-                    print(f"  Including NGM-NODE for N={num_vars}")
-                else:
-                    print(f"  Skipping NGM-NODE for N={num_vars} (too large)")
+                # Build methods list based on user selection
+                methods = []
+
+                if "correlation" in methods_to_run:
+                    methods.append(CorrelationBasedMethod("pearson"))
+                    print(f"  Including Correlation for N={num_vars}")
+
+                if "sf2m" in methods_to_run:
+                    methods.append(StructureFlowMethod(sf2m_hyperparams, silent=True))
+                    print(f"  Including SF2M for N={num_vars}")
+
+                if "ngm-node" in methods_to_run:
+                    if num_vars <= 100:
+                        methods.append(NGMNodeMethod(ngm_hyperparams, silent=True))
+                        print(f"  Including NGM-NODE for N={num_vars}")
+                    else:
+                        print(
+                            f"  Skipping NGM-NODE for N={num_vars} (too large, max size: 100)"
+                        )
+
+                if "rf" in methods_to_run:
+                    methods.append(ReferenceFittingMethod(rf_hyperparams, silent=False))
+                    print(f"  Including RF for N={num_vars}")
+
+                if not methods:
+                    print(f"  Warning: No methods selected for N={num_vars}")
+                    continue
 
                 # Simulate data
                 time_series_data = simulate_time_series(dynamics_matrix, seed=seed)
@@ -1374,8 +1500,14 @@ def save_and_print_results(
         )
 
 
-def main():
-    """Main experiment runner."""
+def main(methods_to_run: List[str] = None):
+    """
+    Main experiment runner.
+
+    Args:
+        methods_to_run: List of method names to run. Options: ["correlation", "sf2m", "ngm-node", "rf"].
+                       If None, runs all methods based on system size constraints.
+    """
 
     # Set fixed cores for reproducible timing
     NUM_CORES = 4
@@ -1415,7 +1547,7 @@ def main():
     system_sizes = [10, 25, 50, 100, 200, 500]
 
     # Define sparsity levels to test
-    sparsity_levels = [0.05]  # Low, medium, high density graphs
+    sparsity_levels = [0.05, 0.2, 0.4]  # Low, medium, high density graphs
 
     print(f"\nSparsity-aware experiment setup:")
     print(f"  System sizes: {system_sizes}")
@@ -1440,11 +1572,14 @@ def main():
         seeds=random_seeds,
         sparsity_levels=sparsity_levels,
         num_cores=NUM_CORES,
+        methods_to_run=methods_to_run,
     )
 
     # Save results and print summary
-    save_and_print_results(results_df, "sparsity_aware_results.csv")
+    method_suffix = "_".join(methods_to_run) if methods_to_run else "all_methods"
+    filename = f"sparsity_aware_results_{method_suffix}.csv"
+    save_and_print_results(results_df, filename)
 
 
 if __name__ == "__main__":
-    main()
+    main(methods_to_run=["correlation", "rf"])
