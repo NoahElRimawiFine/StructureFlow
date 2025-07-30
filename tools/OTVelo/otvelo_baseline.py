@@ -294,40 +294,29 @@ def loocv_score_single(left_out_idx,
     left-out column’s next-time-step expression profile via barycentric
     projection.  Return reconstruction MSE in the original gene space.
     """
-    # ------------------------------------------------------------------
-    # 1) Split
     keep_mask       = np.ones(counts.shape[1], dtype=bool)
     keep_mask[left_out_idx] = False
 
     counts_train    = counts[:, keep_mask]
     labels_train    = labels[:, keep_mask]
 
-    # ------------------------------------------------------------------
-    # 2) Re-solve the OT couplings on the *training* cells
     Ts_prior, _     = solve_prior(counts_train,
                                   counts_train,
                                   Nt, labels_train,
                                   eps_samp=eps_samp,
                                   alpha=alpha)
 
-    # ------------------------------------------------------------------
-    # 3) Predict the held-out cell’s gene counts at the *next* time step
     t0              = labels[0, left_out_idx]          # its time bin
     if t0 == Nt-1:                                     # last bin → skip
         return np.nan
 
-    # cells that share the left-out cell’s time bin (in training set):
     same_bin_mask   = (labels_train == t0).flatten()
     X_bin           = counts_train[:, same_bin_mask]   # genes × n_bin
-
-    # barycentric projection onto next time bin
     proj            = X_bin @ Ts_prior[t0].T
-    # pick the *nearest* projected column as prediction
     pred_col        = proj[:, np.argmin(
                                  np.linalg.norm(proj - counts[:, left_out_idx][:,None],
                                                 axis=0))]
-    # ------------------------------------------------------------------
-    # 4) Scoring in gene space or PCA space
+
     mse_gene        = mean_squared_error(counts[:, left_out_idx], pred_col)
     mse_pca         = mean_squared_error(
                           pca.transform(counts[:, left_out_idx][None, :]),
@@ -470,9 +459,6 @@ def solve_prior_strict(counts, counts_pca, Nt, labels,
     return Ts, log
 
 
-# ────────────────────────────────────────────────────────────
-# 2) Robust two-step barycentric that always lines up dims
-# ────────────────────────────────────────────────────────────
 def barycentric_two_step(counts_all, Ts, t_star):
     """
     Bridge from t*-1 → t*+1 without ever using t* cells in training.
@@ -501,10 +487,6 @@ def barycentric_two_step(counts_all, Ts, t_star):
 
     return X_pred.T  # → (genes × n_src)
 
-
-# ────────────────────────────────────────────────────────────
-# 3) Plug into your LOTO evaluation
-# ────────────────────────────────────────────────────────────
 def otvelo_loto_one_fold(counts_all, t_star, *, eps=1e-2, alpha=0.5, pca):
     Nt = len(counts_all)
 
@@ -523,8 +505,8 @@ def otvelo_loto_one_fold(counts_all, t_star, *, eps=1e-2, alpha=0.5, pca):
                                normalize_C=True)
 
     # predict via 2-step barycentric
-    X_pred = barycentric_two_step(counts_all, Ts, t_star)  # genes × #src_cells
-    X_true = counts_all[t_star]                            # genes × #true_cells
+    X_pred = barycentric_two_step(counts_all, Ts, t_star)
+    X_true = counts_all[t_star]                            
 
     # compare in PCA space
     Xp = pca.transform(X_pred.T)
@@ -565,7 +547,6 @@ def main():
 
         counts_pca, pca = visualize_pca(counts, labels, group_labels, viz_opt="pca")
 
-        # ── 3. Fold loop: leave one TIME-POINT out ─────────────────────────
         folds = []
         for held_out_t in range(1, Nt):          # 0 & Nt not held out
             print(f"\n===== OTVelo – hold-out t={held_out_t} =====")
