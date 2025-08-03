@@ -283,7 +283,7 @@ def main():
     # Configuration
     model_types = ["sf2m"]
     dataset_types = ["Synthetic", "Curated"]
-    synthetic_datasets = ["dyn-CY", "dyn-LL"]
+    synthetic_datasets = ["dyn-TF", "dyn-CY", "dyn-LL"]
     seeds = [1, 2, 3]
 
     # Create base results directory
