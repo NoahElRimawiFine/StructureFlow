@@ -8,7 +8,7 @@ HSC_PATH="${HSC_PATH:-../../data/Curated}"
 SEEDS=(1 2 3)                        
 T_BINS=5                                         
 
-backbones=(dyn-LL)
+backbones=(dyn-LL dyn-SW dyn-BF dyn-CY)
 
 echo
 echo "Running OTVelo baseline"
@@ -28,12 +28,12 @@ for ds in "${backbones[@]}"; do
 
   for seed in "${SEEDS[@]}"; do
     echo "  • WT only (seed ${seed})"
-    $PYTHON "$SCRIPT" --backbone "${ds}"               \
+    $PYTHON -u "$SCRIPT" --backbone "${ds}"               \
             --subset wt       \
             --seed "$seed"
 
     echo "  • WT + KO pooled (seed ${seed})"
-    $PYTHON "$SCRIPT" --backbone "${ds}"               \
+    $PYTHON -u "$SCRIPT" --backbone "${ds}"               \
             --subset all       \
             --seed "$seed"
   done
