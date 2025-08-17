@@ -548,7 +548,7 @@ def main():
         counts_pca, pca = visualize_pca(counts, labels, group_labels, viz_opt="pca")
 
         folds = []
-        for held_out_t in range(1, Nt):          # 0 & Nt not held out
+        for held_out_t in range(1, Nt-1):          # 0 & Nt not held out
             print(f"\n===== OTVelo – hold-out t={held_out_t} =====")
 
             w2, mmd = otvelo_loto_one_fold(counts_all,

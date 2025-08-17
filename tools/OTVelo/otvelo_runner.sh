@@ -5,7 +5,7 @@ PYTHON="${PYTHON:-python}"
 SCRIPT="${SCRIPT:-otvelo_baseline.py}"
 DATA_ROOT="${DATA_ROOT:-../../data/Synthetic}"       
 HSC_PATH="${HSC_PATH:-../../data/Curated}"        
-SEEDS=(1)                        
+SEEDS=(1 2 3)                        
 T_BINS=5                                         
 
 backbones=(dyn-LL)
