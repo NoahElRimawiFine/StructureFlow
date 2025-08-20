@@ -1582,4 +1582,4 @@ def main(methods_to_run: List[str] = None):
 
 
 if __name__ == "__main__":
-    main(methods_to_run=["correlation", "rf"])
+    main(methods_to_run=["correlation", "rf", "sf2m", "ngm-node"])
