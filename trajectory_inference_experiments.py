@@ -5,6 +5,10 @@ import argparse
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import time
+from functools import partial
 
 
 def run_experiment(
@@ -30,7 +34,86 @@ def run_experiment(
         cmd.extend(["--dataset", dataset])
 
     print(f"Running: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        return {"success": True, "cmd": " ".join(cmd), "stdout": result.stdout}
+    except subprocess.CalledProcessError as e:
+        return {
+            "success": False,
+            "cmd": " ".join(cmd),
+            "error": str(e),
+            "stderr": e.stderr,
+        }
+
+
+def run_experiment_wrapper(experiment_config):
+    """Wrapper function for multiprocessing that unpacks experiment configuration."""
+    dataset_type, model_type, seed, dataset, base_results_dir = experiment_config
+    return run_experiment(dataset_type, model_type, seed, dataset, base_results_dir)
+
+
+def run_experiments_parallel(experiment_configs, num_workers=None):
+    """Run multiple experiments in parallel using ProcessPoolExecutor."""
+    if num_workers is None:
+        num_workers = min(mp.cpu_count(), len(experiment_configs))
+
+    print(
+        f"Running {len(experiment_configs)} experiments using {num_workers} parallel workers"
+    )
+
+    failed_experiments = []
+    completed_runs = 0
+    start_time = time.time()
+
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        # Submit all experiments
+        future_to_config = {
+            executor.submit(run_experiment_wrapper, config): config
+            for config in experiment_configs
+        }
+
+        # Process completed experiments
+        for future in as_completed(future_to_config):
+            config = future_to_config[future]
+            dataset_type, model_type, seed, dataset, base_results_dir = config
+
+            try:
+                result = future.result()
+                completed_runs += 1
+
+                # Progress reporting
+                elapsed_time = time.time() - start_time
+                avg_time_per_run = elapsed_time / completed_runs
+                remaining_runs = len(experiment_configs) - completed_runs
+                est_remaining_time = avg_time_per_run * remaining_runs
+
+                if result["success"]:
+                    dataset_str = f"_{dataset}" if dataset else ""
+                    print(
+                        f"✓ [{completed_runs}/{len(experiment_configs)}] Completed {model_type} on {dataset_type}{dataset_str} seed {seed}"
+                    )
+                else:
+                    dataset_str = f"_{dataset}" if dataset else ""
+                    print(
+                        f"✗ [{completed_runs}/{len(experiment_configs)}] Failed {model_type} on {dataset_type}{dataset_str} seed {seed}: {result['error']}"
+                    )
+                    failed_experiments.append((config, result["error"]))
+
+                print(
+                    f"   Progress: {completed_runs}/{len(experiment_configs)} | "
+                    f"Elapsed: {elapsed_time:.1f}s | "
+                    f"Est. remaining: {est_remaining_time:.1f}s"
+                )
+
+            except Exception as exc:
+                dataset_str = f"_{dataset}" if dataset else ""
+                print(
+                    f"✗ [{completed_runs+1}/{len(experiment_configs)}] Exception for {model_type} on {dataset_type}{dataset_str} seed {seed}: {exc}"
+                )
+                failed_experiments.append((config, str(exc)))
+                completed_runs += 1
+
+    return failed_experiments
 
 
 def aggregate_results(
@@ -278,12 +361,23 @@ def main():
         action="store_true",
         help="Only aggregate existing results without running new experiments",
     )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers (default: auto-detect based on CPU cores)",
+    )
+    parser.add_argument(
+        "--sequential",
+        action="store_true",
+        help="Run experiments sequentially instead of in parallel",
+    )
     args = parser.parse_args()
 
     # Configuration
-    model_types = ["sf2m"]
+    model_types = ["sf2m", "mlp_baseline", "rf"]
     dataset_types = ["Synthetic", "Curated"]
-    synthetic_datasets = ["dyn-TF", "dyn-CY", "dyn-LL"]
+    synthetic_datasets = ["dyn-TF", "dyn-CY", "dyn-LL", "dyn-BF", "dyn-SW"]
     seeds = [1, 2, 3]
 
     # Create base results directory
@@ -294,67 +388,81 @@ def main():
     print(f"Starting experiments at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     if not args.only_aggregate:
-        # Calculate total experiments
-        total_runs = 0
-        for dataset_type in dataset_types:
-            if dataset_type == "Synthetic":
-                total_runs += len(model_types) * len(synthetic_datasets) * len(seeds)
-            else:
-                total_runs += len(model_types) * len(seeds)
+        # Prepare all experiment configurations
+        experiment_configs = []
 
-        completed_runs = 0
-
-        # Run experiments for each dataset type
         for dataset_type in dataset_types:
             if dataset_type == "Synthetic":
                 # For Synthetic, run each dataset
                 for dataset in synthetic_datasets:
                     for model_type in model_types:
                         for seed in seeds:
-                            print(
-                                f"\n[{completed_runs+1}/{total_runs}] Running {model_type} on {dataset_type}_{dataset} with seed {seed}"
+                            experiment_configs.append(
+                                (
+                                    dataset_type,
+                                    model_type,
+                                    seed,
+                                    dataset,
+                                    args.base_results_dir,
+                                )
                             )
-                            run_experiment(
-                                dataset_type,
-                                model_type,
-                                seed,
-                                dataset,
-                                args.base_results_dir,
-                            )
-                            completed_runs += 1
-
-                            # Calculate and display progress
-                            elapsed = datetime.now() - start_time
-                            avg_time_per_run = elapsed / completed_runs
-                            remaining_runs = total_runs - completed_runs
-                            est_remaining = avg_time_per_run * remaining_runs
-
-                            print(
-                                f"Progress: {completed_runs}/{total_runs} runs completed"
-                            )
-                            print(f"Elapsed time: {elapsed}")
-                            print(f"Estimated time remaining: {est_remaining}")
             else:
                 # For Curated, just run once without dataset parameter
                 for model_type in model_types:
                     for seed in seeds:
-                        print(
-                            f"\n[{completed_runs+1}/{total_runs}] Running {model_type} on {dataset_type} with seed {seed}"
+                        experiment_configs.append(
+                            (
+                                dataset_type,
+                                model_type,
+                                seed,
+                                None,
+                                args.base_results_dir,
+                            )
                         )
-                        run_experiment(
-                            dataset_type, model_type, seed, None, args.base_results_dir
-                        )
-                        completed_runs += 1
 
-                        # Calculate and display progress
-                        elapsed = datetime.now() - start_time
-                        avg_time_per_run = elapsed / completed_runs
-                        remaining_runs = total_runs - completed_runs
-                        est_remaining = avg_time_per_run * remaining_runs
+        total_runs = len(experiment_configs)
+        print(f"Total experiments to run: {total_runs}")
 
-                        print(f"Progress: {completed_runs}/{total_runs} runs completed")
-                        print(f"Elapsed time: {elapsed}")
-                        print(f"Estimated time remaining: {est_remaining}")
+        if args.num_workers:
+            print(f"Using {args.num_workers} parallel workers")
+        else:
+            available_cores = mp.cpu_count()
+            print(f"Auto-detecting workers (available CPU cores: {available_cores})")
+
+        # Run experiments
+        if args.sequential:
+            print("Running experiments sequentially...")
+            failed_experiments = []
+            for i, config in enumerate(experiment_configs):
+                dataset_type, model_type, seed, dataset, base_results_dir = config
+                dataset_str = f"_{dataset}" if dataset else ""
+                print(
+                    f"\n[{i+1}/{total_runs}] Running {model_type} on {dataset_type}{dataset_str} with seed {seed}"
+                )
+
+                result = run_experiment_wrapper(config)
+                if not result["success"]:
+                    failed_experiments.append((config, result["error"]))
+                    print(f"✗ Failed: {result['error']}")
+                else:
+                    print("✓ Completed successfully")
+        else:
+            print("Running experiments in parallel...")
+            failed_experiments = run_experiments_parallel(
+                experiment_configs, args.num_workers
+            )
+
+        # Report failed experiments
+        if failed_experiments:
+            print(f"\n⚠️  {len(failed_experiments)} experiments failed:")
+            for config, error in failed_experiments:
+                dataset_type, model_type, seed, dataset, _ = config
+                dataset_str = f"_{dataset}" if dataset else ""
+                print(
+                    f"  - {model_type} on {dataset_type}{dataset_str} seed {seed}: {error}"
+                )
+        else:
+            print("\n✅ All experiments completed successfully!")
 
     # Aggregate results
     aggregate_results(
