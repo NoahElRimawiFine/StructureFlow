@@ -108,9 +108,6 @@ class SF2MLitModule(LightningModule):
         self.held_out_time = held_out_time
         self.leave_ko_out_idx = leave_ko_out_idx
 
-        # -----------------------
-        # 1. Load the data
-        # -----------------------
         self.data_loader = datamodule
         datamodule.prepare_data()
         datamodule.setup(stage="fit")
@@ -120,12 +117,8 @@ class SF2MLitModule(LightningModule):
         self.ko_indices = self.data_loader.ko_indices
         self.true_matrix = self.data_loader.true_matrix.values
 
-        # Example shape from the first dataset
         self.n_genes = self.adatas[0].X.shape[1]
 
-        # -----------------------
-        # 2. Build conditionals
-        # -----------------------
         # For each dataset, build a one-hot vector that indicates which knockout it belongs to
         self.conditionals = []
         for i, ko_name in enumerate(self.kos):
@@ -134,9 +127,6 @@ class SF2MLitModule(LightningModule):
                 cond_matrix[:, self.ko_indices[i]] = 1
             self.conditionals.append(cond_matrix)
 
-        # -----------------------
-        # 3. Build knockout masks
-        # -----------------------
         self.knockout_masks = []
         for i, adata in enumerate(self.adatas):
             d = adata.X.shape[1]
@@ -145,10 +135,7 @@ class SF2MLitModule(LightningModule):
 
         self.automatic_optimization = False
 
-        # -----------------------
-        # 4. Create the models
-        # -----------------------
-        # Dimensions for MLPODEFKO
+
         self.dims = [self.n_genes, knockout_hidden, 1]
 
         if self.use_mlp_baseline:
@@ -193,9 +180,6 @@ class SF2MLitModule(LightningModule):
 
             self.v_correction = ZeroModule()
 
-        # -----------------------
-        # 5. Build OTFMs
-        # -----------------------
         self.otfms = self.build_entropic_otfms(
             self.adatas,
             T=self.T,
@@ -204,18 +188,12 @@ class SF2MLitModule(LightningModule):
             held_out_time=self.held_out_time,
         )
 
-        # -----------------------
-        # 6. Setup optimizer
-        # -----------------------
         self.optimizer = optimizer
 
         # For tracking losses
         self.val_results = []
         self.train_results = []
 
-    # -------------------------------------------------------------------------
-    # Supporting methods
-    # -------------------------------------------------------------------------
     def build_knockout_mask(self, d, ko_idx):
         """Build a [d, d] adjacency mask for a knockout of gene ko_idx.
 
@@ -270,9 +248,6 @@ class SF2MLitModule(LightningModule):
             l2_sum += torch.sum(param**2)
         return l2_sum
 
-    # -------------------------------------------------------------------------
-    # Core training loop
-    # -------------------------------------------------------------------------
     def training_step(self, *args, **kwargs):
         optimizer = self.optimizers()
         MIX_BATCHES = False
