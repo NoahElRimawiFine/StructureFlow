@@ -1,7 +1,7 @@
 import itertools, subprocess, sys
 
 backbones = ["dyn-BF", "dyn-TF", "dyn-SW", "dyn-CY", "dyn-LL"]
-subsets   = ["wt", "all"]
+subsets   = ["all"]
 
 base_cmd  = [sys.executable, "tigon_baseline.py",
              "--niters", "100",             
