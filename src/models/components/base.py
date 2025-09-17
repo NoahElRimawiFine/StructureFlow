@@ -68,6 +68,47 @@ class LocallyConnected(nn.Module):
         return "num_linear={}, in_features={}, out_features={}, bias={}".format(
             self.num_linear, self.in_features, self.out_features, self.bias is not None
         )
+    
+class Intervenable(nn.Module):
+    """Models implementing intervenable are useful for learning in the experimental setting.
+
+    This should represent interventions on a preexisting set of possible targets.
+    """
+
+    def __init__(self, targets=None):
+        super().__init__()
+        self.targets = targets
+        self.current_target = None
+
+    # def do(self, target, value=0.0):
+    #    raise NotImplementedError
+
+    def get_linear_structure(self):
+        """gets the linear approximation of the structure coefficients.
+
+        May not be applicable for all models
+        """
+        raise NotImplementedError
+
+    def get_structure(self) -> np.ndarray:
+        """Extracts a single summary structure from the model."""
+        raise NotImplementedError
+
+    def get_structures(self, n_structures: int) -> np.ndarray:
+        """Some models can provide empirical distributions over structures, this function samples a
+        number of structures from the model."""
+        raise NotImplementedError
+
+    def set_target(self, target):
+        if self.targets is not None and not np.isin(target, self.targets):
+            raise ValueError("Bad Target selected {target}")
+        self.current_target = target
+
+    def l1_reg(self):
+        raise NotImplementedError
+
+    def l2_reg(self):
+        raise NotImplementedError
 
 
 class NNODEF(nn.Module):
@@ -278,8 +319,8 @@ class MLPODEFKO(nn.Module):
         d = self.dims[0]
         fc1_weight = self.fc1.weight  # [j * m1, i]
         fc1_weight = fc1_weight.view(d, -1, d)  # [j, m1, i]
-        W = torch.sum(fc1_weight**2, dim=1).pow(0.5)  # [i, j]
-        W = W.cpu().detach().numpy()  # [i, j]
+        W = torch.sum(fc1_weight**2, dim=1).pow(0.5)  # [j, i]
+        W = W.cpu().detach().numpy()  
         W[np.abs(W) < w_threshold] = 0
         return np.round(W, 2)
 
