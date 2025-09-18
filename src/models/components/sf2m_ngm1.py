@@ -132,7 +132,7 @@ class SF2MNGM(nn.Module):
         # self.func_v = MLPODEFKO(
         #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
         # )
-        self.func_v = BayesianDrift(dims=self.dims, deepens=1, time_invariant=True, hyper="mlp")
+        self.func_v = BayesianDrift(dims=self.dims, deepens=1, time_invariant=True, hyper="mlp").to(self.device)
 
         self.score_net = CONDMLP(
             d=self.n_genes,
@@ -140,11 +140,11 @@ class SF2MNGM(nn.Module):
             time_varying=True,
             conditional=True,
             conditional_dim=self.n_genes,
-        )
+        ).to(self.device)
 
         self.v_correction = MLP(
             d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True
-        )
+        ).to(self.device)
 
         # -----------------------
         # 5. Build OTFMs
