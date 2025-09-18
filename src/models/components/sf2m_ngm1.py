@@ -10,7 +10,9 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from src.datamodules.components import sc_dataset as util
+from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.components.base import MLPODEFKO
+from src.models.components.bayesian_drift import BayesianDrift
 from src.models.components.cond_mlp import MLP as CONDMLP
 from src.models.components.optimal_transport import EntropicOTFM
 from src.models.components.simple_mlp import MLP
@@ -127,9 +129,10 @@ class SF2MNGM(nn.Module):
         # -----------------------
         # Dimensions for MLPODEFKO
         self.dims = [self.n_genes, knockout_hidden, 1]
-        self.func_v = MLPODEFKO(
-            dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
-        )
+        # self.func_v = MLPODEFKO(
+        #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
+        # )
+        self.func_v = BayesianDrift(dims=self.dims, deepens=1, time_invariant=True, hyper="mlp")
 
         self.score_net = CONDMLP(
             d=self.n_genes,
@@ -281,7 +284,7 @@ class SF2MNGM(nn.Module):
             # Losses
             L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
             L_flow = torch.mean((v_fit * model.dt - _u) ** 2)
-            L_reg = func_v.l2_reg() + func_v.fc1_reg()
+            L_reg = func_v.l2_reg() + func_v.l1_reg()
             L_reg_correction = self.mlp_l2_reg(v_correction)
 
             if i < 100:
@@ -317,9 +320,6 @@ class SF2MNGM(nn.Module):
             L.backward()
             optim.step()
 
-            # Proximal step (group-lasso style)
-            self.proximal(func_v.fc1.weight, func_v.dims, lam=func_v.GL_reg, eta=0.01)
-
         print("Training complete.")
 
     def forward(self, t, x):
@@ -335,134 +335,136 @@ class SF2MNGM(nn.Module):
         return out.squeeze(1)
 
 
-# def main():
-#     model = SF2MNGM(
-#         data_path="data/",
-#         dataset_type="Synthetic",
-#         T=5,
-#         sigma=1.0,
-#         dt=0.2,
-#         batch_size=164,
-#         alpha=0.1,
-#         reg=1e-5,
-#         correction_reg_strength=1e-3,
-#         n_steps=15000,
-#         lr=3e-3,
-#         device=None  # Auto-detect
-#     )
+def main():
+    model = SF2MNGM(
+        datamodule=TrajectoryStructureDataModule(),
+        T=5,
+        sigma=1.0,
+        dt=0.2,
+        batch_size=164,
+        alpha=0.1,
+        reg=1e-5,
+        correction_reg_strength=1e-3,
+        n_steps=15000,
+        lr=3e-3,
+        device=None  # Auto-detect
+    )
 
-#     model.train_model(skip_time=None)
-#     n=8
+    model.train_model(skip_time=None)
+    n=8
 
-#     def maskdiag(A):
-#         return A * (1 - np.eye(n))
+    def maskdiag(A):
+        return A * (1 - np.eye(n))
 
-#     import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt
 
-#     def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
-#         """Compute a single adjacency from a big set of states across all datasets.
+    def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
+        """Compute a single adjacency from a big set of states across all datasets.
 
-#         Returns a [d, d] numpy array representing an average Jacobian.
-#         """
+        Returns a [d, d] numpy array representing an average Jacobian.
+        """
 
-#         all_x_list = []
-#         for ds_idx, adata in enumerate(adatas):
-#             x0 = adata.X[adata.obs["t"] == 0]
-#             all_x_list.append(x0)
-#         if len(all_x_list) == 0:
-#             return None
+        all_x_list = []
+        for ds_idx, adata in enumerate(adatas):
+            x0 = adata.X[adata.obs["t"] == 0]
+            all_x_list.append(x0)
+        if len(all_x_list) == 0:
+            return None
 
-#         X_all = np.concatenate(all_x_list, axis=0)
-#         if X_all.shape[0] == 0:
-#             return None
+        X_all = np.concatenate(all_x_list, axis=0)
+        if X_all.shape[0] == 0:
+            return None
 
-#         X_all_torch = torch.from_numpy(X_all).float().to(device)
+        X_all_torch = torch.from_numpy(X_all).float().to(device)
 
-#         def get_flow(t, x):
-#             x_input = x.unsqueeze(0).unsqueeze(0)
-#             t_input = t.unsqueeze(0).unsqueeze(0)
-#             return v(t_input, x_input).squeeze(0).squeeze(0)
+        def get_flow(t, x):
+            x_input = x.unsqueeze(0).unsqueeze(0)
+            t_input = t.unsqueeze(0).unsqueeze(0)
+            return v(t_input, x_input).squeeze(0).squeeze(0)
 
-#         # Or loop over multiple times if the model is time-varying
-#         t_val = torch.tensor(0.0).to(device)
+        # Or loop over multiple times if the model is time-varying
+        t_val = torch.tensor(0.0).to(device)
 
-#         Ju = torch.func.jacrev(get_flow, argnums=1)
+        Ju = torch.func.jacrev(get_flow, argnums=1)
 
-#         Js = []
+        Js = []
 
-#         batch_size = 256
-#         for start in range(0, X_all_torch.shape[0], batch_size):
-#             end = start + batch_size
-#             batch_x = X_all_torch[start:end]
+        batch_size = 256
+        for start in range(0, X_all_torch.shape[0], batch_size):
+            end = start + batch_size
+            batch_x = X_all_torch[start:end]
 
-#             J_local = torch.vmap(lambda x: Ju(t_val, x))(batch_x)
-#             J_avg = J_local.mean(dim=0)
-#             Js.append(J_avg)
+            J_local = torch.vmap(lambda x: Ju(t_val, x))(batch_x)
+            J_avg = J_local.mean(dim=0)
+            Js.append(J_avg)
 
-#         if len(Js) == 0:
-#             return None
-#         J_final = torch.stack(Js, dim=0).mean(dim=0)
+        if len(Js) == 0:
+            return None
+        J_final = torch.stack(Js, dim=0).mean(dim=0)
 
-#         A_est = J_final
+        A_est = J_final
 
-#         return A_est.detach().cpu().numpy().T
+        return A_est.detach().cpu().numpy().T
 
-#     with torch.no_grad():
-#         A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=1 / T, device=torch.device("cpu"))
+    with torch.no_grad():
+        A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=1 / T, device=torch.device("cpu"))
 
-#     W_v = model.func_v.causal_graph(w_threshold=0.0).T
-#     A_true = model.true_matrix
+    W_v = model.func_v.causal_graph(w_threshold=0.0).T
+    A_true = model.true_matrix
 
-#     # Display both the estimated adjacency matrix and the learned causal graph
-#     plt.figure(figsize=(15, 5))
-#     plt.subplot(1, 3, 1)
-#     plt.imshow(maskdiag(A_estim), vmin=-0.5, vmax=0.5, cmap="RdBu_r")
-#     plt.gca().invert_yaxis()
-#     plt.title("A_estim (from Jacobian)")
-#     plt.colorbar()
-#     plt.subplot(1, 3, 2)
-#     plt.imshow(maskdiag(W_v), cmap="Reds")
-#     plt.gca().invert_yaxis()
-#     plt.title("Causal Graph (from MLPODEF)")
-#     plt.colorbar()
-#     plt.subplot(1, 3, 3)
-#     plt.imshow(maskdiag(A_true), vmin=-1, vmax=1, cmap="RdBu_r")
-#     plt.gca().invert_yaxis()
-#     plt.title("A_true")
-#     plt.colorbar()
-#     plt.tight_layout()
-#     plt.show()
+    # Display both the estimated adjacency matrix and the learned causal graph
+    plt.figure(figsize=(15, 5))
+    plt.subplot(1, 3, 1)
+    plt.imshow(maskdiag(A_estim), vmin=-0.5, vmax=0.5, cmap="RdBu_r")
+    plt.gca().invert_yaxis()
+    plt.title("A_estim (from Jacobian)")
+    plt.colorbar()
+    plt.subplot(1, 3, 2)
+    plt.imshow(maskdiag(W_v), cmap="Reds")
+    plt.gca().invert_yaxis()
+    plt.title("Causal Graph (from MLPODEF)")
+    plt.colorbar()
+    plt.subplot(1, 3, 3)
+    plt.imshow(maskdiag(A_true), vmin=-1, vmax=1, cmap="RdBu_r")
+    plt.gca().invert_yaxis()
+    plt.title("A_true")
+    plt.colorbar()
+    plt.tight_layout()
+    plt.show()
 
-#     maskdiag(W_v)
+    maskdiag(W_v)
 
-#     from sklearn.metrics import precision_recall_curve, average_precision_score
-#     plt.figure(figsize=(12, 5))
-#     # For Jacobian-based estimation
-#     plt.subplot(1, 2, 1)
-#     y_true = np.abs(np.sign(maskdiag(A_true)).astype(int).flatten())
-#     y_pred = np.abs(maskdiag(A_estim).flatten())
-#     prec, rec, thresh = precision_recall_curve(y_true, y_pred)
-#     avg_prec = average_precision_score(y_true, y_pred)
-#     plt.plot(rec, prec, label=f"Jacobian-based (AP = {avg_prec:.2f})")
-#     plt.xlabel("Recall")
-#     plt.ylabel("Precision")
-#     plt.title(
-#         f"Precision-Recall Curve (Jacobian)\nAUPR ratio = {avg_prec/np.mean(np.abs(A_true) > 0)}"
-#     )
-#     plt.legend()
-#     plt.grid(True)
-#     # For MLPODEF-based estimation
-#     plt.subplot(1, 2, 2)
-#     y_pred_mlp = np.abs(maskdiag(W_v).flatten())
-#     prec, rec, thresh = precision_recall_curve(y_true, y_pred_mlp)
-#     avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
-#     plt.plot(rec, prec, label=f"MLPODEF-based (AP = {avg_prec_mlp:.2f})")
-#     plt.xlabel("Recall")
-#     plt.ylabel("Precision")
-#     plt.title(
-#         f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp/np.mean(np.abs(A_true) > 0)}"
-#     )
-#     plt.legend()
-#     plt.grid(True)
-#     plt.tight_layout()
-#     plt.show()
+    from sklearn.metrics import precision_recall_curve, average_precision_score
+    plt.figure(figsize=(12, 5))
+    # For Jacobian-based estimation
+    plt.subplot(1, 2, 1)
+    y_true = np.abs(np.sign(maskdiag(A_true)).astype(int).flatten())
+    y_pred = np.abs(maskdiag(A_estim).flatten())
+    prec, rec, thresh = precision_recall_curve(y_true, y_pred)
+    avg_prec = average_precision_score(y_true, y_pred)
+    plt.plot(rec, prec, label=f"Jacobian-based (AP = {avg_prec:.2f})")
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.title(
+        f"Precision-Recall Curve (Jacobian)\nAUPR ratio = {avg_prec/np.mean(np.abs(A_true) > 0)}"
+    )
+    plt.legend()
+    plt.grid(True)
+    # For MLPODEF-based estimation
+    plt.subplot(1, 2, 2)
+    y_pred_mlp = np.abs(maskdiag(W_v).flatten())
+    prec, rec, thresh = precision_recall_curve(y_true, y_pred_mlp)
+    avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
+    plt.plot(rec, prec, label=f"MLPODEF-based (AP = {avg_prec_mlp:.2f})")
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.title(
+        f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp/np.mean(np.abs(A_true) > 0)}"
+    )
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    main()

@@ -49,6 +49,7 @@ class BayesianDrift(Intervenable):
         elif ~self.deepens and self.gamma != 0:
             self.graphs = GraphLayerSVGD(n_ens, dims[0], k_hidden, alpha, gamma, w_init_std)
         else:
+            print("Using GraphLayer parameterization")
             self.graphs = GraphLayer(n_ens, dims[0], k_hidden, alpha)
 
         if hyper != "linear":

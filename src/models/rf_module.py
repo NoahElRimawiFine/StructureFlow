@@ -119,13 +119,11 @@ class ReferenceFittingModule(pl.LightningModule):
         return torch.from_numpy(trajectory).float()
 
     def training_step(self, batch, batch_idx):
-        """In our Lightning training_step we assume that the datamodule (e.g. grn_datamodule)
-        provides a batch with keys "adatas" and "kos".
+        """In our Lightning training_step we just plop in the datamodule and train on that
 
         On the first training_step we call fit_model to run the estimator fitting. Subsequent calls
         simply log a dummy loss.
         """
-        # To ensure we run the fitting only once, check if the estimator has been created.
         if self.estimator is None:
             datamodule = self.trainer.datamodule
             adatas = datamodule.get_subset_adatas()
