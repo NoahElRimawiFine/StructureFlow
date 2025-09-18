@@ -416,13 +416,23 @@ def main():
     # with torch.no_grad():
     #     A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=1 / T, device=torch.device("cpu"))
 
-    W_v = model.func_v.get_structure(eval_n_graphs=200)
-    A_true = model.true_matrix
+    def to_numpy(x):
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
+
+    def maskdiag_np(A):
+        A = to_numpy(A)
+        n = A.shape[0]
+        return A * (1 - np.eye(n, dtype=A.dtype))
+
+    W_v = to_numpy(model.func_v.get_structure(eval_n_graphs=200))
+    A_true = to_numpy(model.true_matrix)
 
     # Display both the estimated adjacency matrix and the learned causal graph
     plt.figure(figsize=(15, 5))
     plt.subplot(1, 3, 2)
-    plt.imshow(maskdiag(W_v), cmap="Reds")
+    plt.imshow(maskdiag_np(W_v), cmap="Reds")
     plt.gca().invert_yaxis()
     plt.title("Causal Graph (from MLPODEF)")
     plt.colorbar()
@@ -435,14 +445,12 @@ def main():
     plt.savefig("causal_graph_mlpodef.png")
     plt.show()
 
-    maskdiag(W_v)
-
     from sklearn.metrics import precision_recall_curve, average_precision_score
     plt.figure(figsize=(12, 5))
     y_true = np.abs(np.sign(maskdiag(A_true)).astype(int).flatten())
     # For MLPODEF-based estimation
     plt.subplot(1, 2, 2)
-    y_pred_mlp = np.abs(maskdiag(W_v).flatten())
+    y_pred_mlp = np.abs(maskdiag_np(W_v).flatten())
     prec, rec, thresh = precision_recall_curve(y_true, y_pred_mlp)
     avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
     plt.plot(rec, prec, label=f"MLPODEF-based (AP = {avg_prec_mlp:.2f})")
