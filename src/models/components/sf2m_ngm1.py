@@ -342,7 +342,7 @@ def main():
     print("ENTERED main()", file=sys.stderr)
     sys.stderr.flush()
     time.sleep(2)
-    
+
     model = SF2MNGM(
         datamodule=TrajectoryStructureDataModule(),
         T=5,
@@ -413,19 +413,14 @@ def main():
 
         return A_est.detach().cpu().numpy().T
 
-    with torch.no_grad():
-        A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=1 / T, device=torch.device("cpu"))
+    # with torch.no_grad():
+    #     A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=1 / T, device=torch.device("cpu"))
 
-    W_v = model.func_v.causal_graph(w_threshold=0.0).T
+    W_v = model.func_v.get_structure(eval_n_graphs=200)
     A_true = model.true_matrix
 
     # Display both the estimated adjacency matrix and the learned causal graph
     plt.figure(figsize=(15, 5))
-    plt.subplot(1, 3, 1)
-    plt.imshow(maskdiag(A_estim), vmin=-0.5, vmax=0.5, cmap="RdBu_r")
-    plt.gca().invert_yaxis()
-    plt.title("A_estim (from Jacobian)")
-    plt.colorbar()
     plt.subplot(1, 3, 2)
     plt.imshow(maskdiag(W_v), cmap="Reds")
     plt.gca().invert_yaxis()
@@ -437,26 +432,14 @@ def main():
     plt.title("A_true")
     plt.colorbar()
     plt.tight_layout()
+    plt.savefig("causal_graph_mlpodef.png")
     plt.show()
 
     maskdiag(W_v)
 
     from sklearn.metrics import precision_recall_curve, average_precision_score
     plt.figure(figsize=(12, 5))
-    # For Jacobian-based estimation
-    plt.subplot(1, 2, 1)
     y_true = np.abs(np.sign(maskdiag(A_true)).astype(int).flatten())
-    y_pred = np.abs(maskdiag(A_estim).flatten())
-    prec, rec, thresh = precision_recall_curve(y_true, y_pred)
-    avg_prec = average_precision_score(y_true, y_pred)
-    plt.plot(rec, prec, label=f"Jacobian-based (AP = {avg_prec:.2f})")
-    plt.xlabel("Recall")
-    plt.ylabel("Precision")
-    plt.title(
-        f"Precision-Recall Curve (Jacobian)\nAUPR ratio = {avg_prec/np.mean(np.abs(A_true) > 0)}"
-    )
-    plt.legend()
-    plt.grid(True)
     # For MLPODEF-based estimation
     plt.subplot(1, 2, 2)
     y_pred_mlp = np.abs(maskdiag(W_v).flatten())
@@ -471,6 +454,7 @@ def main():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
+    plt.savefig("pr_curve_mlpoef.png")
     plt.show()
 
 if __name__ == "__main__":
