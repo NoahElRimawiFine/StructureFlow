@@ -16,6 +16,9 @@ from src.models.components.bayesian_drift import BayesianDrift
 from src.models.components.cond_mlp import MLP as CONDMLP
 from src.models.components.optimal_transport import EntropicOTFM
 from src.models.components.simple_mlp import MLP
+import sys, os, time
+print("TOP-LEVEL IMPORT OK, cwd =", os.getcwd(), file=sys.stderr)
+sys.stderr.flush()
 
 T = 5
 dataset = "dyn-TF"
@@ -336,6 +339,10 @@ class SF2MNGM(nn.Module):
 
 
 def main():
+    print("ENTERED main()", file=sys.stderr)
+    sys.stderr.flush()
+    time.sleep(2)
+    
     model = SF2MNGM(
         datamodule=TrajectoryStructureDataModule(),
         T=5,
