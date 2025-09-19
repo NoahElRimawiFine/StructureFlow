@@ -96,12 +96,6 @@ class SF2MNGM(nn.Module):
         self.n_steps = n_steps
         self.lr = lr
 
-        wandb.init(project="sf2m-grn", config=dict(T=self.T, d=self.dims[0], model="BayesianDrift"))
-        wandb.define_metric("trainer/step")
-        wandb.define_metric("traj/*", step_metric="trainer/step")
-        wandb.define_metric("loss/*", step_metric="trainer/step")
-        wandb.define_metric("grn/*",  step_metric="trainer/step")
-
         # -----------------------
         # 1. Load the data
         # -----------------------
@@ -116,6 +110,12 @@ class SF2MNGM(nn.Module):
 
         # Example shape from the first dataset
         self.n_genes = self.adatas[0].X.shape[1]
+
+        wandb.init(project="sf2m-grn", config=dict(T=self.T, d=self.n_genes, model="BayesianDrift"))
+        wandb.define_metric("trainer/step")
+        wandb.define_metric("traj/*", step_metric="trainer/step")
+        wandb.define_metric("loss/*", step_metric="trainer/step")
+        wandb.define_metric("grn/*",  step_metric="trainer/step")
 
         # -----------------------
         # 2. Build conditionals
