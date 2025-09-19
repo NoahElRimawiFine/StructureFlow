@@ -384,7 +384,8 @@ def main():
     # Display both the estimated adjacency matrix and the learned causal graph
     plt.figure(figsize=(15, 5))
     plt.subplot(1, 3, 2)
-    plt.imshow(maskdiag_np(W_v), cmap="Reds")
+    plt.imshow(maskdiag_np(W_v).T, cmap="Reds")
+    plt.gca().invert_yaxis()
     plt.title("Causal Graph (from MLPODEF)")
     plt.colorbar()
     plt.subplot(1, 3, 3)
