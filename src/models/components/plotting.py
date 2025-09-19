@@ -324,6 +324,16 @@ def maskdiag(A):
         
     return A_masked
 
+def to_numpy(x):
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
+
+def maskdiag_np(A):
+    A = to_numpy(A)
+    n = A.shape[0]
+    return A * (1 - np.eye(n, dtype=A.dtype))
+
 
 def plot_aupr_curve(A_true, W_v, prefix="val"):
     """Plots the precision-recall curve based on the true and estimated adjacency matrices.
@@ -518,13 +528,17 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0, m
     print("AUPR ratio: ", avg_prec_mlp / np.mean(np.abs(masked_true_graph) > 0))
 
 
-def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0, mask_diagonal=True):
+def log_causal_graph_matrices(A_estim=None, W_v=None, A_true=None, logger=None, global_step=0, mask_diagonal=True, prefix="grn/"):
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
 
     # Apply masking based on parameter
-    A_estim_plot = maskdiag(A_estim) if mask_diagonal else A_estim
-    W_v_plot = maskdiag(W_v) if mask_diagonal else W_v
-    A_true_plot = maskdiag(A_true) if mask_diagonal else A_true
+    if A_estim is None:
+        A_estim_plot = np.zeros_like(A_true)
+    else:
+        A_estim_plot = maskdiag(A_estim) if mask_diagonal else A_estim
+
+    W_v_plot = maskdiag_np(W_v) if mask_diagonal else W_v
+    A_true_plot = maskdiag_np(A_true) if mask_diagonal else A_true
 
     # --- A_estim ---
     im1 = axs[0].imshow(A_estim_plot, vmin=-0.5, vmax=0.5, cmap="RdBu_r")
@@ -546,8 +560,36 @@ def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0, 
 
     fig.tight_layout()
 
-    if logger is not None:
-        logger.experiment.add_figure("Causal_Graph_Matrices", fig, global_step=global_step)
+    # --- Logging ---
+    logged = False
+    if logger is not None and hasattr(logger, "experiment"):
+        exp = logger.experiment
+        # W&B via Lightning's WandbLogger
+        if hasattr(exp, "log"):  # wandb.run
+            try:
+                import wandb
+                exp.log({f"{prefix}Causal_Graph_Matrices": wandb.Image(fig),
+                         "trainer/step": global_step}, step=global_step)
+                logged = True
+            except Exception:
+                pass
+        # TensorBoard
+        if not logged and hasattr(exp, "add_figure"):
+            exp.add_figure(f"{prefix}Causal_Graph_Matrices", fig, global_step=global_step)
+            logged = True
+
+    # Direct W&B (no Lightning logger passed)
+    if not logged:
+        try:
+            import wandb
+            if wandb.run is not None:
+                wandb.log({f"{prefix}Causal_Graph_Matrices": wandb.Image(fig),
+                           "trainer/step": global_step}, step=global_step)
+                logged = True
+        except Exception:
+            pass
+
+    if logged:
         plt.close(fig)
     else:
         plt.show()

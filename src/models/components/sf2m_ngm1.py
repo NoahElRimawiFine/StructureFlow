@@ -17,7 +17,10 @@ from src.models.components.cond_mlp import MLP as CONDMLP
 from src.models.components.optimal_transport import EntropicOTFM
 from src.models.components.simple_mlp import MLP
 from src.models.components.solver import TrajectorySolver, simulate_trajectory, wasserstein
-import sys, os, time
+from src.models.components.plotting import log_causal_graph_matrices
+import sys, os, time, pathlib
+from pathlib import Path
+import wandb
 print("TOP-LEVEL IMPORT OK, cwd =", os.getcwd(), file=sys.stderr)
 sys.stderr.flush()
 
@@ -76,6 +79,11 @@ class SF2MNGM(nn.Module):
             correction_hidden (list): Hidden sizes for the correction MLP.
         """
         super().__init__()
+        wandb.init(project="sf2m-grn", config=dict(T=self.T, d=self.dims[0], model="BayesianDrift"))
+        wandb.define_metric("trainer/step")
+        wandb.define_metric("traj/*", step_metric="trainer/step")
+        wandb.define_metric("loss/*", step_metric="trainer/step")
+        wandb.define_metric("grn/*",  step_metric="trainer/step")
 
         # Detect device if not specified
         if device is None:
@@ -138,7 +146,7 @@ class SF2MNGM(nn.Module):
         # )
         self.func_v = BayesianDrift(
             dims=self.dims, 
-            n_ens=25, 
+            n_ens=1, 
             deepens=True, 
             time_invariant=True, 
             k_hidden=4, 
@@ -250,6 +258,7 @@ class SF2MNGM(nn.Module):
         func_s = self.score_net
         v_correction = self.v_correction
         optim = self.optimizer
+        LOG_CSV = Path("traj_metrics.csv")
 
         for i in tqdm(range(self.n_steps)):
             # Randomly pick which dataset to train on
@@ -317,6 +326,12 @@ class SF2MNGM(nn.Module):
             self.score_loss_history.append(L_score.item())
             self.flow_loss_history.append(L_flow.item())
             self.reg_loss_history.append(L_reg.item())
+            wandb.log({
+                "trainer/step": i,
+                "loss/train": float(L.item()),
+                "loss/score": float(L_score.item()),
+                "loss/flow": float(L_flow.item()),   # if you have one
+            })
 
             if i % 100 == 0:
                 print(
@@ -324,67 +339,109 @@ class SF2MNGM(nn.Module):
                     f"L_score={L_score.item():.4f}, L_flow={L_flow.item():.4f}, "
                     f"Reg(Flow)={L_reg.item():.4f}"
                 )
-                # and traj inf as well
                 sys.stdout.flush()
+
             if i % 500 == 0:
                 with torch.no_grad():
-                    results = []
-                    for time in range(1, self.T):
-                        time_distances = []
-                        for i, adata in enumerate(self.adatas):
-                            x0 = torch.from_numpy(adata.X[adata.obs["t"] == time - 1]).float()
-                            true_dist = torch.from_numpy(
-                                adata.X[adata.obs["t"] == time]
-                            ).float()
-                            cond_vector = self.conditionals[i]
-                            if cond_vector is not None:
-                                cond_vector = cond_vector[0].repeat(len(x0), 1).to(self.device)
+                    per_time = []  # list of dicts: {'Time': t, 'Avg ODE': float, 'Avg SDE': float}
+
+                    for t_bin in range(1, self.T):
+                        per_ds = []
+                        for ds_idx, adata in enumerate(self.adatas):  # avoid shadowing i
+                            x0 = torch.from_numpy(adata.X[adata.obs["t"] == t_bin - 1]).float()
+                            true_dist = torch.from_numpy(adata.X[adata.obs["t"] == t_bin]).float()
 
                             if len(x0) == 0 or len(true_dist) == 0:
                                 continue
 
+                            dev = next(self.func_v.parameters()).device
+                            x0 = x0.to(dev)
+                            true_dist = true_dist.to(dev)
+
+                            cond_vector = self.conditionals[ds_idx]
+                            if cond_vector is not None:
+                                cond_vector = cond_vector[0].repeat(len(x0), 1).to(dev)
+
                             traj_ode = simulate_trajectory(
-                                self.func_v,
-                                self.v_correction,
-                                self.score_net,
+                                self.func_v, self.v_correction, self.score_net,
                                 x0,
                                 dataset_idx=None,
-                                start_time=time - 1,
-                                end_time=time,
+                                start_time=t_bin - 1,
+                                end_time=t_bin,
                                 n_times=min(len(x0), len(true_dist)),
                                 cond_vector=cond_vector,
-                                device=self.device,
+                                device=dev,
                             )
-
                             traj_sde = simulate_trajectory(
-                                self.func_v,
-                                self.v_correction,
-                                self.score_net,
+                                self.func_v, self.v_correction, self.score_net,
                                 x0,
                                 dataset_idx=None,
-                                start_time=time - 1,
-                                end_time=time,
+                                start_time=t_bin - 1,
+                                end_time=t_bin,
                                 n_times=min(len(x0), len(true_dist)),
                                 cond_vector=cond_vector,
                                 use_sde=True,
-                                device=self.device,
+                                device=dev,
                             )
 
-                            w_dist_ode = wasserstein(traj_ode[-1], true_dist)
-                            w_dist_sde = wasserstein(traj_sde[-1], true_dist)
-                            time_distances.append({"ode": w_dist_ode, "sde": w_dist_sde})
+                            pred_ode = traj_ode[-1].detach().cpu()
+                            pred_sde = traj_sde[-1].detach().cpu()
+                            td_cpu   = true_dist.detach().cpu()
 
-                        if time_distances:
-                            avg_ode = np.mean([d["ode"] for d in time_distances])
-                            avg_sde = np.mean([d["sde"] for d in time_distances])
+                            w_dist_ode = wasserstein(pred_ode, td_cpu)
+                            w_dist_sde = wasserstein(pred_sde, td_cpu)
+                            per_ds.append((w_dist_ode, w_dist_sde))
+
+                        if per_ds:
+                            avg_ode = float(np.mean([a for a, _ in per_ds]))
+                            avg_sde = float(np.mean([b for _, b in per_ds]))
                         else:
-                            avg_ode, avg_sde = None, None
+                            avg_ode = np.nan
+                            avg_sde = np.nan
 
-                        results.append({"Time": time, "Avg ODE": avg_ode, "Avg SDE": avg_sde})
-                        print(f"  Time {time}: Avg ODE W={avg_ode}, Avg SDE W={avg_sde}")
+                        per_time.append({"Time": t_bin, "Avg ODE": avg_ode, "Avg SDE": avg_sde})
+                        print(f"  Time {t_bin}: Avg ODE W={avg_ode}, Avg SDE W={avg_sde}")
                         sys.stdout.flush()
-                    df_results = pd.DataFrame(results)
-                    df_results.to_csv(f"traj_inference_step_{i}.csv", index=False)
+
+                    step_rows = []
+                    for row in per_time:
+                        t_bin = row["Time"]
+                        step_rows.append({"Step": i, "Time": t_bin, "Kind": "ODE", "Value": row["Avg ODE"]})
+                        step_rows.append({"Step": i, "Time": t_bin, "Kind": "SDE", "Value": row["Avg SDE"]})
+
+                    df_step = pd.DataFrame(step_rows)
+
+                    write_header = not LOG_CSV.exists()
+                    df_step.to_csv(LOG_CSV, mode="a", header=write_header, index=False)
+                    if wandb.run is not None:
+                        log = {"trainer/step": i}
+                        ode_vals, sde_vals = [], []
+
+                        for row in per_time:
+                            t = row["Time"]
+                            v_ode = row["Avg ODE"]
+                            v_sde = row["Avg SDE"]
+
+                            # log each line as its own series
+                            if v_ode is not None and not np.isnan(v_ode):
+                                log[f"traj/ODE/t{t}"] = float(v_ode)
+                                ode_vals.append(v_ode)
+                            if v_sde is not None and not np.isnan(v_sde):
+                                log[f"traj/SDE/t{t}"] = float(v_sde)
+                                sde_vals.append(v_sde)
+
+                        if ode_vals:
+                            log["traj/ODE/mean"] = float(np.mean(ode_vals))
+                        if sde_vals:
+                            log["traj/SDE/mean"] = float(np.mean(sde_vals))
+
+                        wandb.log(log, step=i)
+                        W_v = self.func_v.get_structure()
+                        if W_v.ndim == 3:
+                            W_v = W_v[0]
+                        A_true = self.true_matrix
+
+                        log_causal_graph_matrices(None, W_v, A_true, logger=None, global_step=i)
 
             # Backprop and update
             L.backward()
@@ -445,13 +502,6 @@ def main():
         n = A.shape[0]
         return A * (1 - np.eye(n, dtype=A.dtype))
 
-    W_v = to_numpy(model.func_v.get_structure())
-    # since w_v is shape three I need to look at each 8 x 8 matrix and then print them
-    for i in range(W_v.shape[0]):
-        print(f"W_v matrix {i}:")
-        print(maskdiag_np(W_v[i]))
-        print("\n")
-
     # plot loss history
     plt.figure(figsize=(8, 5))
     plt.plot(model.loss_history, label="Total Loss")
@@ -467,8 +517,10 @@ def main():
     plt.savefig("training_loss_history.png")
     plt.show()
 
+    W_v = model.func_v.get_structure()
+
     if W_v.ndim == 3:
-        W_v = W_v.mean(axis=0)
+        W_v = W_v[0]
     A_true = to_numpy(model.true_matrix)
 
     np.savetxt("A_estim_mlpoef.txt", maskdiag_np(W_v), fmt="%.6f")
