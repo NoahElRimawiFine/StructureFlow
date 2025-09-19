@@ -357,9 +357,6 @@ def main():
         device=None  # Auto-detect
     )
 
-    print(model.true_matrix, model.true_matrix.shape, file=sys.stderr)
-    breakpoint()
-
     model.train_model(skip_time=None)
     n=8
 
