@@ -537,7 +537,7 @@ def log_causal_graph_matrices(A_estim=None, W_v=None, A_true=None, logger=None, 
     else:
         A_estim_plot = maskdiag(A_estim) if mask_diagonal else A_estim
 
-    W_v_plot = maskdiag_np(W_v) if mask_diagonal else W_v
+    W_v_plot = maskdiag_np(W_v.T) if mask_diagonal else W_v.T
     A_true_plot = maskdiag_np(A_true) if mask_diagonal else A_true
 
     # --- A_estim ---
