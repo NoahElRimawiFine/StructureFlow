@@ -44,13 +44,13 @@ class BayesianDrift(Intervenable):
         if not time_invariant:
             dims[0] += 1
 
-        if ~self.deepens and self.gamma == 0:
-            self.graphs = GraphLayerVI(n_ens, dims[0], k_hidden, alpha)
-        elif ~self.deepens and self.gamma != 0:
-            self.graphs = GraphLayerSVGD(n_ens, dims[0], k_hidden, alpha, gamma, w_init_std)
-        else:
-            print("Using GraphLayer parameterization")
-            self.graphs = GraphLayer(n_ens, dims[0], k_hidden, alpha)
+        # if ~self.deepens and self.gamma == 0:
+        #     self.graphs = GraphLayerVI(n_ens, dims[0], k_hidden, alpha)
+        # elif ~self.deepens and self.gamma != 0:
+        #     self.graphs = GraphLayerSVGD(n_ens, dims[0], k_hidden, alpha, gamma, w_init_std)
+        # else:
+        print("Using GraphLayer parameterization")
+        self.graphs = GraphLayer(n_ens, dims[0], k_hidden, alpha)
 
         if hyper != "linear":
             layers = []

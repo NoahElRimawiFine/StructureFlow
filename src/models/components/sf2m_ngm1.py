@@ -135,7 +135,7 @@ class SF2MNGM(nn.Module):
         # self.func_v = MLPODEFKO(
         #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
         # )
-        self.func_v = BayesianDrift(dims=self.dims, deepens=1, time_invariant=True, hyper="mlp").to(self.device)
+        self.func_v = BayesianDrift(dims=self.dims, deepens=1, time_invariant=True, k_hidden=4, hyper="mlp").to(self.device)
 
         self.score_net = CONDMLP(
             d=self.n_genes,
@@ -357,6 +357,9 @@ def main():
         device=None  # Auto-detect
     )
 
+    print(model.true_matrix, model.true_matrix.shape, file=sys.stderr)
+    breakpoint()
+
     model.train_model(skip_time=None)
     n=8
 
@@ -364,54 +367,6 @@ def main():
         return A * (1 - np.eye(n))
 
     import matplotlib.pyplot as plt
-
-    def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
-        """Compute a single adjacency from a big set of states across all datasets.
-
-        Returns a [d, d] numpy array representing an average Jacobian.
-        """
-
-        all_x_list = []
-        for ds_idx, adata in enumerate(adatas):
-            x0 = adata.X[adata.obs["t"] == 0]
-            all_x_list.append(x0)
-        if len(all_x_list) == 0:
-            return None
-
-        X_all = np.concatenate(all_x_list, axis=0)
-        if X_all.shape[0] == 0:
-            return None
-
-        X_all_torch = torch.from_numpy(X_all).float().to(device)
-
-        def get_flow(t, x):
-            x_input = x.unsqueeze(0).unsqueeze(0)
-            t_input = t.unsqueeze(0).unsqueeze(0)
-            return v(t_input, x_input).squeeze(0).squeeze(0)
-
-        # Or loop over multiple times if the model is time-varying
-        t_val = torch.tensor(0.0).to(device)
-
-        Ju = torch.func.jacrev(get_flow, argnums=1)
-
-        Js = []
-
-        batch_size = 256
-        for start in range(0, X_all_torch.shape[0], batch_size):
-            end = start + batch_size
-            batch_x = X_all_torch[start:end]
-
-            J_local = torch.vmap(lambda x: Ju(t_val, x))(batch_x)
-            J_avg = J_local.mean(dim=0)
-            Js.append(J_avg)
-
-        if len(Js) == 0:
-            return None
-        J_final = torch.stack(Js, dim=0).mean(dim=0)
-
-        A_est = J_final
-
-        return A_est.detach().cpu().numpy().T
 
     # with torch.no_grad():
     #     A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=1 / T, device=torch.device("cpu"))
@@ -426,7 +381,7 @@ def main():
         n = A.shape[0]
         return A * (1 - np.eye(n, dtype=A.dtype))
 
-    W_v = to_numpy(model.func_v.get_structure(eval_n_graphs=200))
+    W_v = to_numpy(model.func_v.get_structure(eval_n_graphs=None))
     A_true = to_numpy(model.true_matrix)
 
     # Display both the estimated adjacency matrix and the learned causal graph
