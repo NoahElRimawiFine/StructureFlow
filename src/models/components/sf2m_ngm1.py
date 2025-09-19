@@ -16,6 +16,7 @@ from src.models.components.bayesian_drift import BayesianDrift
 from src.models.components.cond_mlp import MLP as CONDMLP
 from src.models.components.optimal_transport import EntropicOTFM
 from src.models.components.simple_mlp import MLP
+from src.models.components.solver import TrajectorySolver, simulate_trajectory, wasserstein
 import sys, os, time
 print("TOP-LEVEL IMPORT OK, cwd =", os.getcwd(), file=sys.stderr)
 sys.stderr.flush()
@@ -323,6 +324,61 @@ class SF2MNGM(nn.Module):
                     f"L_score={L_score.item():.4f}, L_flow={L_flow.item():.4f}, "
                     f"Reg(Flow)={L_reg.item():.4f}"
                 )
+                # and traj inf as well
+                sys.stdout.flush()
+            if i % 500 == 0:
+                with torch.no_grad():
+                    results = []
+                    for time in range(1, self.T):
+                        time_distances = []
+                        for i, adata in enumerate(self.adatas):
+                            x0 = torch.from_numpy(adata.X[adata.obs["t"] == time - 1]).float()
+                            true_dist = torch.from_numpy(
+                                adata.X[adata.obs["t"] == time]
+                            ).float()
+                            cond_vector = self.conditionals[i]
+                            if cond_vector is not None:
+                                cond_vector = cond_vector[0].repeat(len(x0), 1)
+
+                            if len(x0) == 0 or len(true_dist) == 0:
+                                continue
+
+                            traj_ode = simulate_trajectory(
+                                self.func_v,
+                                self.v_correction,
+                                self.score_net,
+                                x0,
+                                dataset_idx=i,
+                                start_time=time - 1,
+                                end_time=time,
+                                n_times=min(len(x0), len(true_dist)),
+                                cond_vector=cond_vector,
+                            )
+
+                            traj_sde = simulate_trajectory(
+                                self.func_v,
+                                self.v_correction,
+                                self.score_net,
+                                x0,
+                                dataset_idx=i,
+                                start_time=time - 1,
+                                end_time=time,
+                                n_times=min(len(x0), len(true_dist)),
+                                cond_vector=cond_vector,
+                                use_sde=True,
+                            )
+
+                            w_dist_ode = wasserstein(traj_ode[-1], true_dist)
+                            w_dist_sde = wasserstein(traj_sde[-1], true_dist)
+                            time_distances.append({"ode": w_dist_ode, "sde": w_dist_sde})
+
+                        if time_distances:
+                            avg_ode = np.mean([d["ode"] for d in time_distances])
+                            avg_sde = np.mean([d["sde"] for d in time_distances])
+                        else:
+                            avg_ode, avg_sde = None, None
+
+                        results.append({"Time": time, "Avg ODE": avg_ode, "Avg SDE": avg_sde})
 
             # Backprop and update
             L.backward()
