@@ -384,6 +384,27 @@ def main():
         return A * (1 - np.eye(n, dtype=A.dtype))
 
     W_v = to_numpy(model.func_v.get_structure())
+    # since w_v is shape three I need to look at each 8 x 8 matrix and then print them
+    for i in range(W_v.shape[0]):
+        print(f"W_v matrix {i}:")
+        print(maskdiag_np(W_v[i]))
+        print("\n")
+
+    # plot loss history
+    plt.figure(figsize=(8, 5))
+    plt.plot(model.loss_history, label="Total Loss")
+    plt.plot(model.score_loss_history, label="Score Loss")
+    plt.plot(model.flow_loss_history, label="Flow Loss")
+    plt.yscale("log")
+    plt.xlabel("Training Step")
+    plt.ylabel("Loss")
+    plt.title("Training Loss History")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("training_loss_history.png")
+    plt.show()
+    
     if W_v.ndim == 3:
         W_v = W_v.mean(axis=0)
     A_true = to_numpy(model.true_matrix)
