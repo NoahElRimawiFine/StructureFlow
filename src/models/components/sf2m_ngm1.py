@@ -231,24 +231,6 @@ class SF2MNGM(nn.Module):
             otfms.append(model)
         return otfms
 
-    def proximal(self, w, dims, lam=0.1, eta=0.1):
-        """Proximal operator used for group-lasso style regularization in the hidden weights."""
-        with torch.no_grad():
-            d = dims[0]
-            d_hidden = dims[1]
-            wadj = w.view(d, d_hidden, d)
-            tmp = torch.sum(wadj**2, dim=1).sqrt() - lam * eta
-            alpha_ = torch.clamp(tmp, min=0)
-            v_ = F.normalize(wadj, dim=1) * alpha_[:, None, :]
-            w.copy_(v_.view(-1, d))
-
-    def mlp_l2_reg(self, mlp):
-        """Compute L2 sum of parameters for a generic MLP."""
-        l2_sum = 0.0
-        for param in mlp.parameters():
-            l2_sum += torch.sum(param**2)
-        return l2_sum
-
     # -------------------------------------------------------------------------
     # Core training loop
     # -------------------------------------------------------------------------
@@ -263,8 +245,8 @@ class SF2MNGM(nn.Module):
 
         for i in tqdm(range(self.n_steps)):
             # Randomly pick which dataset to train on
-            #ds_idx = np.random.randint(0, len(self.adatas))
-            ds_idx = 0  # For debugging with single dataset
+            ds_idx = np.random.randint(0, len(self.adatas))
+            # ds_idx = 0  # For debugging with single dataset
             model = self.otfms[ds_idx]
             cond_vector = self.conditionals[ds_idx].to(self.device)
 
@@ -476,7 +458,7 @@ def main():
         alpha=0.1,
         reg=0,
         correction_reg_strength=1e-3,
-        n_steps=5000,
+        n_steps=15000,
         lr=3e-3,
         device=None  # Auto-detect
     )
