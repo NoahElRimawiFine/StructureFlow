@@ -338,7 +338,7 @@ class SF2MNGM(nn.Module):
                             ).float()
                             cond_vector = self.conditionals[i]
                             if cond_vector is not None:
-                                cond_vector = cond_vector[0].repeat(len(x0), 1)
+                                cond_vector = cond_vector[0].repeat(len(x0), 1).to(self.device)
 
                             if len(x0) == 0 or len(true_dist) == 0:
                                 continue
@@ -353,6 +353,7 @@ class SF2MNGM(nn.Module):
                                 end_time=time,
                                 n_times=min(len(x0), len(true_dist)),
                                 cond_vector=cond_vector,
+                                device=self.device,
                             )
 
                             traj_sde = simulate_trajectory(
@@ -366,6 +367,7 @@ class SF2MNGM(nn.Module):
                                 n_times=min(len(x0), len(true_dist)),
                                 cond_vector=cond_vector,
                                 use_sde=True,
+                                device=self.device,
                             )
 
                             w_dist_ode = wasserstein(traj_ode[-1], true_dist)
