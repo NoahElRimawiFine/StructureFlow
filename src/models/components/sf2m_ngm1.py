@@ -381,6 +381,8 @@ def main():
         W_v = W_v.mean(axis=0)
     A_true = to_numpy(model.true_matrix)
 
+    np.savetxt("A_estim_mlpoef.txt", maskdiag_np(W_v), fmt="%.6f")
+
     # Display both the estimated adjacency matrix and the learned causal graph
     plt.figure(figsize=(15, 5))
     plt.subplot(1, 3, 2)
