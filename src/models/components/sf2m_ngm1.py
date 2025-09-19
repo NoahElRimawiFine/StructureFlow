@@ -135,7 +135,7 @@ class SF2MNGM(nn.Module):
         # self.func_v = MLPODEFKO(
         #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
         # )
-        self.func_v = BayesianDrift(dims=self.dims, n_ens=1, deepens=1, time_invariant=True, k_hidden=4, hyper="mlp").to(self.device)
+        self.func_v = BayesianDrift(dims=self.dims, n_ens=25, deepens=1, time_invariant=True, k_hidden=4, hyper="mlp").to(self.device)
 
         self.score_net = CONDMLP(
             d=self.n_genes,
@@ -378,7 +378,7 @@ def main():
 
     W_v = to_numpy(model.func_v.get_structure())
     if W_v.ndim == 3:
-        W_v = W_v[0]
+        W_v = W_v.mean(axis=0)
     A_true = to_numpy(model.true_matrix)
 
     # Display both the estimated adjacency matrix and the learned causal graph
