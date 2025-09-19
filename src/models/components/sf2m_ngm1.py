@@ -79,11 +79,6 @@ class SF2MNGM(nn.Module):
             correction_hidden (list): Hidden sizes for the correction MLP.
         """
         super().__init__()
-        wandb.init(project="sf2m-grn", config=dict(T=self.T, d=self.dims[0], model="BayesianDrift"))
-        wandb.define_metric("trainer/step")
-        wandb.define_metric("traj/*", step_metric="trainer/step")
-        wandb.define_metric("loss/*", step_metric="trainer/step")
-        wandb.define_metric("grn/*",  step_metric="trainer/step")
 
         # Detect device if not specified
         if device is None:
@@ -100,6 +95,12 @@ class SF2MNGM(nn.Module):
         self.correction_reg_strength = correction_reg_strength
         self.n_steps = n_steps
         self.lr = lr
+
+        wandb.init(project="sf2m-grn", config=dict(T=self.T, d=self.dims[0], model="BayesianDrift"))
+        wandb.define_metric("trainer/step")
+        wandb.define_metric("traj/*", step_metric="trainer/step")
+        wandb.define_metric("loss/*", step_metric="trainer/step")
+        wandb.define_metric("grn/*",  step_metric="trainer/step")
 
         # -----------------------
         # 1. Load the data
