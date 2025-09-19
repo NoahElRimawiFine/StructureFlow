@@ -123,6 +123,9 @@ class BayesianDrift(Intervenable):
 
     def get_structure(self, eval_n_graphs=None, test_mode=None):
         """Score each edge based on the the weight sum."""
+        if isinstance(self.graphs, GraphLayer):
+            return self.graphs(eval_n_graphs)
+            
         return self.graphs(eval_n_graphs, test_mode)
 
 

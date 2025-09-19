@@ -381,7 +381,7 @@ def main():
         n = A.shape[0]
         return A * (1 - np.eye(n, dtype=A.dtype))
 
-    W_v = to_numpy(model.func_v.get_structure(eval_n_graphs=None))
+    W_v = to_numpy(model.func_v.get_structure())
     A_true = to_numpy(model.true_matrix)
 
     # Display both the estimated adjacency matrix and the learned causal graph
