@@ -245,7 +245,8 @@ class SF2MNGM(nn.Module):
 
         for i in tqdm(range(self.n_steps)):
             # Randomly pick which dataset to train on
-            ds_idx = np.random.randint(0, len(self.adatas))
+            #ds_idx = np.random.randint(0, len(self.adatas))
+            ds_idx = 0  # For debugging with single dataset
             model = self.otfms[ds_idx]
             cond_vector = self.conditionals[ds_idx].to(self.device)
 
@@ -281,14 +282,13 @@ class SF2MNGM(nn.Module):
                 ) * func_s(_t, _x, cond_expanded)
             else:
                 # Full training phase with correction
-                v_fit = func_v(t_input, v_input).squeeze(1) + v_correction(_t, _x)
+                v_fit = func_v(t_input, v_input).squeeze(1)
                 v_fit = v_fit - (model.sigma**2 / 2) * func_s(_t, _x, cond_expanded)
 
             # Losses
             L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
             L_flow = torch.mean((v_fit * model.dt - _u) ** 2)
             L_reg = func_v.l2_reg() + func_v.l1_reg()
-            L_reg_correction = self.mlp_l2_reg(v_correction)
 
             if i < 100:
                 # Train only score initially
@@ -302,7 +302,6 @@ class SF2MNGM(nn.Module):
                     self.alpha * L_score
                     + (1 - self.alpha) * L_flow
                     + self.reg * L_reg
-                    + self.correction_reg_strength * L_reg_correction
                 )
 
             # Bookkeeping
@@ -310,13 +309,12 @@ class SF2MNGM(nn.Module):
             self.score_loss_history.append(L_score.item())
             self.flow_loss_history.append(L_flow.item())
             self.reg_loss_history.append(L_reg.item())
-            self.reg_corr_loss_history.append(L_reg_correction.item())
 
             if i % 100 == 0:
                 print(
                     f"Step={i}, ds={ds_idx}, "
                     f"L_score={L_score.item():.4f}, L_flow={L_flow.item():.4f}, "
-                    f"Reg(Flow)={L_reg.item():.4f}, Reg(Corr)={L_reg_correction.item():.4f}"
+                    f"Reg(Flow)={L_reg.item():.4f}"
                 )
 
             # Backprop and update
@@ -350,9 +348,9 @@ def main():
         dt=0.2,
         batch_size=164,
         alpha=0.1,
-        reg=1e-5,
+        reg=0,
         correction_reg_strength=1e-3,
-        n_steps=15000,
+        n_steps=5000,
         lr=3e-3,
         device=None  # Auto-detect
     )
