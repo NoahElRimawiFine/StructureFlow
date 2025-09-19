@@ -331,8 +331,8 @@ class SF2MNGM(nn.Module):
                 "trainer/step": i,
                 "loss/train": float(L.item()),
                 "loss/score": float(L_score.item()),
-                "loss/flow": float(L_flow.item()),   # if you have one
-            })
+                "loss/flow": float(L_flow.item()),
+            }, step=i, commit=False)
 
             if i % 100 == 0:
                 print(
@@ -423,7 +423,6 @@ class SF2MNGM(nn.Module):
                             v_ode = row["Avg ODE"]
                             v_sde = row["Avg SDE"]
 
-                            # log each line as its own series
                             if v_ode is not None and not np.isnan(v_ode):
                                 log[f"traj/ODE/t{t}"] = float(v_ode)
                                 ode_vals.append(v_ode)
@@ -436,7 +435,7 @@ class SF2MNGM(nn.Module):
                         if sde_vals:
                             log["traj/SDE/mean"] = float(np.mean(sde_vals))
 
-                        wandb.log(log, step=i)
+                        wandb.log(log, step=i, commit=False)
                         W_v = self.func_v.get_structure()
                         if W_v.ndim == 3:
                             W_v = W_v[0]
