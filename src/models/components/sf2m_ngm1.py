@@ -137,7 +137,7 @@ class SF2MNGM(nn.Module):
         # )
         self.func_v = BayesianDrift(
             dims=self.dims, 
-            n_ens=1, 
+            n_ens=25, 
             deepens=True, 
             time_invariant=True, 
             k_hidden=4, 
@@ -404,7 +404,7 @@ def main():
     plt.tight_layout()
     plt.savefig("training_loss_history.png")
     plt.show()
-    
+
     if W_v.ndim == 3:
         W_v = W_v.mean(axis=0)
     A_true = to_numpy(model.true_matrix)
