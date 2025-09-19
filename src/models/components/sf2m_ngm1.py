@@ -381,6 +381,10 @@ class SF2MNGM(nn.Module):
                             avg_ode, avg_sde = None, None
 
                         results.append({"Time": time, "Avg ODE": avg_ode, "Avg SDE": avg_sde})
+                        print(f"  Time {time}: Avg ODE W={avg_ode}, Avg SDE W={avg_sde}")
+                        sys.stdout.flush()
+                    df_results = pd.DataFrame(results)
+                    df_results.to_csv(f"traj_inference_step_{i}.csv", index=False)
 
             # Backprop and update
             L.backward()
