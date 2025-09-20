@@ -181,7 +181,7 @@ class HyperMLP(nn.Module):
         self.net = nn.Sequential()
         for i in range(len(full_dims) - 1):
             if i > 0:
-                self.net.append(nn.ELU())
+                self.net.append(nn.GELU()) 
             self.net.append(nn.Linear(full_dims[i], full_dims[i + 1]))
 
     def forward(self, x):
