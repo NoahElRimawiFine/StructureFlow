@@ -435,104 +435,104 @@ class SF2MNGM(nn.Module):
         return out.squeeze(1)
 
 
-def main():
-    print("ENTERED main()", file=sys.stderr)
-    sys.stderr.flush()
-    time.sleep(2)
+# def main():
+#     print("ENTERED main()", file=sys.stderr)
+#     sys.stderr.flush()
+#     time.sleep(2)
 
-    model = SF2MNGM(
-        datamodule=TrajectoryStructureDataModule(data_path="data/", dataset="dyn-LI", dataset_type="Synthetic"),
-        T=5,
-        sigma=1.0,
-        dt=0.2,
-        batch_size=164,
-        alpha=0.1,
-        reg=0,
-        correction_reg_strength=1e-3,
-        n_steps=5000,
-        lr=1e-4,
-        device=None  # Auto-detect
-    )
+#     model = SF2MNGM(
+#         datamodule=TrajectoryStructureDataModule(data_path="data/", dataset="dyn-LI", dataset_type="Synthetic"),
+#         T=5,
+#         sigma=1.0,
+#         dt=0.2,
+#         batch_size=164,
+#         alpha=0.1,
+#         reg=0,
+#         correction_reg_strength=1e-3,
+#         n_steps=5000,
+#         lr=1e-4,
+#         device=None  # Auto-detect
+#     )
 
-    model.train_model(skip_time=None)
-    n=8
+#     model.train_model(skip_time=None)
+#     n=8
 
-    def maskdiag(A):
-        return A * (1 - np.eye(n))
+#     def maskdiag(A):
+#         return A * (1 - np.eye(n))
 
-    import matplotlib.pyplot as plt
+#     import matplotlib.pyplot as plt
 
-    # with torch.no_grad():
-    #     A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=1 / T, device=torch.device("cpu"))
+#     # with torch.no_grad():
+#     #     A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=1 / T, device=torch.device("cpu"))
 
-    def to_numpy(x):
-        if isinstance(x, torch.Tensor):
-            return x.detach().cpu().numpy()
-        return np.asarray(x)
+#     def to_numpy(x):
+#         if isinstance(x, torch.Tensor):
+#             return x.detach().cpu().numpy()
+#         return np.asarray(x)
 
-    def maskdiag_np(A):
-        A = to_numpy(A)
-        n = A.shape[0]
-        return A * (1 - np.eye(n, dtype=A.dtype))
+#     def maskdiag_np(A):
+#         A = to_numpy(A)
+#         n = A.shape[0]
+#         return A * (1 - np.eye(n, dtype=A.dtype))
 
-    # plot loss history
-    plt.figure(figsize=(8, 5))
-    plt.plot(model.loss_history, label="Total Loss")
-    plt.plot(model.score_loss_history, label="Score Loss")
-    plt.plot(model.flow_loss_history, label="Flow Loss")
-    plt.yscale("log")
-    plt.xlabel("Training Step")
-    plt.ylabel("Loss")
-    plt.title("Training Loss History")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("training_loss_history.png")
-    plt.show()
+#     # plot loss history
+#     plt.figure(figsize=(8, 5))
+#     plt.plot(model.loss_history, label="Total Loss")
+#     plt.plot(model.score_loss_history, label="Score Loss")
+#     plt.plot(model.flow_loss_history, label="Flow Loss")
+#     plt.yscale("log")
+#     plt.xlabel("Training Step")
+#     plt.ylabel("Loss")
+#     plt.title("Training Loss History")
+#     plt.legend()
+#     plt.grid(True)
+#     plt.tight_layout()
+#     plt.savefig("training_loss_history.png")
+#     plt.show()
 
-    W_v = model.func_v.get_structure()
+#     W_v = model.func_v.get_structure()
 
-    if W_v.ndim == 3:
-        W_v = W_v[0]
-    A_true = to_numpy(model.true_matrix)
+#     if W_v.ndim == 3:
+#         W_v = W_v[0]
+#     A_true = to_numpy(model.true_matrix)
 
-    np.savetxt("A_estim_mlpoef.txt", maskdiag_np(W_v), fmt="%.6f")
+#     np.savetxt("A_estim_mlpoef.txt", maskdiag_np(W_v), fmt="%.6f")
 
-    # Display both the estimated adjacency matrix and the learned causal graph
-    plt.figure(figsize=(15, 5))
-    plt.subplot(1, 3, 2)
-    plt.imshow(maskdiag_np(W_v.T), cmap="Reds")
-    plt.gca().invert_yaxis()
-    plt.title("Causal Graph (from MLPODEF)")
-    plt.colorbar()
-    plt.subplot(1, 3, 3)
-    plt.imshow(maskdiag(A_true), vmin=-1, vmax=1, cmap="RdBu_r")
-    plt.gca().invert_yaxis()
-    plt.title("A_true")
-    plt.colorbar()
-    plt.tight_layout()
-    plt.savefig("causal_graph_mlpodef.png")
-    plt.show()
+#     # Display both the estimated adjacency matrix and the learned causal graph
+#     plt.figure(figsize=(15, 5))
+#     plt.subplot(1, 3, 2)
+#     plt.imshow(maskdiag_np(W_v.T), cmap="Reds")
+#     plt.gca().invert_yaxis()
+#     plt.title("Causal Graph (from MLPODEF)")
+#     plt.colorbar()
+#     plt.subplot(1, 3, 3)
+#     plt.imshow(maskdiag(A_true), vmin=-1, vmax=1, cmap="RdBu_r")
+#     plt.gca().invert_yaxis()
+#     plt.title("A_true")
+#     plt.colorbar()
+#     plt.tight_layout()
+#     plt.savefig("causal_graph_mlpodef.png")
+#     plt.show()
 
-    from sklearn.metrics import precision_recall_curve, average_precision_score
-    plt.figure(figsize=(12, 5))
-    y_true = np.abs(np.sign(maskdiag(A_true)).astype(int).flatten())
-    # For MLPODEF-based estimation
-    plt.subplot(1, 2, 2)
-    y_pred_mlp = np.abs(maskdiag_np(W_v).flatten())
-    prec, rec, thresh = precision_recall_curve(y_true, y_pred_mlp)
-    avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
-    plt.plot(rec, prec, label=f"MLPODEF-based (AP = {avg_prec_mlp:.2f})")
-    plt.xlabel("Recall")
-    plt.ylabel("Precision")
-    plt.title(
-        f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp/np.mean(np.abs(A_true) > 0)}"
-    )
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("pr_curve_mlpoef.png")
-    plt.show()
+#     from sklearn.metrics import precision_recall_curve, average_precision_score
+#     plt.figure(figsize=(12, 5))
+#     y_true = np.abs(np.sign(maskdiag(A_true)).astype(int).flatten())
+#     # For MLPODEF-based estimation
+#     plt.subplot(1, 2, 2)
+#     y_pred_mlp = np.abs(maskdiag_np(W_v).flatten())
+#     prec, rec, thresh = precision_recall_curve(y_true, y_pred_mlp)
+#     avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
+#     plt.plot(rec, prec, label=f"MLPODEF-based (AP = {avg_prec_mlp:.2f})")
+#     plt.xlabel("Recall")
+#     plt.ylabel("Precision")
+#     plt.title(
+#         f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp/np.mean(np.abs(A_true) > 0)}"
+#     )
+#     plt.legend()
+#     plt.grid(True)
+#     plt.tight_layout()
+#     plt.savefig("pr_curve_mlpoef.png")
+#     plt.show()
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
