@@ -16,6 +16,7 @@ class GraphLayer(Module):
         n_graphs: int,
         n_var: int,
         n_embed: int,
+        w_init_std: float = 1e-2,
         alpha: float = 1.0,
         device=None,
         dtype=None,
@@ -26,6 +27,7 @@ class GraphLayer(Module):
         self.n_var = n_var
         self.n_embed = n_embed
         self.alpha = alpha
+        self.w_init_std = w_init_std
         self.t = 1
         # define network weights
         self.w = Parameter(
@@ -36,11 +38,14 @@ class GraphLayer(Module):
         )
         self.reset_parameters()
 
+    # def reset_parameters(self): # this was oginally here
+    #     # this initialization plays a role in how fast the graphs get thresholded. 
+    #     # Smaller std means slower thresholding.
+    #     torch.nn.init.kaiming_uniform_(self.w, a=math.sqrt(5)) # these were originally 5
+    #     torch.nn.init.kaiming_uniform_(self.v, a=math.sqrt(5))
     def reset_parameters(self):
-        # this initialization plays a role in how fast the graphs get thresholded. 
-        # Smaller std means slower thresholding.
-        torch.nn.init.kaiming_uniform_(self.w, a=math.sqrt(10)) # these were originally 5
-        torch.nn.init.kaiming_uniform_(self.v, a=math.sqrt(10))
+        torch.nn.init.normal_(self.w, mean=0, std=self.w_init_std)  
+        torch.nn.init.normal_(self.v, mean=0, std=self.w_init_std)
 
     def forward(self, eval_n_graphs=None):
         Z = torch.matmul(self.w, self.v.transpose(-2, -1))

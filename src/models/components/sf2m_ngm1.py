@@ -135,18 +135,18 @@ class SF2MNGM(nn.Module):
             self.knockout_masks.append(mask_i)
 
         self.dims = [self.n_genes, knockout_hidden, 1]
-        self.func_v = MLPODEFKO(
-            dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
-        ).to(self.device)
-        # self.func_v = BayesianDrift(
-        #     dims=self.dims, 
-        #     n_ens=1, 
-        #     deepens=True, 
-        #     time_invariant=True, 
-        #     k_hidden=dyn_hidden,
-        #     alpha=self.dyn_alpha,
-        #     hyper="mlp",
+        # self.func_v = MLPODEFKO(
+        #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
         # ).to(self.device)
+        self.func_v = BayesianDrift(
+            dims=self.dims, 
+            n_ens=1, 
+            deepens=True, 
+            time_invariant=True, 
+            k_hidden=dyn_hidden,
+            alpha=self.dyn_alpha,
+            hyper="mlp",
+        ).to(self.device)
 
         self.score_net = CONDMLP(
             d=self.n_genes,
