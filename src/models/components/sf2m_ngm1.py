@@ -48,6 +48,8 @@ class SF2MNGM(nn.Module):
         dt=0.1,
         batch_size=64,
         alpha=0.5,
+        dyn_alpha=0.1,
+        dyn_hidden=4,
         reg=1e-5,
         correction_reg_strength=1e-3,
         n_steps=2000,
@@ -95,6 +97,8 @@ class SF2MNGM(nn.Module):
         self.correction_reg_strength = correction_reg_strength
         self.n_steps = n_steps
         self.lr = lr
+        self.dyn_alpha = dyn_alpha
+        self.dyn_hidden = dyn_hidden
 
         # -----------------------
         # 1. Load the data
@@ -150,8 +154,8 @@ class SF2MNGM(nn.Module):
             n_ens=1, 
             deepens=True, 
             time_invariant=True, 
-            k_hidden=4,
-            alpha=0.001,
+            k_hidden=dyn_hidden,
+            alpha=self.dyn_alpha,
             hyper="mlp",
         ).to(self.device)
 

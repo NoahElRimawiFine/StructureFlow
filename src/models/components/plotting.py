@@ -7,7 +7,7 @@ import pandas as pd
 import scprep
 import seaborn as sb
 import torch
-from sklearn.metrics import average_precision_score, precision_recall_curve
+from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score
 
 
 def plot_scatter(obs, model, title="fig", wandb_logger=None):
@@ -560,31 +560,60 @@ def log_causal_graph_matrices(A_estim=None, W_v=None, A_true=None, logger=None, 
 
     fig.tight_layout()
 
+    y_true = np.abs(np.sign(maskdiag_np(A_true)).astype(int).flatten())
+    if A_estim is not None:
+        y_pred = np.abs(maskdiag_np(A_estim).flatten())
+        avg_prec = average_precision_score(y_true, y_pred)
+        print(f"A_estim AUPR: {avg_prec:.4f}")
+    if W_v is not None:
+        y_pred_mlp = np.abs(maskdiag_np(W_v.T).flatten())
+        avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
+        auroc_mlp = roc_auc_score(y_true, y_pred_mlp)
+        aupr_ratio_mlp = avg_prec_mlp / np.mean(np.abs(maskdiag_np(A_true)) > 0)
+        print(f"MLPODEF AUPR: {avg_prec_mlp:.4f}")
+        print(f"MLPODEF AUPR ratio: {avg_prec_mlp / np.mean(np.abs(maskdiag_np(A_true)) > 0):.4f}")
+        print(f"MLPODEF AUROC: {auroc_mlp:.4f}")
+
     # --- Logging ---
     logged = False
     if logger is not None and hasattr(logger, "experiment"):
         exp = logger.experiment
-        # W&B via Lightning's WandbLogger
-        if hasattr(exp, "log"):  # wandb.run
+        if hasattr(exp, "log"):  
             try:
                 import wandb
-                exp.log({f"{prefix}Causal_Graph_Matrices": wandb.Image(fig),
-                         "trainer/step": global_step}, step=global_step)
+                payload = {
+                    f"{prefix}Causal_Graph_Matrices": wandb.Image(fig),
+                    f"{prefix}MLP/AP": avg_prec_mlp,
+                    f"{prefix}MLP/AP_ratio": aupr_ratio_mlp,
+                    f"{prefix}MLP/AUROC": auroc_mlp,
+                    "trainer/step": global_step,
+                }
+                exp.log(payload, step=global_step)
                 logged = True
             except Exception:
                 pass
         # TensorBoard
         if not logged and hasattr(exp, "add_figure"):
             exp.add_figure(f"{prefix}Causal_Graph_Matrices", fig, global_step=global_step)
+            try:
+                exp.add_scalar(f"{prefix}MLP/AUPR", avg_prec_mlp, global_step)
+                exp.add_scalar(f"{prefix}MLP/AUPR_ratio", aupr_ratio_mlp, global_step)
+                exp.add_scalar(f"{prefix}MLP/AUROC", auroc_mlp, global_step)
+            except Exception:
+                pass
             logged = True
 
-    # Direct W&B (no Lightning logger passed)
     if not logged:
         try:
             import wandb
             if wandb.run is not None:
-                wandb.log({f"{prefix}Causal_Graph_Matrices": wandb.Image(fig),
-                           "trainer/step": global_step}, step=global_step)
+                wandb.log({
+                    f"{prefix}Causal_Graph_Matrices": wandb.Image(fig),
+                    f"{prefix}MLP/AUPR": avg_prec_mlp,
+                    f"{prefix}MLP/AUPR_ratio": aupr_ratio_mlp,
+                    f"{prefix}MLP/AUROC": auroc_mlp,
+                    "trainer/step": global_step,
+                }, step=global_step)
                 logged = True
         except Exception:
             pass
