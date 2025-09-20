@@ -16,7 +16,7 @@ class GraphLayer(Module):
         n_graphs: int,
         n_var: int,
         n_embed: int,
-        w_init_std: float = 1e-2,
+        w_init_std: float = 1e-3,
         alpha: float = 1.0,
         device=None,
         dtype=None,
