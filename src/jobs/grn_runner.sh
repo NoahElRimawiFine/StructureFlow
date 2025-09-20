@@ -6,10 +6,10 @@
 set -euo pipefail
 
 # ─── Edit just this array to add/remove datasets ─────────────────
-datasets=(HSC)
+datasets=(dyn-TF dyn-CY dyn-BF dyn-LL dyn-SW)
 seeds=(1 2 3 4 5)
 
-ROOT="../../data/Curated"        # common parent
+ROOT="../../data/Synthetic"        # common parent
 SCRIPT="run_less_simple.py"        # python entry-point
 PYTHON="python3"
 T=5                                # pseudo-time bins

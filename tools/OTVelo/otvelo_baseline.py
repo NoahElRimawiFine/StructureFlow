@@ -60,7 +60,7 @@ random.seed(seed)
 sklearn.utils.check_random_state(seed)
 
 
-if args.backbone not in ["dyn-BF", "dyn-TF", "dyn-SW", "dyn-CY", "dyn-LL"]: 
+if args.backbone not in ["dyn-BF", "dyn-TF", "dyn-SW", "dyn-CY", "dyn-LL"]:
     ROOT_SYN = Path(__file__).resolve().parents[2] / "data" / "Curated"
 else:
     ROOT_SYN = Path(__file__).resolve().parents[2] / "data" / "Synthetic"
@@ -583,6 +583,26 @@ def main():
     Ts_prior, _ = solve_prior(counts, counts,
                           Nt, labels,
                           eps_samp=1e-2, alpha=0.5)
+    
+    group_labels = [str(i) for i in range(Nt)]
+    
+    counts_pca, pca = visualize_pca(counts, labels, group_labels, viz_opt="pca")
+
+    folds = []
+    for held_out_t in range(1, Nt-1):          # 0 & Nt not held out
+        print(f"\n===== OTVelo – hold-out t={held_out_t} =====")
+
+        w2, mmd = otvelo_loto_one_fold(counts_all,
+                            held_out_t,
+                            eps=1e-2, alpha=0.5,
+                            pca=pca)
+        folds.append({"t": held_out_t, "w2": w2, "mmd2": mmd})
+        print(f"t={held_out_t}:  W₂={w2:.4f}   MMD²={mmd:.4e}")
+
+    df = pd.DataFrame(folds)
+    print("\nMean W₂  :", df.w2.mean())
+    print("Mean MMD²:", df.mmd2.mean())
+
 
     vel_all, vel_all_signed = solve_velocities(counts_all, Ts_prior,
                                             order=1, stimulation=False)
