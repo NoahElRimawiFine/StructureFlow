@@ -151,7 +151,7 @@ class SF2MNGM(nn.Module):
             deepens=True, 
             time_invariant=True, 
             k_hidden=4,
-            alpha=0.2,
+            alpha=0.001,
             hyper="mlp",
         ).to(self.device)
 
