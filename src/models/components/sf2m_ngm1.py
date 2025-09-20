@@ -245,8 +245,8 @@ class SF2MNGM(nn.Module):
 
         for i in tqdm(range(self.n_steps)):
             # Randomly pick which dataset to train on
-            ds_idx = np.random.randint(0, len(self.adatas))
-            # ds_idx = 0  # For debugging with single dataset
+            # ds_idx = np.random.randint(0, len(self.adatas))
+            ds_idx = 0  # For debugging with single dataset
             model = self.otfms[ds_idx]
             cond_vector = self.conditionals[ds_idx].to(self.device)
 
@@ -275,15 +275,9 @@ class SF2MNGM(nn.Module):
             s_fit = func_s(_t, _x, cond_expanded).squeeze(1)
 
             # Flow net output, with or without correction
-            if i <= 500:
-                # Warmup phase
-                v_fit = func_v(t_input, v_input).squeeze(1) - (
-                    model.sigma**2 / 2
-                ) * func_s(_t, _x, cond_expanded)
-            else:
-                # Full training phase with correction
-                v_fit = func_v(t_input, v_input).squeeze(1)
-                v_fit = v_fit - (model.sigma**2 / 2) * func_s(_t, _x, cond_expanded)
+            v_fit = func_v(t_input, v_input).squeeze(1) - (
+                model.sigma**2 / 2
+            ) * func_s(_t, _x, cond_expanded)
 
             # Losses
             L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
@@ -293,16 +287,8 @@ class SF2MNGM(nn.Module):
             if i < 100:
                 # Train only score initially
                 L = self.alpha * L_score
-            elif i <= 500:
-                # Mix score + flow + small reg
-                L = self.alpha * L_score + (1 - self.alpha) * L_flow + self.reg * L_reg
             else:
-                # Full combined loss with correction reg
-                L = (
-                    self.alpha * L_score
-                    + (1 - self.alpha) * L_flow
-                    + self.reg * L_reg
-                )
+                L = self.alpha * L_score + (1 - self.alpha) * L_flow + self.reg * L_reg
 
             # Bookkeeping
             self.loss_history.append(L.item())
@@ -458,8 +444,8 @@ def main():
         alpha=0.1,
         reg=0,
         correction_reg_strength=1e-3,
-        n_steps=15000,
-        lr=3e-3,
+        n_steps=5000,
+        lr=1e-4,
         device=None  # Auto-detect
     )
 
@@ -510,7 +496,7 @@ def main():
     # Display both the estimated adjacency matrix and the learned causal graph
     plt.figure(figsize=(15, 5))
     plt.subplot(1, 3, 2)
-    plt.imshow(maskdiag_np(W_v).T, cmap="Reds")
+    plt.imshow(maskdiag_np(W_v.T), cmap="Reds")
     plt.gca().invert_yaxis()
     plt.title("Causal Graph (from MLPODEF)")
     plt.colorbar()
