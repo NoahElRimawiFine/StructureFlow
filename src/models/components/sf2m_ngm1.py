@@ -121,10 +121,6 @@ class SF2MNGM(nn.Module):
         wandb.define_metric("loss/*", step_metric="trainer/step")
         wandb.define_metric("grn/*",  step_metric="trainer/step")
 
-        # -----------------------
-        # 2. Build conditionals
-        # -----------------------
-        # For each dataset, build a one-hot vector that indicates which knockout it belongs to
         self.conditionals = []
         for i, ko_name in enumerate(self.kos):
             cond_matrix = torch.zeros(self.batch_size, self.n_genes)
@@ -132,19 +128,12 @@ class SF2MNGM(nn.Module):
                 cond_matrix[:, self.ko_indices[i]] = 1
             self.conditionals.append(cond_matrix)
 
-        # -----------------------
-        # 3. Build knockout masks
-        # -----------------------
         self.knockout_masks = []
         for i, adata in enumerate(self.adatas):
             d = adata.X.shape[1]
             mask_i = self.build_knockout_mask(d, self.ko_indices[i])
             self.knockout_masks.append(mask_i)
 
-        # -----------------------
-        # 4. Create the models
-        # -----------------------
-        # Dimensions for MLPODEFKO
         self.dims = [self.n_genes, knockout_hidden, 1]
         # self.func_v = MLPODEFKO(
         #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
@@ -171,21 +160,14 @@ class SF2MNGM(nn.Module):
             d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True
         ).to(self.device)
 
-        # -----------------------
-        # 5. Build OTFMs
-        # -----------------------
         self.otfms = self.build_entropic_otfms(
             self.adatas, T=self.T, sigma=self.sigma, dt=self.dt
         )
 
-        # Move models to device
         self.func_v.to(self.device)
         self.score_net.to(self.device)
         self.v_correction.to(self.device)
 
-        # -----------------------
-        # 6. Setup optimizer
-        # -----------------------
         self.optimizer = torch.optim.AdamW(
             list(self.func_v.parameters())
             + list(self.score_net.parameters())
@@ -200,9 +182,6 @@ class SF2MNGM(nn.Module):
         self.reg_loss_history = []
         self.reg_corr_loss_history = []
 
-    # -------------------------------------------------------------------------
-    # Supporting methods
-    # -------------------------------------------------------------------------
     def build_knockout_mask(self, d, ko_idx):
         """Build a [d, d] adjacency mask for a knockout of gene ko_idx.
 
@@ -236,9 +215,6 @@ class SF2MNGM(nn.Module):
             otfms.append(model)
         return otfms
 
-    # -------------------------------------------------------------------------
-    # Core training loop
-    # -------------------------------------------------------------------------
     def train_model(self, skip_time=None):
         """Combine flow matching + score matching with multiple datasets."""
         # Just a shorthand
@@ -305,7 +281,7 @@ class SF2MNGM(nn.Module):
                 "loss/train": float(L.item()),
                 "loss/score": float(L_score.item()),
                 "loss/flow": float(L_flow.item()),
-            }, step=i, commit=False)
+            }, step=i)
 
             if i % 100 == 0:
                 print(
@@ -317,11 +293,11 @@ class SF2MNGM(nn.Module):
 
             if i % 500 == 0:
                 with torch.no_grad():
-                    per_time = []  # list of dicts: {'Time': t, 'Avg ODE': float, 'Avg SDE': float}
+                    per_time = []  # list of {'Time': t, 'Avg ODE': float, 'Avg SDE': float}
 
                     for t_bin in range(1, self.T):
                         per_ds = []
-                        for ds_idx, adata in enumerate(self.adatas):  # avoid shadowing i
+                        for ds_idx, adata in enumerate(self.adatas):
                             x0 = torch.from_numpy(adata.X[adata.obs["t"] == t_bin - 1]).float()
                             true_dist = torch.from_numpy(adata.X[adata.obs["t"] == t_bin]).float()
 
@@ -338,24 +314,15 @@ class SF2MNGM(nn.Module):
 
                             traj_ode = simulate_trajectory(
                                 self.func_v, self.v_correction, self.score_net,
-                                x0,
-                                dataset_idx=None,
-                                start_time=t_bin - 1,
-                                end_time=t_bin,
+                                x0, dataset_idx=None, start_time=t_bin - 1, end_time=t_bin,
                                 n_times=min(len(x0), len(true_dist)),
-                                cond_vector=cond_vector,
-                                device=dev,
+                                cond_vector=cond_vector, device=dev,
                             )
                             traj_sde = simulate_trajectory(
                                 self.func_v, self.v_correction, self.score_net,
-                                x0,
-                                dataset_idx=None,
-                                start_time=t_bin - 1,
-                                end_time=t_bin,
+                                x0, dataset_idx=None, start_time=t_bin - 1, end_time=t_bin,
                                 n_times=min(len(x0), len(true_dist)),
-                                cond_vector=cond_vector,
-                                use_sde=True,
-                                device=dev,
+                                cond_vector=cond_vector, use_sde=True, device=dev,
                             )
 
                             pred_ode = traj_ode[-1].detach().cpu()
@@ -382,11 +349,10 @@ class SF2MNGM(nn.Module):
                         t_bin = row["Time"]
                         step_rows.append({"Step": i, "Time": t_bin, "Kind": "ODE", "Value": row["Avg ODE"]})
                         step_rows.append({"Step": i, "Time": t_bin, "Kind": "SDE", "Value": row["Avg SDE"]})
-
                     df_step = pd.DataFrame(step_rows)
-
                     write_header = not LOG_CSV.exists()
                     df_step.to_csv(LOG_CSV, mode="a", header=write_header, index=False)
+
                     if wandb.run is not None:
                         log = {"trainer/step": i}
                         ode_vals, sde_vals = [], []
@@ -408,19 +374,29 @@ class SF2MNGM(nn.Module):
                         if sde_vals:
                             log["traj/SDE/mean"] = float(np.mean(sde_vals))
 
-                        wandb.log(log, step=i, commit=False)
+                        wandb.log(log, step=i, commit=False)  # CHANGE: staged log
+
+                        # KEEP (graph logging)
                         W_v = self.func_v.get_structure()
                         if W_v.ndim == 3:
                             W_v = W_v[0]
                         A_true = self.true_matrix
-
                         log_causal_graph_matrices(None, W_v, A_true, logger=None, global_step=i)
 
-            # Backprop and update
+                        # NEW: ensure one final commit after the staged logs
+                        wandb.log({}, step=i, commit=True)     # NEW
+
             L.backward()
             optim.step()
 
         print("Training complete.")
+
+        if wandb.run is not None:
+            try:
+                last_ode_mean = float(np.nanmean([r["Avg ODE"] for r in per_time]))
+            except Exception:
+                last_ode_mean = float(np.nan)
+            wandb.run.summary["traj/ODE/mean"] = last_ode_mean
 
     def forward(self, t, x):
         """
