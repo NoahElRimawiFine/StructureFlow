@@ -136,7 +136,7 @@ class SF2MNGM(nn.Module):
             mask_i = self.build_knockout_mask(d, self.ko_indices[i])
             self.knockout_masks.append(mask_i)
 
-        self.dims = [self.n_genes, 64, 64, 64, 1]
+        self.dims = [self.n_genes, 100, 100, 100, 1]
         # self.func_v = MLPODEFKO(
         #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
         # ).to(self.device)
@@ -266,8 +266,7 @@ class SF2MNGM(nn.Module):
             # Losses
             L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
             L_flow = torch.mean((v_fit * model.dt - _u) ** 2)
-            L_reg = func_v.l2_reg() + func_v.l1_reg()
-
+            L_reg = 0 if self.reg == 0 else func_v.l2_reg() + func_v.l1_reg()
             if i < 100:
                 L = self.alpha * L_score
             else:
@@ -426,7 +425,7 @@ def main():
         batch_size=164,
         alpha=0.1,
         dyn_alpha=0.01,
-        dyn_hidden=8,
+        dyn_hidden=2,
         reg=0,
         correction_reg_strength=1e-3,
         n_steps=12000,
