@@ -41,14 +41,14 @@ class GraphLayer(Module):
         )
         self.reset_parameters()
 
-    # def reset_parameters(self): # this was oginally here
-    #     # this initialization plays a role in how fast the graphs get thresholded. 
-    #     # Smaller std means slower thresholding.
-    #     torch.nn.init.kaiming_uniform_(self.w, a=math.sqrt(5)) # these were originally 5
-    #     torch.nn.init.kaiming_uniform_(self.v, a=math.sqrt(5))
-    def reset_parameters(self):
-        torch.nn.init.normal_(self.w, mean=0, std=self.w_init_std)  
-        torch.nn.init.normal_(self.v, mean=0, std=self.w_init_std)
+    def reset_parameters(self): # this was oginally here
+        # this initialization plays a role in how fast the graphs get thresholded. 
+        # Smaller std means slower thresholding.
+        torch.nn.init.kaiming_uniform_(self.w, a=math.sqrt(5)) # these were originally 5
+        torch.nn.init.kaiming_uniform_(self.v, a=math.sqrt(5))
+    # def reset_parameters(self):
+    #     torch.nn.init.normal_(self.w, mean=0, std=self.w_init_std)  
+    #     torch.nn.init.normal_(self.v, mean=0, std=self.w_init_std)
 
     def forward(self, eval_n_graphs=None, step=0):
         Z = torch.matmul(self.w, self.v.transpose(-2, -1))
