@@ -25,6 +25,7 @@ class BayesianDrift(Intervenable):
         gamma=0,
         w_init_std=1e-2,
         deepens=None,
+        knockout_masks = None,
         hyper=None,
         bias=True,
         time_invariant=True,
@@ -41,16 +42,22 @@ class BayesianDrift(Intervenable):
         self.gamma = gamma
         self.deepens = deepens
         self.current_epoch = 0
+        self.knockout_masks = knockout_masks
+        if knockout_masks is not None:
+            assert len(knockout_masks) == n_ens, "Number of knockout masks must match number of ensembles"
+            self.knockout_masks = [
+                m if isinstance(m, torch.Tensor) else torch.tensor(m, dtype=torch.float32)
+                for m in knockout_masks
+            ]
+            for k, M in enumerate(self.knockout_masks):
+                self.register_buffer(f"KO_mask_{k}", M)
+        
         if not time_invariant:
             dims[0] += 1
 
-        # if ~self.deepens and self.gamma == 0:
-        #     self.graphs = GraphLayerVI(n_ens, dims[0], k_hidden, alpha)
-        # elif ~self.deepens and self.gamma != 0:
-        #     self.graphs = GraphLayerSVGD(n_ens, dims[0], k_hidden, alpha, gamma, w_init_std)
-        # else:
-        print("Using GraphLayer parameterization")
+
         self.graphs = GraphLayer(n_ens, dims[0], k_hidden, alpha)
+
 
         if hyper != "linear":
             layers = []
@@ -66,6 +73,11 @@ class BayesianDrift(Intervenable):
                     )
                 )
             self.fc2 = nn.ModuleList(layers)
+
+    def get_mask(self, dataset_idx):
+        if self.knockout_masks is None or dataset_idx is None:
+            return None
+        return getattr(self, f"KO_mask_{dataset_idx}")
 
     def phi(self):
         """Implements an SVGD penalty on the ensembled set of graph parameter tuples.
@@ -85,10 +97,19 @@ class BayesianDrift(Intervenable):
             negative_phi = weighted_negative_score + grad_Ks[i]
             param.grad = negative_phi
 
-    def forward(self, t, x):  # [n, 1, d] -> [n, 1, d]
+    def forward(self, t, x, dataset_idx=None):  # [n, 1, d] -> [n, 1, d]
         if not self.time_invariant:
             x = torch.cat((x, t), dim=-1)
+
         G = self.graphs()
+        print(G.shape, x.shape)
+        M = self.get_mask(dataset_idx)
+        if M is not None:
+            print(M.shape)
+            print(M)
+            breakpoint()
+            G = G * M.unsqueeze(1) # Apply knockout mask
+
         Gt = G.transpose(-2, -1).unsqueeze(1)
         x = Gt * x
         x = x.unsqueeze(dim=3)  # [n_ens, batch, d, t, d]
