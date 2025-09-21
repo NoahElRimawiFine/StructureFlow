@@ -18,6 +18,7 @@ class GraphLayer(Module):
         n_embed: int,
         w_init_std: float = 1e-4,
         alpha: float = 1.0,
+        warmup_steps: int = 1000,
         device=None,
         dtype=None,
     ) -> None:
@@ -28,6 +29,7 @@ class GraphLayer(Module):
         self.n_embed = n_embed
         self.alpha = alpha
         self.w_init_std = w_init_std
+        self.warmup_steps = warmup_steps
         self.t = 1
         # define network weights
         self.w = Parameter(
@@ -47,10 +49,11 @@ class GraphLayer(Module):
         torch.nn.init.normal_(self.w, mean=0, std=self.w_init_std)  
         torch.nn.init.normal_(self.v, mean=0, std=self.w_init_std)
 
-    def forward(self, eval_n_graphs=None):
+    def forward(self, eval_n_graphs=None, step=None):
         Z = torch.matmul(self.w, self.v.transpose(-2, -1))
         self.alpha_t = self.t * self.alpha
-        self.t += 1
+        if step > self.warmup_steps:
+            self.t += 1
         G = torch.sigmoid(self.alpha_t * Z)
         return G
 

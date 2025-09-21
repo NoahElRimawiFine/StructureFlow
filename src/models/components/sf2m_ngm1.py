@@ -148,6 +148,7 @@ class SF2MNGM(nn.Module):
             k_hidden=dyn_hidden,
             alpha=self.dyn_alpha,
             knockout_masks=self.knockout_masks,
+            step=100,
             hyper="mlp",
         ).to(self.device)
 
@@ -260,7 +261,7 @@ class SF2MNGM(nn.Module):
             s_fit = func_s(_t, _x, cond_expanded).squeeze(1)
 
             # Flow net output, with or without correction
-            v_fit = func_v(t_input, v_input, ds_idx).squeeze(1) - (
+            v_fit = func_v(t_input, v_input, ds_idx, i).squeeze(1) - (
                 model.sigma**2 / 2
             ) * func_s(_t, _x, cond_expanded)
 

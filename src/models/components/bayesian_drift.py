@@ -26,6 +26,7 @@ class BayesianDrift(Intervenable):
         w_init_std=1e-2,
         deepens=None,
         knockout_masks = None,
+        step=None,
         hyper=None,
         bias=True,
         time_invariant=True,
@@ -42,6 +43,7 @@ class BayesianDrift(Intervenable):
         self.gamma = gamma
         self.deepens = deepens
         self.current_epoch = 0
+        self.step = 0
         self.knockout_masks = knockout_masks
         if knockout_masks is not None:
             self.knockout_masks = [
@@ -55,9 +57,7 @@ class BayesianDrift(Intervenable):
         if not time_invariant:
             dims[0] += 1
 
-
-        self.graphs = GraphLayer(n_ens, dims[0], k_hidden, alpha)
-
+        self.graphs = GraphLayer(n_ens, dims[0], k_hidden, alpha, warmup_steps=step)
 
         if hyper != "linear":
             layers = []
@@ -97,11 +97,11 @@ class BayesianDrift(Intervenable):
             negative_phi = weighted_negative_score + grad_Ks[i]
             param.grad = negative_phi
 
-    def forward(self, t, x, dataset_idx=None):  # [n, 1, d] -> [n, 1, d]
+    def forward(self, t, x, dataset_idx=None, step=0):  # [n, 1, d] -> [n, 1, d]
         if not self.time_invariant:
             x = torch.cat((x, t), dim=-1)
 
-        G = self.graphs()
+        G = self.graphs(step=step)
         M = self.get_mask(dataset_idx)
         if M is not None:
             G = G * M.unsqueeze(0) # Apply knockout mask
