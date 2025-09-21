@@ -136,13 +136,13 @@ class SF2MNGM(nn.Module):
             mask_i = self.build_knockout_mask(d, self.ko_indices[i])
             self.knockout_masks.append(mask_i)
 
-        self.dims = [self.n_genes, 100, 100, 1]
+        self.dims = [self.n_genes, 64, 64, 64, 1]
         # self.func_v = MLPODEFKO(
         #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
         # ).to(self.device)
         self.func_v = BayesianDrift(
             dims=self.dims, 
-            n_ens=25, 
+            n_ens=100, 
             deepens=True, 
             time_invariant=True, 
             k_hidden=dyn_hidden,
@@ -425,10 +425,11 @@ def main():
         dt=0.2,
         batch_size=164,
         alpha=0.1,
-        dyn_alpha=0.05,
+        dyn_alpha=0.01,
+        dyn_hidden=6,
         reg=0,
         correction_reg_strength=1e-3,
-        n_steps=15000,
+        n_steps=6000,
         lr=1e-4,
         device=None  # Auto-detect
     )
