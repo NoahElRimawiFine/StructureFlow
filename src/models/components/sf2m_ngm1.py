@@ -276,7 +276,7 @@ class SF2MNGM(nn.Module):
             self.loss_history.append(L.item())
             self.score_loss_history.append(L_score.item())
             self.flow_loss_history.append(L_flow.item())
-            self.reg_loss_history.append(L_reg.item())
+            self.reg_loss_history.append(L_reg.item() if isinstance(L_reg, torch.Tensor) else 0.0)
             wandb.log({
                 "trainer/step": i,
                 "loss/train": float(L.item()),
