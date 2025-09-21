@@ -54,7 +54,7 @@ class GraphLayer(Module):
         Z = torch.matmul(self.w, self.v.transpose(-2, -1))
         if self.ens_mean:
             Z = Z.mean(axis=0, keepdim=True)
-        Z = Z.unsqueeze(0)
+            Z = Z.unsqueeze(0)
         self.alpha_t = self.t * self.alpha
         if step > self.warmup_steps:
             self.t += 1
