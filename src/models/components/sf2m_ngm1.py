@@ -134,6 +134,8 @@ class SF2MNGM(nn.Module):
             mask_i = self.build_knockout_mask(d, self.ko_indices[i])
             self.knockout_masks.append(mask_i)
 
+        self.adatas = self.adatas[0] # just use wt for now
+
         self.dims = [self.n_genes, 64, 64, 64, 1]
         # self.func_v = MLPODEFKO(
         #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
@@ -227,8 +229,8 @@ class SF2MNGM(nn.Module):
 
         for i in tqdm(range(self.n_steps)):
             # Randomly pick which dataset to train on
-            ds_idx = np.random.randint(0, len(self.adatas))
-            #ds_idx = 0  # For debugging with single dataset
+            # ds_idx = np.random.randint(0, len(self.adatas))
+            ds_idx = 0  # For debugging with single dataset
             model = self.otfms[ds_idx]
             cond_vector = self.conditionals[ds_idx].to(self.device)
 
@@ -427,7 +429,7 @@ def main():
         dyn_alpha=0.005,
         reg=0,
         correction_reg_strength=1e-3,
-        n_steps=10000,
+        n_steps=5000,
         lr=1e-4,
         device=None  # Auto-detect
     )
