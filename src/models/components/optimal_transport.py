@@ -28,7 +28,7 @@ class BridgeMatcher:
         vars = (sigma**2) * ts * (1 - ts)
         x = means + torch.sqrt(vars.clamp_min(1e-8)) * torch.randn_like(x0)
         s = (-1 / vars.clamp_min(1e-8)) * (x - means)
-        u = (1 - 2 * ts) / ((2 * ts * (1 - ts) + 1e-8) / dt) * ((x - means) / dt)  + x1 - x0
+        u = (1 - 2 * ts) / (2 * ts * (1 - ts) + 1e-8) * (x - means)  + x1 - x0
         return means, vars, x, s, u
 
 
