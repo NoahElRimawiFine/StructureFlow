@@ -49,7 +49,7 @@ class GraphLayer(Module):
         torch.nn.init.normal_(self.w, mean=0, std=self.w_init_std)  
         torch.nn.init.normal_(self.v, mean=0, std=self.w_init_std)
 
-    def forward(self, eval_n_graphs=None, step=None):
+    def forward(self, eval_n_graphs=None, step=0):
         Z = torch.matmul(self.w, self.v.transpose(-2, -1))
         self.alpha_t = self.t * self.alpha
         print(step)
