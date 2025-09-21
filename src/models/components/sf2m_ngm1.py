@@ -429,7 +429,7 @@ def main():
         dyn_hidden=6,
         reg=0,
         correction_reg_strength=1e-3,
-        n_steps=6000,
+        n_steps=10000,
         lr=1e-4,
         device=None  # Auto-detect
     )
