@@ -52,6 +52,7 @@ class GraphLayer(Module):
 
     def forward(self, eval_n_graphs=None, step=0):
         Z = torch.matmul(self.w, self.v.transpose(-2, -1))
+        print(Z.shape)
         if self.ens_mean:
             Z = Z.mean(axis=0, keepdim=True)
         Z = Z.unsqueeze(0)
