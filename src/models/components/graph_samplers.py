@@ -60,7 +60,7 @@ class GraphLayer(Module):
     #         self.t += 1
     #     G = torch.sigmoid(self.alpha_t * Z)
     #     return G
-    
+
     def forward(self, eval_n_graphs=None, step=0):
         # e.g., cosine or linear ramp after warmup
         if step <= self.warmup_steps:
@@ -69,7 +69,7 @@ class GraphLayer(Module):
             # anneal temperature (i.e., grow α_t) smoothly
             progress = (step - self.warmup_steps) / max(1, self.warmup_steps)
             tau = max(0.1, 1.0 - 0.9*progress)  # temperature ↓ → α_t ↑
-        Z = self.w @ self.v.transpose(-2, -1)
+        Z = torch.matmul(self.w, self.v.transpose(-2, -1))
         G = torch.sigmoid(Z / tau)
         return G
 
