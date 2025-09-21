@@ -248,30 +248,27 @@ class SF2MNGM(nn.Module):
 
             optim.zero_grad()
 
-            # Prepare inputs
             s_input = _x.unsqueeze(1)
             v_input = _x.unsqueeze(1)
             t_input = _t.unsqueeze(1)
             B = _x.shape[0]
 
-            # Expand conditional vectors to match batch size
             cond_expanded = cond_vector.repeat(B // cond_vector.shape[0] + 1, 1)[:B]
 
             # Score net output
             s_fit = func_s(_t, _x, cond_expanded).squeeze(1)
 
-            # Flow net output, with or without correction
+            # Flow net output
             v_fit = func_v(t_input, v_input, ds_idx, step=i).squeeze(1) - (
                 model.sigma**2 / 2
             ) * func_s(_t, _x, cond_expanded)
 
             # Losses
             L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
-            L_flow = torch.mean((v_fit * model.dt - _u) ** 2)
+            L_flow = torch.mean((v_fit - (_u / self.dt)) ** 2)
             L_reg = func_v.l2_reg() + func_v.l1_reg()
 
             if i < 100:
-                # Train only score initially
                 L = self.alpha * L_score
             else:
                 L = self.alpha * L_score + (1 - self.alpha) * L_flow + self.reg * L_reg
