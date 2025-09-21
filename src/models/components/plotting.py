@@ -548,7 +548,7 @@ def log_causal_graph_matrices(A_estim=None, W_v=None, A_true=None, logger=None, 
     fig.colorbar(im1, ax=axs[0])
 
     # --- W_v ---
-    im2 = axs[1].imshow(W_v_plot, cmap="Reds")
+    im2 = axs[1].imshow(W_v_plot, cmap="Reds", vimin=0, vmax=1)
     axs[1].invert_yaxis()
     axs[1].set_title("Causal Graph (from MLPODEF)")
     fig.colorbar(im2, ax=axs[1])
