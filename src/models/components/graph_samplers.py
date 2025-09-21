@@ -53,7 +53,6 @@ class GraphLayer(Module):
         Z = torch.matmul(self.w, self.v.transpose(-2, -1))
         self.alpha_t = self.t * self.alpha
         if step > self.warmup_steps:
-            print(step)
             self.t += 1
         G = torch.sigmoid(self.alpha_t * Z)
         return G
