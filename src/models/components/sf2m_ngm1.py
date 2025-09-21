@@ -261,7 +261,7 @@ class SF2MNGM(nn.Module):
             s_fit = func_s(_t, _x, cond_expanded).squeeze(1)
 
             # Flow net output, with or without correction
-            v_fit = func_v(t_input, v_input, ds_idx, i).squeeze(1) - (
+            v_fit = func_v(t_input, v_input, ds_idx, step=i).squeeze(1) - (
                 model.sigma**2 / 2
             ) * func_s(_t, _x, cond_expanded)
 

@@ -52,8 +52,8 @@ class GraphLayer(Module):
     def forward(self, eval_n_graphs=None, step=0):
         Z = torch.matmul(self.w, self.v.transpose(-2, -1))
         self.alpha_t = self.t * self.alpha
-        print(step)
         if step > self.warmup_steps:
+            print(step)
             self.t += 1
         G = torch.sigmoid(self.alpha_t * Z)
         return G
