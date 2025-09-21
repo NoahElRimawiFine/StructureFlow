@@ -148,7 +148,7 @@ class SF2MNGM(nn.Module):
             k_hidden=dyn_hidden,
             alpha=self.dyn_alpha,
             knockout_masks=self.knockout_masks,
-            step=100,
+            step=5000,
             hyper="mlp",
         ).to(self.device)
 
