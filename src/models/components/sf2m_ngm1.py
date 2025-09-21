@@ -227,8 +227,8 @@ class SF2MNGM(nn.Module):
 
         for i in tqdm(range(self.n_steps)):
             # Randomly pick which dataset to train on
-            # ds_idx = np.random.randint(0, len(self.adatas))
-            ds_idx = 0  # For debugging with single dataset
+            ds_idx = np.random.randint(0, len(self.adatas))
+            #ds_idx = 0  # For debugging with single dataset
             model = self.otfms[ds_idx]
             cond_vector = self.conditionals[ds_idx].to(self.device)
 

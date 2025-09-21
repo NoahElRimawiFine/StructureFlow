@@ -102,12 +102,9 @@ class BayesianDrift(Intervenable):
             x = torch.cat((x, t), dim=-1)
 
         G = self.graphs()
-        print(G.shape, x.shape)
         M = self.get_mask(dataset_idx)
         if M is not None:
             G = G * M.unsqueeze(0) # Apply knockout mask
-            print(G)
-            breakpoint()
 
         Gt = G.transpose(-2, -1).unsqueeze(1)
         x = Gt * x
