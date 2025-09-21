@@ -105,10 +105,9 @@ class BayesianDrift(Intervenable):
         print(G.shape, x.shape)
         M = self.get_mask(dataset_idx)
         if M is not None:
-            print(M.shape)
-            print(M)
+            G = G * M.unsqueeze(0) # Apply knockout mask
+            print(G)
             breakpoint()
-            G = G * M.unsqueeze(1) # Apply knockout mask
 
         Gt = G.transpose(-2, -1).unsqueeze(1)
         x = Gt * x
