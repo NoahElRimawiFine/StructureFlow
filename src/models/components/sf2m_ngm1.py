@@ -148,7 +148,7 @@ class SF2MNGM(nn.Module):
             k_hidden=dyn_hidden,
             alpha=self.dyn_alpha,
             knockout_masks=self.knockout_masks,
-            step=0,
+            step=1000,
             hyper="mlp",
         ).to(self.device)
 
@@ -378,7 +378,6 @@ class SF2MNGM(nn.Module):
 
                         wandb.log(log, step=i, commit=False)  # CHANGE: staged log
 
-                        # KEEP (graph logging)
                         W_v = self.func_v.get_structure()
                         wandb.log({"grn/n_edges": np.sum(np.abs((W_v.T).cpu().numpy()))}, step=i, commit=False)
                         if W_v.ndim == 3:
@@ -426,7 +425,7 @@ def main():
         dt=0.2,
         batch_size=164,
         alpha=0.1,
-        dyn_alpha=0.01,
+        dyn_alpha=0.001,
         dyn_hidden=4,
         reg=0,
         correction_reg_strength=1e-3,
