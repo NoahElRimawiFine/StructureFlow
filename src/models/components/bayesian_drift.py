@@ -50,7 +50,6 @@ class BayesianDrift(Intervenable):
                 m if isinstance(m, torch.Tensor) else torch.tensor(m, dtype=torch.float32)
                 for m in knockout_masks
             ]
-            print(knockout_masks)
             for k, M in enumerate(self.knockout_masks):
                 self.register_buffer(f"KO_mask_{k}", M)
         
