@@ -288,7 +288,7 @@ class SF2MNGM(nn.Module):
                 print(
                     f"Step={i}, ds={ds_idx}, "
                     f"L_score={L_score.item():.4f}, L_flow={L_flow.item():.4f}, "
-                    f"Reg(Flow)={L_reg.item():.4f if isinstance(L_reg, torch.Tensor) else 0.0}"
+                    f"Reg(Flow)={0.0} #{L_reg.item():.4f}" 
                 )
                 sys.stdout.flush()
 
