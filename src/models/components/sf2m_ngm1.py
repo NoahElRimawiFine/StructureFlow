@@ -380,6 +380,7 @@ class SF2MNGM(nn.Module):
 
                         # KEEP (graph logging)
                         W_v = self.func_v.get_structure()
+                        wandb.log({"grn/n_edges": np.sum(np.abs((W_v.T).cpu().numpy()))}, step=i, commit=False)
                         if W_v.ndim == 3:
                             W_v = W_v[0]
                         A_true = self.true_matrix
