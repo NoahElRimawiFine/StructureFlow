@@ -112,7 +112,7 @@ class SF2MNGM(nn.Module):
         self.ko_indices = self.data_loader.ko_indices
         self.true_matrix = self.data_loader.true_matrix.values
 
-        self.adatas = [self.adatas[0]] # DEBUG: use only first dataset
+        #self.adatas = [self.adatas[0]] # DEBUG: use only first dataset
 
         # Example shape from the first dataset
         self.n_genes = self.adatas[0].X.shape[1]
@@ -231,8 +231,8 @@ class SF2MNGM(nn.Module):
 
         for i in tqdm(range(self.n_steps)):
             # Randomly pick which dataset to train on
-            # ds_idx = np.random.randint(0, len(self.adatas))
-            ds_idx = 0  # For debugging with single dataset
+            ds_idx = np.random.randint(0, len(self.adatas))
+            # ds_idx = 0  # For debugging with single dataset
             model = self.otfms[ds_idx]
             cond_vector = self.conditionals[ds_idx].to(self.device)
 
