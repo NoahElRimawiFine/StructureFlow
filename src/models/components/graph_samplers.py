@@ -31,7 +31,7 @@ class GraphLayer(Module):
         self.w_init_std = w_init_std
         self.warmup_steps = warmup_steps
         self.t = 1
-        self.ens_mean = False
+        self.ens_mean = True
         # define network weights
         self.w = Parameter(
             torch.empty((self.n_graphs, self.n_var, self.n_embed), **factory_kwargs)
@@ -53,7 +53,7 @@ class GraphLayer(Module):
     def forward(self, eval_n_graphs=None, step=0):
         Z = torch.matmul(self.w, self.v.transpose(-2, -1))
         if self.ens_mean:
-            Z = Z.mean(axis=0, keepdim=True)
+            Z = Z.mean(axis=0)
             Z = Z.unsqueeze(0)
         self.alpha_t = self.t * self.alpha
         if step > self.warmup_steps:
