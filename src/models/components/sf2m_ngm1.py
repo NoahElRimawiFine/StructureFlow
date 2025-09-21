@@ -142,7 +142,7 @@ class SF2MNGM(nn.Module):
         # ).to(self.device)
         self.func_v = BayesianDrift(
             dims=self.dims, 
-            n_ens=1, 
+            n_ens=25, 
             deepens=True, 
             time_invariant=True, 
             k_hidden=dyn_hidden,
@@ -384,7 +384,7 @@ class SF2MNGM(nn.Module):
                         # KEEP (graph logging)
                         W_v = self.func_v.get_structure()
                         if W_v.ndim == 3:
-                            W_v = W_v[0]
+                            W_v = W_v.mean(axis=0)
                         A_true = self.true_matrix
                         log_causal_graph_matrices(None, W_v, A_true, logger=None, global_step=i)
 
