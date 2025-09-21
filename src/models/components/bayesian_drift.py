@@ -44,11 +44,11 @@ class BayesianDrift(Intervenable):
         self.current_epoch = 0
         self.knockout_masks = knockout_masks
         if knockout_masks is not None:
-            assert len(knockout_masks) == n_ens, "Number of knockout masks must match number of ensembles"
             self.knockout_masks = [
                 m if isinstance(m, torch.Tensor) else torch.tensor(m, dtype=torch.float32)
                 for m in knockout_masks
             ]
+            print(knockout_masks)
             for k, M in enumerate(self.knockout_masks):
                 self.register_buffer(f"KO_mask_{k}", M)
         
