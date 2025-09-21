@@ -112,6 +112,8 @@ class SF2MNGM(nn.Module):
         self.ko_indices = self.data_loader.ko_indices
         self.true_matrix = self.data_loader.true_matrix.values
 
+        self.adatas = [self.adatas[0]] # DEBUG: use only first dataset
+
         # Example shape from the first dataset
         self.n_genes = self.adatas[0].X.shape[1]
 
@@ -165,8 +167,6 @@ class SF2MNGM(nn.Module):
             self.adatas, T=self.T, sigma=self.sigma, dt=self.dt
         )
 
-        print(self.adatas[0])
-        breakpoint()
 
         self.func_v.to(self.device)
         self.score_net.to(self.device)
