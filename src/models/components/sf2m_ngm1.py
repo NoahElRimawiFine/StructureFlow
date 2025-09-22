@@ -419,14 +419,14 @@ def main():
     time.sleep(2)
 
     model = SF2MNGM(
-        datamodule=TrajectoryStructureDataModule(),
+        datamodule=TrajectoryStructureDataModule(dataset="dyn-LI"),
         T=5,
         sigma=1.0,
         dt=0.2,
         batch_size=164,
         alpha=0.1,
         dyn_alpha=0.01,
-        dyn_hidden=8,
+        dyn_hidden=7,
         reg=0,
         correction_reg_strength=1e-3,
         n_steps=12000,
