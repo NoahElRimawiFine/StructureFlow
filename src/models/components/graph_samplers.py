@@ -50,27 +50,15 @@ class GraphLayer(Module):
         torch.nn.init.normal_(self.w, mean=0, std=self.w_init_std)  
         torch.nn.init.normal_(self.v, mean=0, std=self.w_init_std)
 
-    # def forward(self, eval_n_graphs=None, step=0): originally here
-    #     Z = torch.matmul(self.w, self.v.transpose(-2, -1))
-    #     if self.ens_mean:
-    #         Z = Z.mean(axis=0)
-    #         Z = Z.unsqueeze(0)
-    #     self.alpha_t = self.t * self.alpha
-    #     if step > self.warmup_steps:
-    #         self.t += 1
-    #     G = torch.sigmoid(self.alpha_t * Z)
-    #     return G
-
     def forward(self, eval_n_graphs=None, step=0):
-        # e.g., cosine or linear ramp after warmup
-        if step <= self.warmup_steps:
-            tau = 1.0
-        else:
-            # anneal temperature (i.e., grow α_t) smoothly
-            progress = (step - self.warmup_steps) / max(1, self.warmup_steps)
-            tau = max(0.1, 1.0 - 0.9*progress)  # temperature ↓ → α_t ↑
         Z = torch.matmul(self.w, self.v.transpose(-2, -1))
-        G = torch.sigmoid(Z / tau)
+        if self.ens_mean:
+            Z = Z.mean(axis=0)
+            Z = Z.unsqueeze(0)
+        self.alpha_t = self.t * self.alpha
+        if step > self.warmup_steps:
+            self.t += math.log1p(step)
+        G = torch.sigmoid(self.alpha_t * Z)
         return G
 
 

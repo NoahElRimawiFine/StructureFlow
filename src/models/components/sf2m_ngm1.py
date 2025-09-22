@@ -142,13 +142,13 @@ class SF2MNGM(nn.Module):
         # ).to(self.device)
         self.func_v = BayesianDrift(
             dims=self.dims, 
-            n_ens=25, 
+            n_ens=100, 
             deepens=True, 
             time_invariant=True, 
             k_hidden=dyn_hidden,
             alpha=self.dyn_alpha,
             knockout_masks=self.knockout_masks,
-            step=1000,
+            step=0,
             hyper="mlp",
         ).to(self.device)
 
