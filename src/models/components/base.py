@@ -417,7 +417,8 @@ class KOGraph(nn.Module):
 
         # 2) Graph mixing (parents -> child): x_mix[b,i] = sum_j x[b,j] * G[j,i]
         x_mix = xb @ G  # [batch, d]
-        x_mix.squeeze(0)
+        x_mix = x_mix.squeeze(0)
+        print(x_mix.shape)
 
         # 3) Per-node projector to m1 channels
         h = self.projector(x_mix, t if not self.time_invariant else None)  # [batch, d, m1]
