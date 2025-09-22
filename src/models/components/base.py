@@ -406,7 +406,7 @@ class KOGraph(nn.Module):
         if not self.time_invariant:
             x = torch.cat((x, t), dim=-1)
 
-        G = self.graphs(step=step)
+        G = self.graph(step=step)
         M = self.get_mask(dataset_idx)
         if M is not None:
             G = G * M.unsqueeze(0) # Apply knockout mask
