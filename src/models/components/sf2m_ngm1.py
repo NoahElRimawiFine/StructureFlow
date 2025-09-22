@@ -136,7 +136,7 @@ class SF2MNGM(nn.Module):
             mask_i = self.build_knockout_mask(d, self.ko_indices[i])
             self.knockout_masks.append(mask_i)
 
-        self.dims = [self.n_genes, 100, 100, 100, 1]
+        self.dims = [self.n_genes, 256, 1]
         # self.func_v = MLPODEFKO(
         #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
         # ).to(self.device)
@@ -430,7 +430,7 @@ def main():
         reg=0,
         correction_reg_strength=1e-3,
         n_steps=12000,
-        lr=3e-4,
+        lr=1e-4,
         device=None  # Auto-detect
     )
 
