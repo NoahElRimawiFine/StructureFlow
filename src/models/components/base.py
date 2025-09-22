@@ -398,7 +398,7 @@ class KOGraph(nn.Module):
             for k, M in enumerate(self.knockout_masks):
                 self.register_buffer(f"KO_mask_{k}", M)
 
-    def _get_mask(self, dataset_idx):
+    def get_mask(self, dataset_idx):
         if dataset_idx is None or self.knockout_masks is None: return None
         return getattr(self, f"KO_mask_{dataset_idx}")
     
