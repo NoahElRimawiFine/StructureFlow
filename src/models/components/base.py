@@ -431,10 +431,19 @@ class KOGraph(nn.Module):
         x_out = x_out.squeeze(dim=2).unsqueeze(1)  # assumes dims[-1] == 1
         return x_out
 
-    def l2_reg_graph_logits(self, coeff=1.0):
-        Z = self.graph.logits()
-        return coeff * (Z.pow(2).sum())
+    # try later
+    # def l2_reg_graph_logits(self, coeff=1.0):
+    #     Z = self.graph.logits()
+    #     return coeff * (Z.pow(2).sum())
 
-    def l1_reg_graph_logits(self, coeff=1.0):
-        Z = self.graph.logits()
-        return coeff * (Z.abs().sum())
+    # def l1_reg_graph_logits(self, coeff=1.0):
+    #     Z = self.graph.logits()
+    #     return coeff * (Z.abs().sum())
+    def l2_reg(self):
+        """L2 regularization on input layer parameters."""
+        return torch.sum(self.graphs() ** 2)
+
+    def l1_reg(self):
+        """L1 regularization on input layer parameters."""
+        G = self.graphs()
+        return torch.sum(torch.abs(G)) / G.shape[-1]
