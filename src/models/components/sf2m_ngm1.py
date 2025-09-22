@@ -393,7 +393,7 @@ class SF2MNGM(nn.Module):
                             log["traj/SDE/mean"] = float(np.mean(sde_vals))
 
                         wandb.log(log, step=i, commit=False)  # CHANGE: staged log
-                        if isinstance(self.func_v, BayesianDrift, KOGraph):
+                        if isinstance(self.func_v, BayesianDrift) or isinstance(self.func_v, KOGraph):
                             W_v = self.func_v.get_structure()
                             if W_v.ndim == 3:
                                 W_v = W_v[0]
