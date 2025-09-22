@@ -60,12 +60,12 @@ class BayesianDrift(Intervenable):
 
         if hyper != "linear":
             layers = []
-            for i in range(len(dims) - 2): #[a,b,c] -> 3 (0,1)
+            for i in range(len(dims) - 2):
                 layers.append(
                     HyperLocallyConnected(
                         dims[0],  # num_linear
-                        dims[i],  # input_features
-                        dims[i + 1],  # output_features
+                        dims[i+1],  # input_features
+                        dims[i + 2],  # output_features
                         n_ens=n_ens,
                         hyper=hyper,
                         bias=bias,
