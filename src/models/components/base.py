@@ -414,13 +414,12 @@ class KOGraph(nn.Module):
         Gt = G.transpose(-2, -1).unsqueeze(1)
         x = Gt * x 
         x = x.unsqueeze(dim=3)  # [n_ens, batch, d, t, d]
+        print(x.shape)
+        breakpoint() # -> will need to fix this
 
         for fc in self.fc2:
-            x = fc(x, G)  # [n_ens, batch, d, t, mi]
+            x = fc(x)  # [n_ens, batch, d, t, mi]
         x = x.transpose(-3, -1).squeeze(-2) 
-        print(x.shape)
-        breakpoint()
-        x = x.squeeze(0)
         return x  # x.shape [batch, t, d]
 
     # try later
