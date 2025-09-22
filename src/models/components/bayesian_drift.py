@@ -105,9 +105,14 @@ class BayesianDrift(Intervenable):
         if M is not None:
             G = G * M.unsqueeze(0) # Apply knockout mask
 
-        Gt = G.transpose(-2, -1).unsqueeze(1)
-        x = Gt * x
-        x = x.unsqueeze(dim=3)  # [n_ens, batch, d, t, d]
+        xb = x.squeeze(1)                               # [batch, d]
+        x_mixed = torch.einsum('kji,bd->kbi', G.transpose(-2, -1), xb)  # [n_ens, batch, d]
+        x = x_mixed.unsqueeze(2)
+        # this was OG
+        # Gt = G.transpose(-2, -1).unsqueeze(1)
+        # x = Gt * x 
+        # x = x.unsqueeze(dim=3)  # [n_ens, batch, d, t, d]
+        # this was OG
         for fc in self.fc2:
             x = fc(x, G)  # [n_ens, batch, d, t, mi]
         x = x.transpose(-3, -1).squeeze(-2)
