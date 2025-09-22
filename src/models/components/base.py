@@ -401,6 +401,27 @@ class KOGraph(nn.Module):
     def _get_mask(self, dataset_idx):
         if dataset_idx is None or self.knockout_masks is None: return None
         return getattr(self, f"KO_mask_{dataset_idx}")
+    
+    def forward(self, t, x, dataset_idx=None, step=0):  # [n, 1, d] -> [n, 1, d]
+        if not self.time_invariant:
+            x = torch.cat((x, t), dim=-1)
+
+        G = self.graphs(step=step)
+        M = self.get_mask(dataset_idx)
+        if M is not None:
+            G = G * M.unsqueeze(0) # Apply knockout mask
+
+        Gt = G.transpose(-2, -1).unsqueeze(1)
+        x = Gt * x 
+        x = x.unsqueeze(dim=3)  # [n_ens, batch, d, t, d]
+
+        for fc in self.fc2:
+            x = fc(x, G)  # [n_ens, batch, d, t, mi]
+        x = x.transpose(-3, -1).squeeze(-2) 
+        print(x.shape)
+        breakpoint()
+        x = x.squeeze(0)
+        return x  # x.shape [batch, t, d]
 
     # try later
     # def l2_reg_graph_logits(self, coeff=1.0):

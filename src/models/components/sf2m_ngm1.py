@@ -392,11 +392,11 @@ class SF2MNGM(nn.Module):
                         if sde_vals:
                             log["traj/SDE/mean"] = float(np.mean(sde_vals))
 
-                        wandb.log(log, step=i, commit=False)  # CHANGE: staged log
+                        wandb.log(log, step=i, commit=False)
                         if isinstance(self.func_v, BayesianDrift) or isinstance(self.func_v, KOGraph):
                             W_v = self.func_v.get_structure()
                             if W_v.ndim == 3:
-                                W_v = W_v[0].T
+                                W_v = W_v[0]
                         else:
                             W_v = self.func_v.causal_graph(w_threshold=0.0)
 
