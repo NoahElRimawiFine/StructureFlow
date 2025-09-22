@@ -396,13 +396,13 @@ class SF2MNGM(nn.Module):
                         if isinstance(self.func_v, BayesianDrift) or isinstance(self.func_v, KOGraph):
                             W_v = self.func_v.get_structure()
                             if W_v.ndim == 3:
-                                W_v = W_v[0]
+                                W_v = W_v[0].T
                         else:
                             W_v = self.func_v.causal_graph(w_threshold=0.0)
 
                         A_true = self.true_matrix
                         log_causal_graph_matrices(None, W_v, A_true, logger=None, global_step=i)
-                        wandb.log({}, step=i, commit=True)     # NEW
+                        wandb.log({}, step=i, commit=True)
 
             L.backward()
             optim.step()
