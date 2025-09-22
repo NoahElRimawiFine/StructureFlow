@@ -425,12 +425,12 @@ def main():
         dt=0.2,
         batch_size=164,
         alpha=0.1,
-        dyn_alpha=0.001,
+        dyn_alpha=0.1,
         dyn_hidden=4,
         reg=0,
         correction_reg_strength=1e-3,
         n_steps=12000,
-        lr=1e-4,
+        lr=2e-4,
         device=None  # Auto-detect
     )
 
