@@ -430,7 +430,7 @@ def main():
         reg=0,
         correction_reg_strength=1e-3,
         n_steps=12000,
-        lr=2e-4,
+        lr=1e-4,
         device=None  # Auto-detect
     )
 
