@@ -236,7 +236,7 @@ class MLPODEFKO(nn.Module):
         for layer in range(len(dims) - 2):
             layers.append(LocallyConnected(dims[0], dims[layer + 1], dims[layer + 2], bias=bias))
         self.fc2 = nn.ModuleList(layers)
-        self.elu = nn.GELU(inplace=True)
+        self.elu = nn.GELU() #nn.ELU(inplace=True)
         self.knockout_masks = None
         
         if callable(knockout_masks):
