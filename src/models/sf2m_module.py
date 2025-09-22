@@ -350,12 +350,12 @@ class SF2MLitModule(LightningModule):
         # Flow net output, with or without correction
         if self.global_step <= 500 or not self.use_correction_mlp:
             # Warmup phase or no correction
-            v_fit = self.func_v(t_input, v_input).squeeze(1) - (
+            v_fit = self.func_v(t_input, v_input, ds_idx).squeeze(1) - (
                 sigma_value**2 / 2
             ) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
         else:
             # Full training phase with correction
-            v_fit = self.func_v(t_input, v_input).squeeze(1) + self.v_correction(
+            v_fit = self.func_v(t_input, v_input, ds_idx).squeeze(1) + self.v_correction(
                 _t.to(self.device), _x.to(self.device)
             )
             v_fit = v_fit - (sigma_value**2 / 2) * self.score_net(
