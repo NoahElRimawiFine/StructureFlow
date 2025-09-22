@@ -441,9 +441,9 @@ class KOGraph(nn.Module):
     #     return coeff * (Z.abs().sum())
     def l2_reg(self):
         """L2 regularization on input layer parameters."""
-        return torch.sum(self.graphs() ** 2)
+        return torch.sum(self.graph() ** 2)
 
     def l1_reg(self):
         """L1 regularization on input layer parameters."""
-        G = self.graphs()
+        G = self.graph()
         return torch.sum(torch.abs(G)) / G.shape[-1]
