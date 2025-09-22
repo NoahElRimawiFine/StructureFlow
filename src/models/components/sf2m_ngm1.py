@@ -276,7 +276,10 @@ class SF2MNGM(nn.Module):
             # Losses
             L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
             L_flow = torch.mean((v_fit * model.dt - _u) ** 2)
-            L_reg = func_v.l2_reg() + func_v.l1_reg()
+            if isinstance(func_v, MLPODEFKO):
+                L_reg = func_v.l2_reg() + func_v.fc1_reg()
+            else:
+                L_reg = func_v.l2_reg() + func_v.l1_reg()
             if i < 100:
                 L = self.alpha * L_score
             else:
