@@ -36,6 +36,17 @@ if torch.cuda.is_available():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+def proximal(self, w, dims, lam=0.1, eta=0.1):
+    """Proximal operator used for group-lasso style regularization in the hidden weights."""
+    with torch.no_grad():
+        d = dims[0]
+        d_hidden = dims[1]
+        wadj = w.view(d, d_hidden, d)
+        tmp = torch.sum(wadj**2, dim=1).sqrt() - lam * eta
+        alpha_ = torch.clamp(tmp, min=0)
+        v_ = F.normalize(wadj, dim=1) * alpha_[:, None, :]
+        w.copy_(v_.view(-1, d))
+
 
 class SF2MNGM(nn.Module):
     """Encapsulates the NGM training pipeline for flow+score matching in one PyTorch module."""
@@ -137,20 +148,20 @@ class SF2MNGM(nn.Module):
             self.knockout_masks.append(mask_i)
 
         self.dims = [self.n_genes, 32, 32, 1]
-        # self.func_v = MLPODEFKO(
-        #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
-        # ).to(self.device)
-        self.func_v = BayesianDrift(
-            dims=self.dims, 
-            n_ens=100, 
-            deepens=True, 
-            time_invariant=True, 
-            k_hidden=dyn_hidden,
-            alpha=self.dyn_alpha,
-            knockout_masks=self.knockout_masks,
-            step=0,
-            hyper="mlp",
+        self.func_v = MLPODEFKO(
+            dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
         ).to(self.device)
+        # self.func_v = BayesianDrift(
+        #     dims=self.dims, 
+        #     n_ens=100, 
+        #     deepens=True, 
+        #     time_invariant=True, 
+        #     k_hidden=dyn_hidden,
+        #     alpha=self.dyn_alpha,
+        #     knockout_masks=self.knockout_masks,
+        #     step=0,
+        #     hyper="mlp",
+        # ).to(self.device)
 
         self.score_net = CONDMLP(
             d=self.n_genes,
@@ -167,7 +178,6 @@ class SF2MNGM(nn.Module):
         self.otfms = self.build_entropic_otfms(
             self.adatas, T=self.T, sigma=self.sigma, dt=self.dt
         )
-
 
         self.func_v.to(self.device)
         self.score_net.to(self.device)
@@ -377,19 +387,27 @@ class SF2MNGM(nn.Module):
                             log["traj/SDE/mean"] = float(np.mean(sde_vals))
 
                         wandb.log(log, step=i, commit=False)  # CHANGE: staged log
+                        if isinstance(self.func_v, BayesianDrift):
+                            W_v = self.func_v.get_structure()
+                            if W_v.ndim == 3:
+                                W_v = W_v[0]
+                        else:
+                            W_v = self.func_v.causal_graph(w_threshold=0.0)
 
-                        W_v = self.func_v.get_structure()
-                        wandb.log({"grn/n_edges": np.sum(np.abs((W_v.T).cpu().numpy()))}, step=i, commit=False)
-                        if W_v.ndim == 3:
-                            W_v = W_v[0]
                         A_true = self.true_matrix
                         log_causal_graph_matrices(None, W_v, A_true, logger=None, global_step=i)
-
-                        # NEW: ensure one final commit after the staged logs
                         wandb.log({}, step=i, commit=True)     # NEW
 
             L.backward()
             optim.step()
+
+            if isinstance(func_v, MLPODEFKO):
+                proximal(
+                    self.func_v.fc1.weight,
+                    self.func_v.dims,
+                    lam=self.func_v.GL_reg,
+                    eta=0.01,
+                )
 
         print("Training complete.")
 

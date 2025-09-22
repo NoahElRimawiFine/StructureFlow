@@ -251,7 +251,7 @@ class MLPODEFKO(nn.Module):
         
         self.to(self.device)
 
-    def forward(self, t, x, dataset_idx=None):
+    def forward(self, t, x, dataset_idx=None, step=0):
         x = x.to(self.device)
         t = t.to(self.device)
         
