@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from src.datamodules.components import sc_dataset as util
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
-from src.models.components.base import MLPODEFKO
+from src.models.components.base import MLPODEFKO, KOGraph
 from src.models.components.bayesian_drift import BayesianDrift
 from src.models.components.cond_mlp import MLP as CONDMLP
 from src.models.components.optimal_transport import EntropicOTFM
@@ -151,17 +151,20 @@ class SF2MNGM(nn.Module):
         # self.func_v = MLPODEFKO(
         #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
         # ).to(self.device)
-        self.func_v = BayesianDrift(
-            dims=self.dims, 
-            n_ens=100, 
-            deepens=True, 
-            time_invariant=True, 
-            k_hidden=dyn_hidden,
-            alpha=self.dyn_alpha,
-            knockout_masks=self.knockout_masks,
-            step=0,
-            hyper="mlp",
-        ).to(self.device)
+        # self.func_v = BayesianDrift(
+        #     dims=self.dims, 
+        #     n_ens=100, 
+        #     deepens=True, 
+        #     time_invariant=True, 
+        #     k_hidden=dyn_hidden,
+        #     alpha=self.dyn_alpha,
+        #     knockout_masks=self.knockout_masks,
+        #     step=0,
+        #     hyper="mlp",
+        # ).to(self.device)
+        self.func_v = KOGraph(
+            dims=self.dims,
+        )
 
         self.score_net = CONDMLP(
             d=self.n_genes,
