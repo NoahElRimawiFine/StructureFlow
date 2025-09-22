@@ -9,6 +9,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.nn.parameter import Parameter
+from .graph_samplers import GraphLayer
 
 
 class LocallyConnected(nn.Module):
@@ -328,3 +329,110 @@ class MLPODEFKO(nn.Module):
         self.fc1.reset_parameters()
         for fc in self.fc2:
             fc.reset_parameters()
+
+
+### Experimental layer ###
+class PerNodeProjector(nn.Module):
+    """
+    Maps [batch, d] -> [batch, d, m1] with a separate affine for each node.
+    If time_invariant=False, also adds a tiny per-node time head.
+    """
+    def __init__(self, d: int, m1: int, time_invariant: bool = True,
+                 w_init_std: float = 1e-2, bias: bool = True):
+        super().__init__()
+        self.d, self.m1 = d, m1
+        self.time_invariant = time_invariant
+        # weights_x: [d, 1, m1], bias: [d, m1]
+        self.weights_x = nn.Parameter(torch.empty(d, 1, m1))
+        nn.init.normal_(self.weights_x, 0.0, w_init_std)
+        self.bias = nn.Parameter(torch.zeros(d, m1)) if bias else None
+        if not time_invariant:
+            # a tiny per-node time head: [d, 1, m1]
+            self.weights_t = nn.Parameter(torch.empty(d, 1, m1))
+            nn.init.normal_(self.weights_t, 0.0, w_init_std)
+        else:
+            self.register_parameter("weights_t", None)
+
+    def forward(self, x_mix, t = None) -> torch.Tensor:
+        """
+        x_mix: [batch, d]    (already graph-mixed)
+        t:     [batch, 1] or [batch, 1, 1] if time_invariant=False
+        returns: [batch, d, m1]
+        """
+        B, d = x_mix.shape
+        assert d == self.d, "x_mix last dim must be d"
+        out = x_mix.unsqueeze(-1) * self.weights_x.expand(d, B, self.m1).transpose(0,1)  # [batch, d, m1]
+        if self.bias is not None:
+            out = out + self.bias.unsqueeze(0)
+        if not self.time_invariant:
+            # accept t as scalar per batch; broadcast to nodes
+            if t.dim() == 3: t = t.squeeze(1)
+            t_feat = t  # [batch, 1]
+            out = out + t_feat.unsqueeze(-1) * self.weights_t.expand(d, B, self.m1).transpose(0,1)
+        return out
+
+class KOGraph(nn.Module):
+    def __init__(self, dims, bias=True, time_invariant=True,
+                 knockout_masks=None, k_hidden=8, w_init_std=2e-2,
+                 warmup_steps=1000, alpha=0.1):
+        super().__init__()
+        assert len(dims) >= 2 and dims[-1] == 1
+        d, m1 = dims[0], dims[1]
+        self.dims = dims
+        self.time_invariant = time_invariant
+
+        self.graph = GraphLayer(100, d, k_hidden, w_init_std, alpha, warmup_steps)
+        
+        self.projector = PerNodeProjector(d, m1, time_invariant=time_invariant,
+                                          w_init_std=w_init_std, bias=bias)
+
+        layers = []
+        for layer in range(len(dims) - 2):
+            layers.append(LocallyConnected(dims[0], dims[layer + 1], dims[layer + 2], bias=bias))
+        self.fc2 = nn.ModuleList(layers)
+        self.act = nn.GELU()
+
+        self.knockout_masks = None
+        if callable(knockout_masks): knockout_masks = knockout_masks()
+        if knockout_masks is not None:
+            self.knockout_masks = [m if isinstance(m, torch.Tensor)
+                                   else torch.tensor(m, dtype=torch.float32)
+                                   for m in knockout_masks]
+            for k, M in enumerate(self.knockout_masks):
+                self.register_buffer(f"KO_mask_{k}", M)
+
+    def _get_mask(self, dataset_idx):
+        if dataset_idx is None or self.knockout_masks is None: return None
+        return getattr(self, f"KO_mask_{dataset_idx}")
+
+    def forward(self, t, x, dataset_idx=None, step: int = 0):
+        # x: [batch, 1, d]; t: [batch, 1] (if used)
+        xb = x.squeeze(1)  # [batch, d]
+
+        # 1) Graph + KO
+        G = self.graph(step=step)   # [d, d]
+        M = self._get_mask(dataset_idx)
+        if M is not None:
+            G = G * M  # KO applied to edges
+
+        # 2) Graph mixing (parents -> child): x_mix[b,i] = sum_j x[b,j] * G[j,i]
+        x_mix = xb @ G  # [batch, d]
+
+        # 3) Per-node projector to m1 channels
+        h = self.projector(x_mix, t if not self.time_invariant else None)  # [batch, d, m1]
+
+        # 4) Existing stack
+        x_out = h
+        for fc in self.fc2:
+            x_out = fc(self.act(x_out))  # still [batch, d, next_m]
+
+        x_out = x_out.squeeze(dim=2).unsqueeze(1)  # assumes dims[-1] == 1
+        return x_out
+
+    def l2_reg_graph_logits(self, coeff=1.0):
+        Z = self.graph.logits()
+        return coeff * (Z.pow(2).sum())
+
+    def l1_reg_graph_logits(self, coeff=1.0):
+        Z = self.graph.logits()
+        return coeff * (Z.abs().sum())

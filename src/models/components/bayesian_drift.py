@@ -60,7 +60,7 @@ class BayesianDrift(Intervenable):
 
         if hyper != "linear":
             layers = []
-            for i in range(len(dims) - 1):
+            for i in range(len(dims) - 2): #[a,b,c] -> 3 (0,1)
                 layers.append(
                     HyperLocallyConnected(
                         dims[0],  # num_linear
@@ -105,17 +105,10 @@ class BayesianDrift(Intervenable):
         if M is not None:
             G = G * M.unsqueeze(0) # Apply knockout mask
 
-        # this was OG
         Gt = G.transpose(-2, -1).unsqueeze(1)
-        print(Gt.shape)
-        breakpoint()
         x = Gt * x 
-        print(x.shape)
-        breakpoint()
         x = x.unsqueeze(dim=3)  # [n_ens, batch, d, t, d]
-        print(x.shape)
-        breakpoint()
-        # this was OG
+
         for fc in self.fc2:
             x = fc(x, G)  # [n_ens, batch, d, t, mi]
         x = x.transpose(-3, -1).squeeze(-2)
