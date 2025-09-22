@@ -36,7 +36,7 @@ if torch.cuda.is_available():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def proximal(self, w, dims, lam=0.1, eta=0.1):
+def proximal(w, dims, lam=0.1, eta=0.1):
     """Proximal operator used for group-lasso style regularization in the hidden weights."""
     with torch.no_grad():
         d = dims[0]
