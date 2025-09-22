@@ -425,7 +425,7 @@ def main():
         dt=0.2,
         batch_size=164,
         alpha=0.1,
-        dyn_alpha=0.05,
+        dyn_alpha=0.01,
         dyn_hidden=4,
         reg=1e-6,
         correction_reg_strength=1e-3,
