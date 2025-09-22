@@ -59,7 +59,7 @@ class GraphLayer(Module):
         if step > self.warmup_steps:
             self.t += math.log1p(step)
         G = torch.sigmoid(self.alpha_t * Z)
-        return G
+        return G.T
 
 
 class GraphLayerVI(Module):

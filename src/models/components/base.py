@@ -382,9 +382,6 @@ class KOGraph(nn.Module):
         self.time_invariant = time_invariant
 
         self.graph = GraphLayer(100, d, k_hidden, w_init_std, alpha, warmup_steps)
-        
-        self.projector = PerNodeProjector(d, m1, time_invariant=time_invariant,
-                                          w_init_std=w_init_std, bias=bias)
 
         layers = []
         for layer in range(len(dims) - 2):
@@ -404,31 +401,6 @@ class KOGraph(nn.Module):
     def _get_mask(self, dataset_idx):
         if dataset_idx is None or self.knockout_masks is None: return None
         return getattr(self, f"KO_mask_{dataset_idx}")
-
-    def forward(self, t, x, dataset_idx=None, step: int = 0):
-        # x: [batch, 1, d]; t: [batch, 1] (if used)
-        xb = x.squeeze(1)  # [batch, d]
-
-        # 1) Graph + KO
-        G = self.graph(step=step)   # [d, d]
-        M = self._get_mask(dataset_idx)
-        if M is not None:
-            G = G * M  # KO applied to edges
-
-        # 2) Graph mixing (parents -> child): x_mix[b,i] = sum_j x[b,j] * G[j,i]
-        x_mix = xb @ G  # [batch, d]
-        x_mix = x_mix.squeeze(0)
-
-        # 3) Per-node projector to m1 channels
-        h = self.projector(x_mix, t if not self.time_invariant else None)  # [batch, d, m1]
-
-        # 4) Existing stack
-        x_out = h
-        for fc in self.fc2:
-            x_out = fc(self.act(x_out))  # still [batch, d, next_m]
-
-        x_out = x_out.squeeze(dim=2).unsqueeze(1)  # assumes dims[-1] == 1
-        return x_out
 
     # try later
     # def l2_reg_graph_logits(self, coeff=1.0):

@@ -151,20 +151,20 @@ class SF2MNGM(nn.Module):
         # self.func_v = MLPODEFKO(
         #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
         # ).to(self.device)
-        # self.func_v = BayesianDrift(
-        #     dims=self.dims, 
-        #     n_ens=100, 
-        #     deepens=True, 
-        #     time_invariant=True, 
-        #     k_hidden=dyn_hidden,
-        #     alpha=self.dyn_alpha,
-        #     knockout_masks=self.knockout_masks,
-        #     step=0,
-        #     hyper="mlp",
-        # ).to(self.device)
-        self.func_v = KOGraph(
-            dims=self.dims,
-        )
+        self.func_v = BayesianDrift(
+            dims=self.dims, 
+            n_ens=100, 
+            deepens=True, 
+            time_invariant=True, 
+            k_hidden=dyn_hidden,
+            alpha=self.dyn_alpha,
+            knockout_masks=self.knockout_masks,
+            step=0,
+            hyper="mlp",
+        ).to(self.device)
+        # self.func_v = KOGraph(
+        #     dims=self.dims,
+        # )
 
         self.score_net = CONDMLP(
             d=self.n_genes,
@@ -449,12 +449,12 @@ def main():
         dt=0.2,
         batch_size=164,
         alpha=0.1,
-        dyn_alpha=0.01,
-        dyn_hidden=4,
+        dyn_alpha=0.05,
+        dyn_hidden=8,
         reg=0,
         correction_reg_strength=1e-3,
-        n_steps=12000,
-        lr=2e-4,
+        n_steps=10000,
+        lr=1e-4,
         device=None  # Auto-detect
     )
 
