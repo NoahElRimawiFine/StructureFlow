@@ -387,11 +387,11 @@ class KOGraph(nn.Module):
             x = torch.cat((x, t), dim=-1)
 
         xb = x.squeeze(1) 
-        alpha_t = self._temperature(step)
+        self.alpha_t = self._temperature(step)
 
         W = self.w.weight                         
         G_logits = W.view(self.dims[0], self.dims[1], self.dims[0])  #[d, m1, d]
-        G = torch.sigmoid(alpha_t * G_logits).permute(1, 0, 2)       #[m1, d, d]
+        G = torch.sigmoid(self.alpha_t * G_logits).permute(1, 0, 2)       #[m1, d, d]
 
         M = self.get_mask(dataset_idx)             # [d, d] or None
         if M is not None:
@@ -411,18 +411,22 @@ class KOGraph(nn.Module):
         return x  # x.shape [batch, t, d]
 
     def l2_reg(self):
-        """L2 regularization on input layer parameters."""
-        return torch.sum(self.graph() ** 2)
+        """L2 regularization on all parameters."""
+        reg = 0.0
+        fc1_weight = self.w.weight  # [j * m1, i], m1 = number of hidden nodes
+        reg += torch.sum(fc1_weight**2)
+        for fc in self.fc2:
+            reg += torch.sum(fc.weight**2)
+        return reg
 
-    def l1_reg(self):
+    def fc1_reg(self):
         """L1 regularization on input layer parameters."""
-        G = self.graph()
-        return torch.sum(torch.abs(G)) / G.shape[-1]
+        return torch.sum(torch.abs(self.w.weight))
     
     def get_structure(self, eval_n_graphs=None, test_mode=None):
         """Score each edge based on the the weight sum."""
-        if isinstance(self.graph, GraphLayer):
-            return self.graph(eval_n_graphs)
-            
-        return self.graph(eval_n_graphs, test_mode)
+        W = self.w.weight                         
+        G_logits = W.view(self.dims[0], self.dims[1], self.dims[0])  #[d, m1, d]
+        G = torch.sigmoid(self.alpha_t * G_logits).permute(1, 0, 2)       #[m1, d, d]
+        return G.mean(dim=0)
 
