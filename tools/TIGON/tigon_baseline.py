@@ -496,6 +496,17 @@ def main():
     gene_list = adata_big.var.index.to_list()
     jac = plot_jac_v(func,z_t,time_pt,'Average_jac_d0.pdf', gene_list,args,device)
 
+    def save_adj_heat(mat, title, out_name, cmap="RdBu_r"):
+        fig, ax = plt.subplots(figsize=(4, 4))
+        im = ax.imshow(abs(mat), cmap=cmap, vmin=0, vmax=1)
+        ax.set_title(title); ax.invert_yaxis()
+        fig.colorbar(im, ax=ax, shrink=0.8)
+        fig.tight_layout()
+        fig.savefig(f"{out_name}.pdf", dpi=300)
+        plt.close(fig)
+
+    save_adj_heat(jac, "TIGON", f"tigon_{args.backbone}", cmap="Reds")
+
     from sklearn.metrics import average_precision_score, roc_auc_score
 
     true_mat -= np.diag(np.diag(true_mat))
