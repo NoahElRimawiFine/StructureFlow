@@ -352,7 +352,7 @@ class KOGraph(nn.Module):
         self.warmup_steps = warmup_steps
         self.w_init_std = w_init_std
 
-        self.w = nn.Linear(d*m1, d, d, bias=bias)
+        self.w = nn.Linear(d*m1, d, bias=bias)
 
         layers = []
         for layer in range(len(dims) - 2):
@@ -388,7 +388,7 @@ class KOGraph(nn.Module):
         xb = x.squeeze(1) 
         alpha_t = self._temperature(step)
 
-        W = self.w.weight                          # [d*m1, d]
+        W = self.w.weight                         
         G_logits = W.view(self.dims[0], self.dims[1], self.dims[0])  #[d, m1, d]
         G = torch.sigmoid(alpha_t * G_logits).permute(1, 0, 2)       #[m1, d, d]
 
