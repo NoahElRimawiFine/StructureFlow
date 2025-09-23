@@ -333,16 +333,26 @@ class MLPODEFKO(nn.Module):
 
 ### Experimental layer ###
 class KOGraph(nn.Module):
-    def __init__(self, dims, bias=True, time_invariant=True,
-                 knockout_masks=None, k_hidden=8, w_init_std=2e-2,
-                 warmup_steps=1000, alpha=0.1):
+    def __init__(
+        self, 
+        dims, 
+        bias=True,
+        time_invariant=True,
+        knockout_masks=None, 
+        w_init_std=2e-2,
+        warmup_steps=1000,
+        alpha=0.1,
+    ):
         super().__init__()
         assert len(dims) >= 2 and dims[-1] == 1
         d, m1 = dims[0], dims[1]
         self.dims = dims
         self.time_invariant = time_invariant
+        self.alpha = alpha
+        self.warmup_steps = warmup_steps
+        self.w_init_std = w_init_std
 
-        self.graph = GraphLayer(100, d, k_hidden, w_init_std, alpha, warmup_steps)
+        self.w = nn.Linear(d, d*m1, bias=bias)
 
         layers = []
         for layer in range(len(dims) - 2):
@@ -363,36 +373,39 @@ class KOGraph(nn.Module):
         if dataset_idx is None or self.knockout_masks is None: return None
         return getattr(self, f"KO_mask_{dataset_idx}")
     
+    def _temperature(self, step: int):
+        if step <= self.warmup_steps:
+            return self.alpha
+        return self.alpha * (1.0 + math.log1p(step - self.warmup_steps))
+    
+    def reset_parameters(self):
+        torch.nn.init.normal_(self.w, mean=0, std=self.w_init_std)
+    
     def forward(self, t, x, dataset_idx=None, step=0):  # [n, 1, d] -> [n, 1, d]
         if not self.time_invariant:
             x = torch.cat((x, t), dim=-1)
 
-        G = self.graph(step=step)
-        M = self.get_mask(dataset_idx)
-        if M is not None:
-            G = G * M.unsqueeze(0) # Apply knockout mask
+        xb = x.squeeze(1) 
+        alpha_t = self._temperature(step)
 
-        xb = x.squeeze(1)
-        print(G.shape)
-        breakpoint()
-        x_out = torch.einsum('hbd,bs->bdh', G, xb)
-        print(x_out.shape)
-        breakpoint()
+        W = self.w
+        M = self.get_mask(dataset_idx)
+        G = torch.sigmoid(alpha_t * W)
+
+        if M is not None:
+            G = G * M.unsqueeze(0)
+
+        out = torch.einsum('hbs,bs->bdh', G, xb)
+
+        if self.w.bias:
+            out = out + self.w.bias.unsqueeze(0)
 
         for fc in self.fc2:
-            x = fc(self.act(x_out))  
+            x = fc(self.act(out))  
         x = x.squeeze(dim=2)
         x = x.unsqueeze(dim=1)
         return x  # x.shape [batch, t, d]
 
-    # try later
-    # def l2_reg_graph_logits(self, coeff=1.0):
-    #     Z = self.graph.logits()
-    #     return coeff * (Z.pow(2).sum())
-
-    # def l1_reg_graph_logits(self, coeff=1.0):
-    #     Z = self.graph.logits()
-    #     return coeff * (Z.abs().sum())
     def l2_reg(self):
         """L2 regularization on input layer parameters."""
         return torch.sum(self.graph() ** 2)
