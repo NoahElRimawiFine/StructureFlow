@@ -31,7 +31,7 @@ class GraphLayer(Module):
         self.w_init_std = w_init_std
         self.warmup_steps = warmup_steps
         self.t = 1
-        self.ens_mean = True
+        self.ens_mean = False
         # define network weights
         self.w = Parameter(
             torch.empty((self.n_graphs, self.n_var, self.n_embed), **factory_kwargs)
