@@ -332,45 +332,6 @@ class MLPODEFKO(nn.Module):
 
 
 ### Experimental layer ###
-class PerNodeProjector(nn.Module):
-    """
-    Maps [batch, d] -> [batch, d, m1] with a separate affine for each node.
-    If time_invariant=False, also adds a tiny per-node time head.
-    """
-    def __init__(self, d: int, m1: int, time_invariant: bool = True,
-                 w_init_std: float = 1e-2, bias: bool = True):
-        super().__init__()
-        self.d, self.m1 = d, m1
-        self.time_invariant = time_invariant
-        # weights_x: [d, 1, m1], bias: [d, m1]
-        self.weights_x = nn.Parameter(torch.empty(d, 1, m1))
-        nn.init.normal_(self.weights_x, 0.0, w_init_std)
-        self.bias = nn.Parameter(torch.zeros(d, m1)) if bias else None
-        if not time_invariant:
-            # a tiny per-node time head: [d, 1, m1]
-            self.weights_t = nn.Parameter(torch.empty(d, 1, m1))
-            nn.init.normal_(self.weights_t, 0.0, w_init_std)
-        else:
-            self.register_parameter("weights_t", None)
-
-    def forward(self, x_mix, t = None) -> torch.Tensor:
-        """
-        x_mix: [batch, d]    (already graph-mixed)
-        t:     [batch, 1] or [batch, 1, 1] if time_invariant=False
-        returns: [batch, d, m1]
-        """
-        B, d = x_mix.shape
-        assert d == self.d, "x_mix last dim must be d"
-        out = x_mix.unsqueeze(-1) * self.weights_x.expand(d, B, self.m1).transpose(0,1)  # [batch, d, m1]
-        if self.bias is not None:
-            out = out + self.bias.unsqueeze(0)
-        if not self.time_invariant:
-            # accept t as scalar per batch; broadcast to nodes
-            if t.dim() == 3: t = t.squeeze(1)
-            t_feat = t  # [batch, 1]
-            out = out + t_feat.unsqueeze(-1) * self.weights_t.expand(d, B, self.m1).transpose(0,1)
-        return out
-
 class KOGraph(nn.Module):
     def __init__(self, dims, bias=True, time_invariant=True,
                  knockout_masks=None, k_hidden=8, w_init_std=2e-2,
@@ -411,15 +372,16 @@ class KOGraph(nn.Module):
         if M is not None:
             G = G * M.unsqueeze(0) # Apply knockout mask
 
-        Gt = G.transpose(-2, -1).unsqueeze(1)
-        x = Gt * x 
-        x = x.unsqueeze(dim=3)  # [n_ens, batch, d, t, d]
-        print(x.shape)
-        breakpoint() # -> will need to fix this
+        xb = x.squeeze(1)
+
+        x_out = torch.einsum('hbd,bs->bdh', G, xb)
+        print(x_out.shape)
+        breakpoint()
 
         for fc in self.fc2:
-            x = fc(x)  # [n_ens, batch, d, t, mi]
-        x = x.transpose(-3, -1).squeeze(-2) 
+            x = fc(self.act(x_out))  
+        x = x.squeeze(dim=2)
+        x = x.unsqueeze(dim=1)
         return x  # x.shape [batch, t, d]
 
     # try later
