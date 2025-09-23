@@ -419,7 +419,7 @@ class KOGraph(nn.Module):
             reg += torch.sum(fc.weight**2)
         return reg
 
-    def fc1_reg(self):
+    def l1_reg(self):
         """L1 regularization on input layer parameters."""
         return torch.sum(torch.abs(self.w.weight))
     
