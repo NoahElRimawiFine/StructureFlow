@@ -400,8 +400,8 @@ class KOGraph(nn.Module):
         # Mix sources→dest per hidden:
         out = torch.einsum('hds, bs -> bdh', G, xb)
 
-        if self.fc1.bias is not None:
-            bias = self.fc1.bias.view(self.dims[0], self.dims[1])
+        if self.w.bias is not None:
+            bias = self.w.bias.view(self.dims[0], self.dims[1])
             out = out + bias.unsqueeze(0)
 
         for fc in self.fc2:
