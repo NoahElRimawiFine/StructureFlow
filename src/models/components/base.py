@@ -373,7 +373,8 @@ class KOGraph(nn.Module):
             G = G * M.unsqueeze(0) # Apply knockout mask
 
         xb = x.squeeze(1)
-
+        print(G.shape)
+        breakpoint()
         x_out = torch.einsum('hbd,bs->bdh', G, xb)
         print(x_out.shape)
         breakpoint()
