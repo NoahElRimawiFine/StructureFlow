@@ -351,8 +351,9 @@ class KOGraph(nn.Module):
         self.alpha = alpha
         self.warmup_steps = warmup_steps
         self.w_init_std = w_init_std
+        self.bias = bias
 
-        self.w = nn.Linear(d*m1, d, bias=bias)
+        self.w = nn.Linear(d, d*m1, bias=bias)
 
         layers = []
         for layer in range(len(dims) - 2):
@@ -399,8 +400,9 @@ class KOGraph(nn.Module):
         # Mix sources→dest per hidden:
         out = torch.einsum('hds, bs -> bdh', G, xb)
 
-        if self.w.bias:
-            out = out + self.w.bias.unsqueeze(0)
+        if self.fc1.bias is not None:
+            bias = self.fc1.bias.view(self.dims[0], self.dims[1])
+            out = out + bias.unsqueeze(0)
 
         for fc in self.fc2:
             x = fc(self.act(out))  
