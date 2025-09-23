@@ -340,7 +340,7 @@ class KOGraph(nn.Module):
         time_invariant=True,
         knockout_masks=None, 
         w_init_std=2e-2,
-        warmup_steps=1000,
+        warmup_steps=100,
         alpha=0.1,
     ):
         super().__init__()
