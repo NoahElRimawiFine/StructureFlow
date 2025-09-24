@@ -453,7 +453,7 @@ def main():
                 torch.save({'func_state_dict': func.state_dict()}, ckpt_path)
                 print('Iter {}, Stored ckpt at {}'.format(itr, ckpt_path))
                 
-            
+    
             
 
     except KeyboardInterrupt:
@@ -504,19 +504,28 @@ def main():
 
     save_adj_heat(jac, "TIGON", f"tigon_{args.backbone}", cmap="Reds")
 
+    def to_numpy(x):
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
+
+    def maskdiag_np(A):
+        A = to_numpy(A)
+        n = A.shape[0]
+        return A * (1 - np.eye(n, dtype=A.dtype))
+
     from sklearn.metrics import average_precision_score, roc_auc_score
 
     true_mat -= np.diag(np.diag(true_mat))
 
-    y_true  = (true_mat != 0).astype(int)
-    y_pred  = (jac != 0).astype(int)
+    y_true  = np.abs(np.sign(maskdiag_np(true_mat)).astype(int).flatten())
+    y_pred  = np.abs(maskdiag_np(jac).flatten())
 
     print(y_true, '\n', y_pred)
 
     ap = average_precision_score(y_true, y_pred)
     auc = roc_auc_score(y_true, y_pred)
     print(f"AP: {ap:.4f}, AUC: {auc:.4f}")
-
 
 
 if __name__ == "__main__":
