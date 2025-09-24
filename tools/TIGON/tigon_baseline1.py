@@ -41,7 +41,7 @@ _parser.add_argument("--num-samples", type=int, default=100,
                      help="#points to sample per epoch")
 # I/O
 _parser.add_argument("--input-dir", default="Input/")
-_parser.add_argument("--save-dir", default="Output/")
+_parser.add_argument("--save-dir", default="Output1/")
 _parser.add_argument("--gpu", type=int, default=0)
 _parser.add_argument("--seed", type=int, default=1)
 # misc
