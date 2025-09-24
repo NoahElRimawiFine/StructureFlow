@@ -16,7 +16,7 @@ for BACKBONE in "${BACKBONES[@]}"; do
   for SEED in "${SEEDS[@]}"; do
     echo "== SEED $SEED =="
     log="logs/${BACKBONE}_seed${SEED}.log"
-    CMD=(python3 -u tigon_baseline.py
+    CMD=(python3 -u tigon_baseline1.py
       --niters "$NITERS"
       --timepoints "$TIMEPOINTS"
       --hidden-dim "$HIDDENDIM"

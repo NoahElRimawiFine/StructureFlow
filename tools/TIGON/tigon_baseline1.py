@@ -496,7 +496,7 @@ def main():
     def save_adj_heat(mat, title, out_name, cmap="RdBu_r"):
         fig, ax = plt.subplots(figsize=(4, 4))
         im = ax.imshow(abs(mat), cmap=cmap, vmin=0, vmax=1)
-        ax.set_title(title); ax.invert_yaxis()
+        ax.set_title(title, fontsize=20); ax.invert_yaxis()
         fig.colorbar(im, ax=ax, shrink=0.8)
         fig.tight_layout()
         fig.savefig(f"{out_name}.pdf", dpi=300)
