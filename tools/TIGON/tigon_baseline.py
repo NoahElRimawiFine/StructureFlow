@@ -258,26 +258,29 @@ def validate_one_bin(func,
                      device):
     """
     • Generates model samples at t_star by integrating from the nearest
-      *observed* bin on the *training* side.
+      observed bin on the training side.
     • Returns Wasserstein-2 and MMD scores vs. the real cells in bin t_star.
     """
-    # ----- true cells -------------------------------------------------- #
     z_true = data_all[t_star]                               # (n_val, d)
     print(f"[INFO] validating bin {t_star} with {z_true.shape[0]} cells")
 
-    # ----- pick a 'source' bin to shoot from (nearest in time) --------- #
     src = min(train_bins, key=lambda t: abs(t - t_star))
     z_src = data_all[src]
     print(f"[INFO] using source bin {src} with {z_src.shape[0]} cells")
 
     # match sample sizes for fair comparison
-    n_val = z_true.shape[0]
-    idx   = torch.randperm(z_src.shape[0])[:n_val]
-    z0    = z_src[idx].clone().to(device)
+    n_src  = z_src.shape[0]
+    n_true = z_true.shape[0]
+    n      = min(n_src, n_true)
 
-    # dummy g, logp  (TIGON's signature)
-    g0  = torch.zeros(n_val, 1, device=device)
-    lp0 = torch.zeros_like(g0)
+    src_idx  = torch.randperm(n_src)[:n]
+    true_idx = torch.randperm(n_true)[:n]
+
+    z0     = z_src[src_idx].clone().to(device)  
+    z_true = z_true[true_idx].clone().to(device) 
+    # dummy g, logp (TIGON's signature)
+    g0  = torch.zeros(n, 1, device=device)
+    lp0 = torch.zeros(n, 1, device=device)
 
     # integrate flow  src_time  →  t_star
     opts = options.copy()
