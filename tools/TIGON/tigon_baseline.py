@@ -315,7 +315,7 @@ def main():
     true_mat = ds[0]["ref_network"].T
 
     all_metrics = []
-    Nt = len(coords_all)                   # number of time bins
+    Nt = len(coords_all)                   
     print(f"[INFO] {Nt} time bins found in the dataset")
     device = 'cpu'
     mse = nn.MSELoss()
