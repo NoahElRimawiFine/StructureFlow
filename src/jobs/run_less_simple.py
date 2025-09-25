@@ -46,8 +46,7 @@ import random
 
 matplotlib.use("Agg")
 
-# ░░░ CLI
-# ----------------------------------------------------------------
+
 parser = argparse.ArgumentParser()
 parser.add_argument("path", type=str,
                     help="Path to the WT replicate folder (dyn-TF-… or curated)")
@@ -61,8 +60,7 @@ parser.add_argument("--seed", type=int, default=None,
                     help="Random seed for reproducibility (default: None)")
 args = parser.parse_args()
 
-# ░░░ Run-level tags & folders
-# ----------------------------------------------------------------
+
 script_dir   = Path(__file__).resolve().parent
 dataset_name = Path(args.path).name                    # dyn-TF-1000-1
 regime_tag   = "full" if args.concat_all else "wt"     # wt | full
@@ -72,7 +70,7 @@ results_dir  = dataset_root / regime_tag               # <dataset>/wt or /full
 results_dir.mkdir(parents=True, exist_ok=True)
 random.seed(args.seed)
 
-# helper ─ save_csv -----------------------------------------------------------
+
 def save_csv(df: pd.DataFrame, stem: str, **to_csv_kwargs) -> Path:
     """
     Write <stem>_<regime>_<dataset>.csv BOTH in
@@ -91,8 +89,6 @@ def save_csv(df: pd.DataFrame, stem: str, **to_csv_kwargs) -> Path:
     return run_path
 
 
-# ░░░  Utility functions (unchanged)
-# ----------------------------------------------------------------
 def discover_replicates(backbone_dir: str) -> list[Path]:
     bb = Path(backbone_dir).resolve()
     backbone = bb.name
@@ -175,8 +171,6 @@ def plot_grns(grns: dict[str, np.ndarray],
     return fig
 
 
-# ░░░  Data loading
-# ----------------------------------------------------------------
 backbone = (
     Path(args.path).name.split("-")[0]
     if args.curated else Path(args.path).name.split("-")[1]
@@ -205,11 +199,9 @@ adata = (ad.concat(adatas, axis=0, join="inner", label="source",
                    keys=[p.name for p in paths], index_unique=None)
          if args.concat_all else adatas[0])
 
-# ░░░  Inference models
-# ----------------------------------------------------------------
+
 from dynGENIE3 import dynGENIE3
 
-# dynGENIE3 -------------------------------------------------------
 X = []
 t = []
 X.append(np.vstack([adata.X[adata.obs.t == t, :].mean(0) for t in np.sort(adata.obs.t.unique())]))
@@ -218,7 +210,6 @@ A_dyngenie3, _, _, _, _ =  dynGENIE3(X, t)
 save_csv(pd.DataFrame(A_dyngenie3, index=adata.var.index, columns=adata.var.index),
          f"A_dyngenie3_T{args.T}", header=False, index=False)
 
-# GLASSO ----------------------------------------------------------
 import sklearn as sk
 from sklearn import covariance, preprocessing
 gl = sk.covariance.GraphicalLassoCV().fit(sk.preprocessing.StandardScaler().fit_transform(adata.X))
