@@ -41,7 +41,7 @@ _parser.add_argument("--num-samples", type=int, default=100,
                      help="#points to sample per epoch")
 # I/O
 _parser.add_argument("--input-dir", default="Input/")
-_parser.add_argument("--save-dir", default="Output/")
+_parser.add_argument("--save-dir", default="Output1/")
 _parser.add_argument("--gpu", type=int, default=0)
 _parser.add_argument("--seed", type=int, default=1)
 # misc
@@ -258,29 +258,26 @@ def validate_one_bin(func,
                      device):
     """
     • Generates model samples at t_star by integrating from the nearest
-      observed bin on the training side.
+      *observed* bin on the *training* side.
     • Returns Wasserstein-2 and MMD scores vs. the real cells in bin t_star.
     """
+    # ----- true cells -------------------------------------------------- #
     z_true = data_all[t_star]                               # (n_val, d)
     print(f"[INFO] validating bin {t_star} with {z_true.shape[0]} cells")
 
+    # ----- pick a 'source' bin to shoot from (nearest in time) --------- #
     src = min(train_bins, key=lambda t: abs(t - t_star))
     z_src = data_all[src]
     print(f"[INFO] using source bin {src} with {z_src.shape[0]} cells")
 
     # match sample sizes for fair comparison
-    n_src  = z_src.shape[0]
-    n_true = z_true.shape[0]
-    n      = min(n_src, n_true)
+    n_val = z_true.shape[0]
+    idx   = torch.randperm(z_src.shape[0])[:n_val]
+    z0    = z_src[idx].clone().to(device)
 
-    src_idx  = torch.randperm(n_src)[:n]
-    true_idx = torch.randperm(n_true)[:n]
-
-    z0     = z_src[src_idx].clone().to(device)  
-    z_true = z_true[true_idx].clone().to(device) 
-    # dummy g, logp (TIGON's signature)
-    g0  = torch.zeros(n, 1, device=device)
-    lp0 = torch.zeros(n, 1, device=device)
+    # dummy g, logp  (TIGON's signature)
+    g0  = torch.zeros(n_val, 1, device=device)
+    lp0 = torch.zeros_like(g0)
 
     # integrate flow  src_time  →  t_star
     opts = options.copy()
@@ -315,7 +312,7 @@ def main():
     true_mat = ds[0]["ref_network"].T
 
     all_metrics = []
-    Nt = len(coords_all)                   
+    Nt = len(coords_all)                   # number of time bins
     print(f"[INFO] {Nt} time bins found in the dataset")
     device = 'cpu'
     mse = nn.MSELoss()
@@ -324,201 +321,210 @@ def main():
                            device=device)
               for t in range(Nt)] 
 
-    for t_star in range(1,4):
-         # configure training options
-        options = {}
-        options.update({'method': 'Dopri5'})
-        options.update({'h': None})
-        options.update({'rtol': 1e-3})
-        options.update({'atol': 1e-5})
-        options.update({'print_neval': False})
-        options.update({'neval_max': 1000000})
-        options.update({'safety': None})
+    # for t_star in range(1,4):
+    #      # configure training options
+    #     options = {}
+    #     options.update({'method': 'Dopri5'})
+    #     options.update({'h': None})
+    #     options.update({'rtol': 1e-3})
+    #     options.update({'atol': 1e-5})
+    #     options.update({'print_neval': False})
+    #     options.update({'neval_max': 1000000})
+    #     options.update({'safety': None})
 
-        print(f"\n===  Leaving out time bin {t_star}/{Nt-1}  ===")
+    #     print(f"\n===  Leaving out time bin {t_star}/{Nt-1}  ===")
 
-        # ---------------------------
-        # Data split
-        # ---------------------------
-        leave_1_out = [t_star]
-        train_time  = [t for t in range(Nt) if t not in leave_1_out]
-        print(f"Training on time bins: {train_time}")
+    #     # ---------------------------
+    #     # Data split
+    #     # ---------------------------
+    #     leave_1_out = [t_star]
+    #     train_time  = [t for t in range(Nt) if t not in leave_1_out]
+    #     print(f"Training on time bins: {train_time}")
 
-        data_train  = [torch.tensor(coords_all[t], dtype=torch.float32,
-                                    device=device) for t in train_time]
-        z_val       = torch.tensor(coords_all[t_star],
-                                dtype=torch.float32, device=device)
-        integral_time = [args.timepoints[t] for t in train_time]
+    #     data_train  = [torch.tensor(coords_all[t], dtype=torch.float32,
+    #                                 device=device) for t in train_time]
+    #     z_val       = torch.tensor(coords_all[t_star],
+    #                             dtype=torch.float32, device=device)
+    #     integral_time = [args.timepoints[t] for t in train_time]
 
-        func = UOT(in_out_dim=data_train[0].shape[1],
-                hidden_dim=args.hidden_dim,
-                n_hiddens=args.n_hiddens,
-                activation=args.activation).to(device)
-        func.apply(initialize_weights)
-        optimizer = optim.Adam(func.parameters(), lr=args.lr, weight_decay=0.01)
-        lr_adjust = optim.lr_scheduler.MultiStepLR(
-            optimizer, milestones=[args.niters-400, args.niters-200],
-            gamma=0.5, last_epoch=-1)
+    #     func = UOT(in_out_dim=data_train[0].shape[1],
+    #             hidden_dim=args.hidden_dim,
+    #             n_hiddens=args.n_hiddens,
+    #             activation=args.activation).to(device)
+    #     func.apply(initialize_weights)
+    #     optimizer = optim.Adam(func.parameters(), lr=args.lr, weight_decay=0.01)
+    #     lr_adjust = optim.lr_scheduler.MultiStepLR(
+    #         optimizer, milestones=[args.niters-400, args.niters-200],
+    #         gamma=0.5, last_epoch=-1)
 
-        sigma_now = 1.0
-        for itr in range(1, args.niters + 1):
-            optimizer.zero_grad()
-            loss, *_ = train_model(mse, func, args, data_all,
-                                train_time, integral_time,
-                                sigma_now, options, device, itr)
-            loss.backward()
-            optimizer.step()
-            lr_adjust.step()
-
-        metric_dict = validate_one_bin(func,
-                               data_train,
-                               t_star,
-                               train_time,
-                               args,
-                               options,
-                               device)
-        all_metrics.append(metric_dict)
-        print(f"bin {t_star}: WD2={metric_dict['WD2']:.4f} | MMD={metric_dict['MMD']:.4f}")
-    
-
-    # data_train = [torch.tensor(c, dtype=torch.float32, device='cuda' if torch.cuda.is_available() else 'cpu') for c in coords_all]
-    
-    # for i, arr in enumerate(coords_all):
-    #     print(f"bin {i}: {arr.shape[0]} cells   dim={arr.shape[1]}")
-    
-    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # print(f"[INFO] using device {device}")
-
-    # integral_time = args.timepoints
-
-    # time_pts = range(len(coords_all))
-    # leave_1_out = []
-    # train_time = [x for i,x in enumerate(time_pts) if i != leave_1_out]
-
-    # #model 
-    # func = UOT(in_out_dim=data_train[0].shape[1], hidden_dim=args.hidden_dim, n_hiddens=args.n_hiddens,
-    #            activation=args.activation).to(device)
-    # func.apply(initialize_weights)
-
-    #  # configure training options
-    # options = {}
-    # options.update({'method': 'Dopri5'})
-    # options.update({'h': None})
-    # options.update({'rtol': 1e-3})
-    # options.update({'atol': 1e-5})
-    # options.update({'print_neval': False})
-    # options.update({'neval_max': 100000})
-    # options.update({'safety': None})
-
-    # optimizer = optim.Adam(func.parameters(), lr=args.lr, weight_decay= 0.01)
-    # lr_adjust = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[args.niters-400,args.niters-200], gamma=0.5, last_epoch=-1)
-    # mse = nn.MSELoss()
-
-    # LOSS = []
-    # L2_1 = []
-    # L2_2 = []
-    # Trans = []
-    # Sigma = []
-    
-    # if args.save_dir is not None:
-    #     if not os.path.exists(args.save_dir):
-    #         os.makedirs(args.save_dir)
-    #     ckpt_path = Path(args.save_dir) / "ckpt.pth"
-    #     if os.path.exists(ckpt_path):
-    #         checkpoint = torch.load(ckpt_path)
-    #         func.load_state_dict(checkpoint['func_state_dict'])
-    #         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    #         print('Loaded ckpt from {}'.format(ckpt_path))
-
-    # try:
-    #     sigma_now = 1
+    #     sigma_now = 1.0
     #     for itr in range(1, args.niters + 1):
     #         optimizer.zero_grad()
-            
-    #         loss, loss1, sigma_now, L2_value1, L2_value2 = train_model(mse,func,args,data_train,train_time,integral_time,sigma_now,options,device,itr)
-
-            
+    #         loss, *_ = train_model(mse, func, args, data_all,
+    #                             train_time, integral_time,
+    #                             sigma_now, options, device, itr)
     #         loss.backward()
     #         optimizer.step()
     #         lr_adjust.step()
 
-    #         LOSS.append(loss.item())
-    #         Trans.append(loss1[-1].mean(0).item())
-    #         Sigma.append(sigma_now)
-    #         L2_1.append(L2_value1.tolist())
-    #         L2_2.append(L2_value2.tolist())
+    #     metric_dict = validate_one_bin(func,
+    #                            data_train,
+    #                            t_star,
+    #                            train_time,
+    #                            args,
+    #                            options,
+    #                            device)
+    #     all_metrics.append(metric_dict)
+    #     print(f"bin {t_star}: WD2={metric_dict['WD2']:.4f} | MMD={metric_dict['MMD']:.4f}")
+    
+
+    data_train = [torch.tensor(c, dtype=torch.float32, device='cuda' if torch.cuda.is_available() else 'cpu') for c in coords_all]
+    
+    for i, arr in enumerate(coords_all):
+        print(f"bin {i}: {arr.shape[0]} cells   dim={arr.shape[1]}")
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"[INFO] using device {device}")
+
+    integral_time = args.timepoints
+
+    time_pts = range(len(coords_all))
+    leave_1_out = []
+    train_time = [x for i,x in enumerate(time_pts) if i != leave_1_out]
+
+    #model 
+    func = UOT(in_out_dim=data_train[0].shape[1], hidden_dim=args.hidden_dim, n_hiddens=args.n_hiddens,
+               activation=args.activation).to(device)
+    func.apply(initialize_weights)
+
+     # configure training options
+    options = {}
+    options.update({'method': 'Dopri5'})
+    options.update({'h': None})
+    options.update({'rtol': 1e-3})
+    options.update({'atol': 1e-5})
+    options.update({'print_neval': False})
+    options.update({'neval_max': 100000})
+    options.update({'safety': None})
+
+    optimizer = optim.Adam(func.parameters(), lr=args.lr, weight_decay= 0.01)
+    lr_adjust = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[args.niters-400,args.niters-200], gamma=0.5, last_epoch=-1)
+    mse = nn.MSELoss()
+
+    LOSS = []
+    L2_1 = []
+    L2_2 = []
+    Trans = []
+    Sigma = []
+    
+    if args.save_dir is not None:
+        if not os.path.exists(args.save_dir):
+            os.makedirs(args.save_dir)
+        ckpt_path = Path(args.save_dir) / "ckpt.pth"
+        if os.path.exists(ckpt_path):
+            checkpoint = torch.load(ckpt_path)
+            func.load_state_dict(checkpoint['func_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            print('Loaded ckpt from {}'.format(ckpt_path))
+
+    try:
+        sigma_now = 1
+        for itr in range(1, args.niters + 1):
+            optimizer.zero_grad()
             
-    #         print('Iter: {}, loss: {:.4f}'.format(itr, loss.item()))
+            loss, loss1, sigma_now, L2_value1, L2_value2 = train_model(mse,func,args,data_train,train_time,integral_time,sigma_now,options,device,itr)
+
+            
+            loss.backward()
+            optimizer.step()
+            lr_adjust.step()
+
+            LOSS.append(loss.item())
+            Trans.append(loss1[-1].mean(0).item())
+            Sigma.append(sigma_now)
+            L2_1.append(L2_value1.tolist())
+            L2_2.append(L2_value2.tolist())
+            
+            print('Iter: {}, loss: {:.4f}'.format(itr, loss.item()))
             
             
-    #         if itr % 500 == 0:
-    #             ckpt_path = Path(args.save_dir) / "ckpt_itr{}.pth".format(itr)
-    #             torch.save({'func_state_dict': func.state_dict()}, ckpt_path)
-    #             print('Iter {}, Stored ckpt at {}'.format(itr, ckpt_path))
+            if itr % 500 == 0:
+                ckpt_path = Path(args.save_dir) / "ckpt_itr{}.pth".format(itr)
+                torch.save({'func_state_dict': func.state_dict()}, ckpt_path)
+                print('Iter {}, Stored ckpt at {}'.format(itr, ckpt_path))
                 
+    
             
-            
 
-    # except KeyboardInterrupt:
-    #     if args.save_dir is not None:
-    #         ckpt_path = Path(args.save_dir) / "ckpt.pth"
-    #         torch.save({
-    #             'func_state_dict': func.state_dict(),
-    #             'optimizer_state_dict': optimizer.state_dict(),
-    #         }, ckpt_path)
-    #         print('Stored ckpt at {}'.format(ckpt_path))
-    # print('Training complete after {} iters.'.format(itr))
+    except KeyboardInterrupt:
+        if args.save_dir is not None:
+            ckpt_path = Path(args.save_dir) / "ckpt.pth"
+            torch.save({
+                'func_state_dict': func.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+            }, ckpt_path)
+            print('Stored ckpt at {}'.format(ckpt_path))
+    print('Training complete after {} iters.'.format(itr))
     
     
-    # ckpt_path = Path(args.save_dir) / "ckpt.pth"
-    # torch.save({
-    #     'func_state_dict': func.state_dict(),
-    #     'optimizer_state_dict': optimizer.state_dict(),
-    #     'LOSS':LOSS,
-    #     'TRANS':Trans,
-    #     'L2_1': L2_1,
-    #     'L2_2': L2_2,
-    #     'Sigma': Sigma
-    # }, ckpt_path)
-    # print('Stored ckpt at {}'.format(ckpt_path))
+    ckpt_path = Path(args.save_dir) / "ckpt.pth"
+    torch.save({
+        'func_state_dict': func.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'LOSS':LOSS,
+        'TRANS':Trans,
+        'L2_1': L2_1,
+        'L2_2': L2_2,
+        'Sigma': Sigma
+    }, ckpt_path)
+    print('Stored ckpt at {}'.format(ckpt_path))
 
-    # if args.save_dir is not None:
-    #     if not os.path.exists(args.save_dir):
-    #         os.makedirs(args.save_dir)
-    #     ckpt_path = Path(args.save_dir) / "ckpt.pth"
-    #     if os.path.exists(ckpt_path):
-    #         checkpoint = torch.load(ckpt_path,map_location=torch.device('cpu'))
-    #         func.load_state_dict(checkpoint['func_state_dict'])
-    #         print('Loaded ckpt from {}'.format(ckpt_path))
+    if args.save_dir is not None:
+        if not os.path.exists(args.save_dir):
+            os.makedirs(args.save_dir)
+        ckpt_path = Path(args.save_dir) / "ckpt.pth"
+        if os.path.exists(ckpt_path):
+            checkpoint = torch.load(ckpt_path,map_location=torch.device('cpu'))
+            func.load_state_dict(checkpoint['func_state_dict'])
+            print('Loaded ckpt from {}'.format(ckpt_path))
     
-    # time_pt = 0
-    # z_t = data_train[time_pt]
-    # gene_list = adata_big.var.index.to_list()
-    # jac = plot_jac_v(func,z_t,time_pt,'Average_jac_d0.pdf', gene_list,args,device)
+    time_pt = 0
+    z_t = data_train[time_pt]
+    gene_list = adata_big.var.index.to_list()
+    jac = plot_jac_v(func,z_t,time_pt,'Average_jac_d0.pdf', gene_list,args,device)
 
-    # def save_adj_heat(mat, title, out_name, cmap="RdBu_r"):
-    #     fig, ax = plt.subplots(figsize=(4, 4))
-    #     im = ax.imshow(abs(mat), cmap=cmap, vmin=0, vmax=1)
-    #     ax.set_title(title); ax.invert_yaxis()
-    #     fig.colorbar(im, ax=ax, shrink=0.8)
-    #     fig.tight_layout()
-    #     fig.savefig(f"{out_name}.pdf", dpi=300)
-    #     plt.close(fig)
+    def save_adj_heat(mat, title, out_name, cmap="RdBu_r"):
+        fig, ax = plt.subplots(figsize=(4, 4))
+        im = ax.imshow(abs(mat), cmap=cmap, vmin=0, vmax=1)
+        ax.set_title(title, fontsize=20); ax.invert_yaxis()
+        fig.tight_layout()
+        fig.savefig(f"{out_name}.pdf", dpi=300)
+        plt.close(fig)
 
-    # save_adj_heat(jac, "TIGON", f"tigon_{args.backbone}", cmap="Reds")
+    save_adj_heat(jac, "TIGON", f"tigon_{args.backbone}", cmap="Reds")
 
-    # from sklearn.metrics import average_precision_score, roc_auc_score
+    def to_numpy(x):
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
 
-    # true_mat -= np.diag(np.diag(true_mat))
+    def maskdiag_np(A):
+        A = to_numpy(A)
+        n = A.shape[0]
+        return A * (1 - np.eye(n, dtype=A.dtype))
 
-    # y_true  = (true_mat != 0).astype(int)
-    # y_pred  = (jac != 0).astype(int)
+    from sklearn.metrics import average_precision_score, roc_auc_score
 
-    # print(y_true, '\n', y_pred)
+    true_mat -= np.diag(np.diag(true_mat))
 
-    # ap = average_precision_score(y_true, y_pred)
-    # auc = roc_auc_score(y_true, y_pred)
-    # print(f"AP: {ap:.4f}, AUC: {auc:.4f}")
+    y_true  = np.abs(np.sign(maskdiag_np(true_mat)).astype(int).flatten())
+    y_pred  = np.abs(maskdiag_np(jac).flatten())
+
+    print(y_true, '\n', y_pred)
+
+    ap = average_precision_score(y_true, y_pred)
+    auc = roc_auc_score(y_true, y_pred)
+    print(f"AP: {ap:.4f}, AUC: {auc:.4f}")
 
 
 if __name__ == "__main__":

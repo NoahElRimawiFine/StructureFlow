@@ -22,13 +22,13 @@ class BridgeMatcher:
         i, j = self.sample_map(pi, batch_size, replace=replace)
         return x0[i], x1[j]
 
-    def sample_bridge_and_flow(self, x0, x1, ts, sigma):
+    def sample_bridge_and_flow(self, x0, x1, ts, sigma, dt):
         # Sample Brownian bridges between paired entries of [x0, x1] at times ts \in [0, 1].
         means = (1 - ts) * x0 + ts * x1
         vars = (sigma**2) * ts * (1 - ts)
         x = means + torch.sqrt(vars.clamp_min(1e-8)) * torch.randn_like(x0)
         s = (-1 / vars.clamp_min(1e-8)) * (x - means)
-        u = (1 - 2 * ts) / (2 * ts * (1 - ts) + 1e-8) * (x - means) + x1 - x0
+        u = (1 - 2 * ts) / (2 * ts * (1 - ts) + 1e-8) * (x - means)  + x1 - x0
         return means, vars, x, s, u
 
 
@@ -129,7 +129,7 @@ class EntropicOTFM:
                     )
                 ts = torch.rand_like(x0[:, :1])
                 _, _, x, s, u = self.bm.sample_bridge_and_flow(
-                    x0, x1, ts, (self.sigma**2 * self.dt) ** 0.5
+                    x0, x1, ts, (self.sigma**2 * self.dt) ** 0.5, self.dt
                 )
                 _x.append(x)
                 _s.append(s)

@@ -116,9 +116,7 @@ def generate_heatmaps(
     # vmax_cap: float  = 4.0,           # clip colour‑bar if matrices vary a lot
     normalise: str | None = "minimax"
 ) -> None:
-    """
-    Walk *source* and emit two PDFs per dataset: WT and FULL.
-    """
+
     out_root = Path(output_base_dir)
     out_root.mkdir(parents=True, exist_ok=True)
 
@@ -130,20 +128,17 @@ def generate_heatmaps(
     else:
         raise ValueError(f"{source!r} is neither a directory nor a CSV file")
 
-    # 2 b. group by (dataset, cond) – separate WT / FULL
     groups: Dict[Tuple[str, str], List[str]] = {}
     for p in csv_paths:
         title, _, ds, cond = extract_model_and_dataset(p)
-        cond_key = cond or "TRUE"          # special tag for ground‑truth
+        cond_key = cond or "TRUE"         
         groups.setdefault((ds, cond_key), []).append(p)
 
-    # 2 c. replicate the TRUE graph into every other cond group
     for (ds, cond), lst in list(groups.items()):
         if cond == "TRUE":
             for target_cond in ("WT", "FULL"):
                 groups.setdefault((ds, target_cond), []).extend(lst)
 
-    # 2 d. build one figure per (dataset, cond) except the standalone TRUE key
     for (dataset, cond), paths in groups.items():
         if cond == "TRUE":                 # we embedded this already
             continue
@@ -202,7 +197,6 @@ def generate_heatmaps(
         )
         cax.set_ylabel("Interaction strength", fontsize=35)
 
-        # ---- save -----------------------------------------------------------
         ds_dir   = out_root / dataset
         ds_dir.mkdir(parents=True, exist_ok=True)
         out_pdf  = ds_dir / f"{dataset}_{cond}_HEATMAPS.pdf"
@@ -211,12 +205,9 @@ def generate_heatmaps(
 
         print(f"✔ Saved {out_pdf}")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 3. entry‑point
-# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     generate_heatmaps(
-        source="./results-curated/HSC/",     # <‑‑ your results folder
+        source="./results-curated/HSC/", 
         output_base_dir="heatmaps",
         cmap="Reds"
     )

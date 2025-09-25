@@ -476,11 +476,23 @@ def simulate_trajectory(
 
             def f(self, t, x):
                 t_batch = torch.full((x.shape[0],), t.item(), device=x.device)
-                flow_out = self.flow_model(t_batch, x.unsqueeze(1), dataset_idx).squeeze(1)
+                if dataset_idx is not None:
+                    flow_out = self.flow_model(t_batch, x.unsqueeze(1), dataset_idx).squeeze(1)
+                else:
+                    flow_out = self.flow_model(t_batch, x.unsqueeze(1)).squeeze(1)
                 corr_out = torch.zeros_like(x)
                 if self.corr_model is not None and hasattr(self.corr_model, 'parameters') and list(self.corr_model.parameters()):
                     corr_out = self.corr_model(t_batch.unsqueeze(1), x)
-                return flow_out + corr_out
+                out = flow_out + corr_out
+                if out.dim() == 4:                            # [E, B, M, D]
+                    out = out.mean(dim=(0, 2))                # → [B, D]
+                elif out.dim() == 3:                          # [E, B, D]
+                    out = out.mean(dim=0)                     # → [B, D]
+                elif out.dim() == 2:                          # already [B, D]
+                    pass
+                else:
+                    raise RuntimeError(f"Unexpected flow_model output shape: {out.shape}")
+                return out
 
             def g(self, t, x):
                 return 0.1 * torch.ones_like(x)
@@ -492,12 +504,24 @@ def simulate_trajectory(
     else:
         def ode_func(t, x):
             t_batch = torch.full((x.shape[0],), t.item(), device=x.device)
-            flow_out = flow_model(t_batch, x.unsqueeze(1), dataset_idx).squeeze(1)
+            if dataset_idx is not None:
+                flow_out = flow_model(t_batch, x.unsqueeze(1), dataset_idx).squeeze(1)
+            else:
+                flow_out = flow_model(t_batch, x.unsqueeze(1)).squeeze(1)
             corr_out = torch.zeros_like(x)
             if corr_model is not None and hasattr(corr_model, 'parameters') and list(corr_model.parameters()):
                 corr_out = corr_model(t_batch.unsqueeze(1), x)
             score_out = score_model(t_batch, x, cond_vector)
-            return flow_out + corr_out + (sigma**2 / 2) * score_out
+            out = flow_out + (sigma**2 / 2) * score_out
+            if out.dim() == 4:                            # [E, B, M, D]
+                out = out.mean(dim=(0, 2))                # → [B, D]
+            elif out.dim() == 3:                          # [E, B, D]
+                out = out.mean(dim=0)                     # → [B, D]
+            elif out.dim() == 2:                          # already [B, D]
+                pass
+            else:
+                raise RuntimeError(f"Unexpected flow_model output shape: {out.shape}")
+            return out
 
         with torch.no_grad():
             trajectory = odeint(ode_func, x0, ts, method="euler")

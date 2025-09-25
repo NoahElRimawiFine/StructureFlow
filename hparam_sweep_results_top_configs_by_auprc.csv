@@ -1,8 +1,0 @@
-,,,,,,StructureFlow_AUROC,StructureFlow_AUROC,StructureFlow_AUROC,StructureFlow_AUPRC,StructureFlow_AUPRC,StructureFlow_training_time,StructureFlow_training_time
-,,,,,,mean,std,count,mean,std,mean,std
-hparam_n_steps,hparam_batch_size,hparam_reg,hparam_alpha,hparam_lr,hparam_knockout_hidden,,,,,,,
-4000,64,1e-07,0.3,0.0005,256,0.9183,,1,0.427,,561.7103,
-4000,64,5e-07,0.3,0.0005,256,0.6147,,1,0.1875,,570.2864,
-4000,64,1e-06,0.3,0.0005,256,0.5,,1,0.05,,552.3416,
-4000,64,5e-06,0.3,0.0005,256,0.5,,1,0.05,,7788.1557,
-4000,64,5e-05,0.3,0.0005,256,0.5,,1,0.05,,580.957,

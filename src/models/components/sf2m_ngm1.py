@@ -10,10 +10,19 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from src.datamodules.components import sc_dataset as util
-from src.models.components.base import MLPODEFKO
+from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
+from src.models.components.base import MLPODEFKO, KOGraph
+from src.models.components.bayesian_drift import BayesianDrift
 from src.models.components.cond_mlp import MLP as CONDMLP
 from src.models.components.optimal_transport import EntropicOTFM
 from src.models.components.simple_mlp import MLP
+from src.models.components.solver import TrajectorySolver, simulate_trajectory, wasserstein
+from src.models.components.plotting import log_causal_graph_matrices
+import sys, os, time, pathlib
+from pathlib import Path
+import wandb
+print("TOP-LEVEL IMPORT OK, cwd =", os.getcwd(), file=sys.stderr)
+sys.stderr.flush()
 
 T = 5
 dataset = "dyn-TF"
@@ -27,6 +36,17 @@ if torch.cuda.is_available():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+def proximal(w, dims, lam=0.1, eta=0.1):
+    """Proximal operator used for group-lasso style regularization in the hidden weights."""
+    with torch.no_grad():
+        d = dims[0]
+        d_hidden = dims[1]
+        wadj = w.view(d, d_hidden, d)
+        tmp = torch.sum(wadj**2, dim=1).sqrt() - lam * eta
+        alpha_ = torch.clamp(tmp, min=0)
+        v_ = F.normalize(wadj, dim=1) * alpha_[:, None, :]
+        w.copy_(v_.view(-1, d))
+
 
 class SF2MNGM(nn.Module):
     """Encapsulates the NGM training pipeline for flow+score matching in one PyTorch module."""
@@ -39,6 +59,8 @@ class SF2MNGM(nn.Module):
         dt=0.1,
         batch_size=64,
         alpha=0.5,
+        dyn_alpha=0.1,
+        dyn_hidden=4,
         reg=1e-5,
         correction_reg_strength=1e-3,
         n_steps=2000,
@@ -86,6 +108,8 @@ class SF2MNGM(nn.Module):
         self.correction_reg_strength = correction_reg_strength
         self.n_steps = n_steps
         self.lr = lr
+        self.dyn_alpha = dyn_alpha
+        self.dyn_hidden = dyn_hidden
 
         # -----------------------
         # 1. Load the data
@@ -99,13 +123,17 @@ class SF2MNGM(nn.Module):
         self.ko_indices = self.data_loader.ko_indices
         self.true_matrix = self.data_loader.true_matrix.values
 
+        self.adatas = [self.adatas[0]] # DEBUG: use only first dataset
+
         # Example shape from the first dataset
         self.n_genes = self.adatas[0].X.shape[1]
 
-        # -----------------------
-        # 2. Build conditionals
-        # -----------------------
-        # For each dataset, build a one-hot vector that indicates which knockout it belongs to
+        wandb.init(project="sf2m-grn", config=dict(T=self.T, d=self.n_genes, model="BayesianDrift"))
+        wandb.define_metric("trainer/step")
+        wandb.define_metric("traj/*", step_metric="trainer/step")
+        wandb.define_metric("loss/*", step_metric="trainer/step")
+        wandb.define_metric("grn/*",  step_metric="trainer/step")
+
         self.conditionals = []
         for i, ko_name in enumerate(self.kos):
             cond_matrix = torch.zeros(self.batch_size, self.n_genes)
@@ -113,23 +141,30 @@ class SF2MNGM(nn.Module):
                 cond_matrix[:, self.ko_indices[i]] = 1
             self.conditionals.append(cond_matrix)
 
-        # -----------------------
-        # 3. Build knockout masks
-        # -----------------------
         self.knockout_masks = []
         for i, adata in enumerate(self.adatas):
             d = adata.X.shape[1]
             mask_i = self.build_knockout_mask(d, self.ko_indices[i])
             self.knockout_masks.append(mask_i)
 
-        # -----------------------
-        # 4. Create the models
-        # -----------------------
-        # Dimensions for MLPODEFKO
-        self.dims = [self.n_genes, knockout_hidden, 1]
-        self.func_v = MLPODEFKO(
-            dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
-        )
+        self.dims = [self.n_genes, 100, 1]
+        # self.func_v = MLPODEFKO(
+        #     dims=self.dims, GL_reg=GL_reg, bias=True, knockout_masks=self.knockout_masks
+        # ).to(self.device)
+        # self.func_v = BayesianDrift(
+        #     dims=self.dims, 
+        #     n_ens=100, 
+        #     deepens=True, 
+        #     time_invariant=True, 
+        #     k_hidden=dyn_hidden,
+        #     alpha=self.dyn_alpha,
+        #     knockout_masks=self.knockout_masks,
+        #     step=0,
+        #     hyper="mlp",
+        # ).to(self.device)
+        self.func_v = KOGraph(
+            dims=self.dims,
+        ).to(device)
 
         self.score_net = CONDMLP(
             d=self.n_genes,
@@ -137,27 +172,20 @@ class SF2MNGM(nn.Module):
             time_varying=True,
             conditional=True,
             conditional_dim=self.n_genes,
-        )
+        ).to(self.device)
 
         self.v_correction = MLP(
             d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True
-        )
+        ).to(self.device)
 
-        # -----------------------
-        # 5. Build OTFMs
-        # -----------------------
         self.otfms = self.build_entropic_otfms(
             self.adatas, T=self.T, sigma=self.sigma, dt=self.dt
         )
 
-        # Move models to device
         self.func_v.to(self.device)
         self.score_net.to(self.device)
         self.v_correction.to(self.device)
 
-        # -----------------------
-        # 6. Setup optimizer
-        # -----------------------
         self.optimizer = torch.optim.AdamW(
             list(self.func_v.parameters())
             + list(self.score_net.parameters())
@@ -172,9 +200,6 @@ class SF2MNGM(nn.Module):
         self.reg_loss_history = []
         self.reg_corr_loss_history = []
 
-    # -------------------------------------------------------------------------
-    # Supporting methods
-    # -------------------------------------------------------------------------
     def build_knockout_mask(self, d, ko_idx):
         """Build a [d, d] adjacency mask for a knockout of gene ko_idx.
 
@@ -208,27 +233,6 @@ class SF2MNGM(nn.Module):
             otfms.append(model)
         return otfms
 
-    def proximal(self, w, dims, lam=0.1, eta=0.1):
-        """Proximal operator used for group-lasso style regularization in the hidden weights."""
-        with torch.no_grad():
-            d = dims[0]
-            d_hidden = dims[1]
-            wadj = w.view(d, d_hidden, d)
-            tmp = torch.sum(wadj**2, dim=1).sqrt() - lam * eta
-            alpha_ = torch.clamp(tmp, min=0)
-            v_ = F.normalize(wadj, dim=1) * alpha_[:, None, :]
-            w.copy_(v_.view(-1, d))
-
-    def mlp_l2_reg(self, mlp):
-        """Compute L2 sum of parameters for a generic MLP."""
-        l2_sum = 0.0
-        for param in mlp.parameters():
-            l2_sum += torch.sum(param**2)
-        return l2_sum
-
-    # -------------------------------------------------------------------------
-    # Core training loop
-    # -------------------------------------------------------------------------
     def train_model(self, skip_time=None):
         """Combine flow matching + score matching with multiple datasets."""
         # Just a shorthand
@@ -236,10 +240,12 @@ class SF2MNGM(nn.Module):
         func_s = self.score_net
         v_correction = self.v_correction
         optim = self.optimizer
+        LOG_CSV = Path("traj_metrics.csv")
 
         for i in tqdm(range(self.n_steps)):
             # Randomly pick which dataset to train on
-            ds_idx = np.random.randint(0, len(self.adatas))
+            #ds_idx = np.random.randint(0, len(self.adatas))
+            ds_idx = 0  # For debugging with single dataset
             model = self.otfms[ds_idx]
             cond_vector = self.conditionals[ds_idx].to(self.device)
 
@@ -255,72 +261,168 @@ class SF2MNGM(nn.Module):
 
             optim.zero_grad()
 
-            # Prepare inputs
             s_input = _x.unsqueeze(1)
             v_input = _x.unsqueeze(1)
             t_input = _t.unsqueeze(1)
             B = _x.shape[0]
 
-            # Expand conditional vectors to match batch size
             cond_expanded = cond_vector.repeat(B // cond_vector.shape[0] + 1, 1)[:B]
 
             # Score net output
             s_fit = func_s(_t, _x, cond_expanded).squeeze(1)
 
-            # Flow net output, with or without correction
-            if i <= 500:
-                # Warmup phase
-                v_fit = func_v(t_input, v_input).squeeze(1) - (
-                    model.sigma**2 / 2
-                ) * func_s(_t, _x, cond_expanded)
-            else:
-                # Full training phase with correction
-                v_fit = func_v(t_input, v_input).squeeze(1) + v_correction(_t, _x)
-                v_fit = v_fit - (model.sigma**2 / 2) * func_s(_t, _x, cond_expanded)
+            # Flow net output
+            v_fit = func_v(t_input, v_input, ds_idx, step=i).squeeze(1) - (
+                model.sigma**2 / 2
+            ) * func_s(_t, _x, cond_expanded)
 
             # Losses
             L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
             L_flow = torch.mean((v_fit * model.dt - _u) ** 2)
-            L_reg = func_v.l2_reg() + func_v.fc1_reg()
-            L_reg_correction = self.mlp_l2_reg(v_correction)
-
-            if i < 100:
-                # Train only score initially
-                L = self.alpha * L_score
-            elif i <= 500:
-                # Mix score + flow + small reg
-                L = self.alpha * L_score + (1 - self.alpha) * L_flow + self.reg * L_reg
+            if isinstance(func_v, MLPODEFKO):
+                L_reg = func_v.l2_reg() + func_v.fc1_reg()
             else:
-                # Full combined loss with correction reg
-                L = (
-                    self.alpha * L_score
-                    + (1 - self.alpha) * L_flow
-                    + self.reg * L_reg
-                    + self.correction_reg_strength * L_reg_correction
-                )
+                L_reg = func_v.l2_reg() + func_v.l1_reg()
+            if i < 100:
+                L = self.alpha * L_score
+            else:
+                L = self.alpha * L_score + (1 - self.alpha) * L_flow + self.reg * L_reg
 
             # Bookkeeping
             self.loss_history.append(L.item())
             self.score_loss_history.append(L_score.item())
             self.flow_loss_history.append(L_flow.item())
-            self.reg_loss_history.append(L_reg.item())
-            self.reg_corr_loss_history.append(L_reg_correction.item())
+            self.reg_loss_history.append(L_reg.item() if isinstance(L_reg, torch.Tensor) else 0.0)
+            wandb.log({
+                "trainer/step": i,
+                "loss/train": float(L.item()),
+                "loss/score": float(L_score.item()),
+                "loss/flow": float(L_flow.item()),
+            }, step=i)
 
             if i % 100 == 0:
                 print(
                     f"Step={i}, ds={ds_idx}, "
                     f"L_score={L_score.item():.4f}, L_flow={L_flow.item():.4f}, "
-                    f"Reg(Flow)={L_reg.item():.4f}, Reg(Corr)={L_reg_correction.item():.4f}"
+                    f"Reg(Flow)={0.0}" 
                 )
+                sys.stdout.flush()
+                #{L_reg.item():.4f}
 
-            # Backprop and update
+            if i % 500 == 0:
+                with torch.no_grad():
+                    per_time = []  # list of {'Time': t, 'Avg ODE': float, 'Avg SDE': float}
+
+                    for t_bin in range(1, self.T):
+                        per_ds = []
+                        for ds_idx, adata in enumerate(self.adatas):
+                            x0 = torch.from_numpy(adata.X[adata.obs["t"] == t_bin - 1]).float()
+                            true_dist = torch.from_numpy(adata.X[adata.obs["t"] == t_bin]).float()
+
+                            if len(x0) == 0 or len(true_dist) == 0:
+                                continue
+
+                            dev = next(self.func_v.parameters()).device
+                            x0 = x0.to(dev)
+                            true_dist = true_dist.to(dev)
+
+                            cond_vector = self.conditionals[ds_idx]
+                            if cond_vector is not None:
+                                cond_vector = cond_vector[0].repeat(len(x0), 1).to(dev)
+
+                            traj_ode = simulate_trajectory(
+                                self.func_v, self.v_correction, self.score_net,
+                                x0, dataset_idx=None, start_time=t_bin - 1, end_time=t_bin,
+                                n_times=min(len(x0), len(true_dist)),
+                                cond_vector=cond_vector, device=dev,
+                            )
+                            traj_sde = simulate_trajectory(
+                                self.func_v, self.v_correction, self.score_net,
+                                x0, dataset_idx=None, start_time=t_bin - 1, end_time=t_bin,
+                                n_times=min(len(x0), len(true_dist)),
+                                cond_vector=cond_vector, use_sde=True, device=dev,
+                            )
+
+                            pred_ode = traj_ode[-1].detach().cpu()
+                            pred_sde = traj_sde[-1].detach().cpu()
+                            td_cpu   = true_dist.detach().cpu()
+
+                            w_dist_ode = wasserstein(pred_ode, td_cpu)
+                            w_dist_sde = wasserstein(pred_sde, td_cpu)
+                            per_ds.append((w_dist_ode, w_dist_sde))
+
+                        if per_ds:
+                            avg_ode = float(np.mean([a for a, _ in per_ds]))
+                            avg_sde = float(np.mean([b for _, b in per_ds]))
+                        else:
+                            avg_ode = np.nan
+                            avg_sde = np.nan
+
+                        per_time.append({"Time": t_bin, "Avg ODE": avg_ode, "Avg SDE": avg_sde})
+                        print(f"  Time {t_bin}: Avg ODE W={avg_ode}, Avg SDE W={avg_sde}")
+                        sys.stdout.flush()
+
+                    step_rows = []
+                    for row in per_time:
+                        t_bin = row["Time"]
+                        step_rows.append({"Step": i, "Time": t_bin, "Kind": "ODE", "Value": row["Avg ODE"]})
+                        step_rows.append({"Step": i, "Time": t_bin, "Kind": "SDE", "Value": row["Avg SDE"]})
+                    df_step = pd.DataFrame(step_rows)
+                    write_header = not LOG_CSV.exists()
+                    df_step.to_csv(LOG_CSV, mode="a", header=write_header, index=False)
+
+                    if wandb.run is not None:
+                        log = {"trainer/step": i}
+                        ode_vals, sde_vals = [], []
+
+                        for row in per_time:
+                            t = row["Time"]
+                            v_ode = row["Avg ODE"]
+                            v_sde = row["Avg SDE"]
+
+                            if v_ode is not None and not np.isnan(v_ode):
+                                log[f"traj/ODE/t{t}"] = float(v_ode)
+                                ode_vals.append(v_ode)
+                            if v_sde is not None and not np.isnan(v_sde):
+                                log[f"traj/SDE/t{t}"] = float(v_sde)
+                                sde_vals.append(v_sde)
+
+                        if ode_vals:
+                            log["traj/ODE/mean"] = float(np.mean(ode_vals))
+                        if sde_vals:
+                            log["traj/SDE/mean"] = float(np.mean(sde_vals))
+
+                        wandb.log(log, step=i, commit=False)
+                        if isinstance(self.func_v, BayesianDrift) or isinstance(self.func_v, KOGraph):
+                            W_v = self.func_v.get_structure()
+                            if W_v.ndim == 3:
+                                W_v = W_v[0]
+                        else:
+                            W_v = self.func_v.causal_graph(w_threshold=0.0)
+
+                        A_true = self.true_matrix
+                        log_causal_graph_matrices(None, W_v, A_true, logger=None, global_step=i)
+                        wandb.log({}, step=i, commit=True)
+
             L.backward()
             optim.step()
 
-            # Proximal step (group-lasso style)
-            self.proximal(func_v.fc1.weight, func_v.dims, lam=func_v.GL_reg, eta=0.01)
+            if isinstance(func_v, MLPODEFKO):
+                proximal(
+                    self.func_v.fc1.weight,
+                    self.func_v.dims,
+                    lam=self.func_v.GL_reg,
+                    eta=0.01,
+                )
 
         print("Training complete.")
+
+        if wandb.run is not None:
+            try:
+                last_ode_mean = float(np.nanmean([r["Avg ODE"] for r in per_time]))
+            except Exception:
+                last_ode_mean = float(np.nan)
+            wandb.run.summary["traj/ODE/mean"] = last_ode_mean
 
     def forward(self, t, x):
         """
@@ -335,134 +437,106 @@ class SF2MNGM(nn.Module):
         return out.squeeze(1)
 
 
-# def main():
-#     model = SF2MNGM(
-#         data_path="data/",
-#         dataset_type="Synthetic",
-#         T=5,
-#         sigma=1.0,
-#         dt=0.2,
-#         batch_size=164,
-#         alpha=0.1,
-#         reg=1e-5,
-#         correction_reg_strength=1e-3,
-#         n_steps=15000,
-#         lr=3e-3,
-#         device=None  # Auto-detect
-#     )
+def main():
+    print("ENTERED main()", file=sys.stderr)
+    sys.stderr.flush()
+    time.sleep(2)
 
-#     model.train_model(skip_time=None)
-#     n=8
+    model = SF2MNGM(
+        datamodule=TrajectoryStructureDataModule(dataset="dyn-TF"),
+        T=5,
+        sigma=1.0,
+        dt=0.2,
+        batch_size=164,
+        alpha=0.1,
+        dyn_alpha=0.05,
+        dyn_hidden=8,
+        reg=0,
+        correction_reg_strength=1e-3,
+        n_steps=10000,
+        lr=1e-4,
+        device=None  # Auto-detect
+    )
 
-#     def maskdiag(A):
-#         return A * (1 - np.eye(n))
+    model.train_model(skip_time=None)
+    n=8
 
-#     import matplotlib.pyplot as plt
+    def maskdiag(A):
+        return A * (1 - np.eye(n))
 
-#     def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
-#         """Compute a single adjacency from a big set of states across all datasets.
+    import matplotlib.pyplot as plt
 
-#         Returns a [d, d] numpy array representing an average Jacobian.
-#         """
+    # with torch.no_grad():
+    #     A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=1 / T, device=torch.device("cpu"))
 
-#         all_x_list = []
-#         for ds_idx, adata in enumerate(adatas):
-#             x0 = adata.X[adata.obs["t"] == 0]
-#             all_x_list.append(x0)
-#         if len(all_x_list) == 0:
-#             return None
+    def to_numpy(x):
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
 
-#         X_all = np.concatenate(all_x_list, axis=0)
-#         if X_all.shape[0] == 0:
-#             return None
+    def maskdiag_np(A):
+        A = to_numpy(A)
+        n = A.shape[0]
+        return A * (1 - np.eye(n, dtype=A.dtype))
 
-#         X_all_torch = torch.from_numpy(X_all).float().to(device)
+    # plot loss history
+    plt.figure(figsize=(8, 5))
+    plt.plot(model.loss_history, label="Total Loss")
+    plt.plot(model.score_loss_history, label="Score Loss")
+    plt.plot(model.flow_loss_history, label="Flow Loss")
+    plt.yscale("log")
+    plt.xlabel("Training Step")
+    plt.ylabel("Loss")
+    plt.title("Training Loss History")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("training_loss_history.png")
+    plt.show()
 
-#         def get_flow(t, x):
-#             x_input = x.unsqueeze(0).unsqueeze(0)
-#             t_input = t.unsqueeze(0).unsqueeze(0)
-#             return v(t_input, x_input).squeeze(0).squeeze(0)
+    W_v = model.func_v.get_structure()
 
-#         # Or loop over multiple times if the model is time-varying
-#         t_val = torch.tensor(0.0).to(device)
+    if W_v.ndim == 3:
+        W_v = W_v[0]
+    A_true = to_numpy(model.true_matrix)
 
-#         Ju = torch.func.jacrev(get_flow, argnums=1)
+    np.savetxt("A_estim_mlpoef.txt", maskdiag_np(W_v), fmt="%.6f")
 
-#         Js = []
+    # Display both the estimated adjacency matrix and the learned causal graph
+    plt.figure(figsize=(15, 5))
+    plt.subplot(1, 3, 2)
+    plt.imshow(maskdiag_np(W_v.T), cmap="Reds")
+    plt.gca().invert_yaxis()
+    plt.title("Causal Graph (from MLPODEF)")
+    plt.colorbar()
+    plt.subplot(1, 3, 3)
+    plt.imshow(maskdiag(A_true), vmin=-1, vmax=1, cmap="RdBu_r")
+    plt.gca().invert_yaxis()
+    plt.title("A_true")
+    plt.colorbar()
+    plt.tight_layout()
+    plt.savefig("causal_graph_mlpodef.png")
+    plt.show()
 
-#         batch_size = 256
-#         for start in range(0, X_all_torch.shape[0], batch_size):
-#             end = start + batch_size
-#             batch_x = X_all_torch[start:end]
+    from sklearn.metrics import precision_recall_curve, average_precision_score
+    plt.figure(figsize=(12, 5))
+    y_true = np.abs(np.sign(maskdiag(A_true)).astype(int).flatten())
+    # For MLPODEF-based estimation
+    plt.subplot(1, 2, 2)
+    y_pred_mlp = np.abs(maskdiag_np(W_v).flatten())
+    prec, rec, thresh = precision_recall_curve(y_true, y_pred_mlp)
+    avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
+    plt.plot(rec, prec, label=f"MLPODEF-based (AP = {avg_prec_mlp:.2f})")
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.title(
+        f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp/np.mean(np.abs(A_true) > 0)}"
+    )
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("pr_curve_mlpoef.png")
+    plt.show()
 
-#             J_local = torch.vmap(lambda x: Ju(t_val, x))(batch_x)
-#             J_avg = J_local.mean(dim=0)
-#             Js.append(J_avg)
-
-#         if len(Js) == 0:
-#             return None
-#         J_final = torch.stack(Js, dim=0).mean(dim=0)
-
-#         A_est = J_final
-
-#         return A_est.detach().cpu().numpy().T
-
-#     with torch.no_grad():
-#         A_estim = compute_global_jacobian(model.func_v, model.adatas, dt=1 / T, device=torch.device("cpu"))
-
-#     W_v = model.func_v.causal_graph(w_threshold=0.0).T
-#     A_true = model.true_matrix
-
-#     # Display both the estimated adjacency matrix and the learned causal graph
-#     plt.figure(figsize=(15, 5))
-#     plt.subplot(1, 3, 1)
-#     plt.imshow(maskdiag(A_estim), vmin=-0.5, vmax=0.5, cmap="RdBu_r")
-#     plt.gca().invert_yaxis()
-#     plt.title("A_estim (from Jacobian)")
-#     plt.colorbar()
-#     plt.subplot(1, 3, 2)
-#     plt.imshow(maskdiag(W_v), cmap="Reds")
-#     plt.gca().invert_yaxis()
-#     plt.title("Causal Graph (from MLPODEF)")
-#     plt.colorbar()
-#     plt.subplot(1, 3, 3)
-#     plt.imshow(maskdiag(A_true), vmin=-1, vmax=1, cmap="RdBu_r")
-#     plt.gca().invert_yaxis()
-#     plt.title("A_true")
-#     plt.colorbar()
-#     plt.tight_layout()
-#     plt.show()
-
-#     maskdiag(W_v)
-
-#     from sklearn.metrics import precision_recall_curve, average_precision_score
-#     plt.figure(figsize=(12, 5))
-#     # For Jacobian-based estimation
-#     plt.subplot(1, 2, 1)
-#     y_true = np.abs(np.sign(maskdiag(A_true)).astype(int).flatten())
-#     y_pred = np.abs(maskdiag(A_estim).flatten())
-#     prec, rec, thresh = precision_recall_curve(y_true, y_pred)
-#     avg_prec = average_precision_score(y_true, y_pred)
-#     plt.plot(rec, prec, label=f"Jacobian-based (AP = {avg_prec:.2f})")
-#     plt.xlabel("Recall")
-#     plt.ylabel("Precision")
-#     plt.title(
-#         f"Precision-Recall Curve (Jacobian)\nAUPR ratio = {avg_prec/np.mean(np.abs(A_true) > 0)}"
-#     )
-#     plt.legend()
-#     plt.grid(True)
-#     # For MLPODEF-based estimation
-#     plt.subplot(1, 2, 2)
-#     y_pred_mlp = np.abs(maskdiag(W_v).flatten())
-#     prec, rec, thresh = precision_recall_curve(y_true, y_pred_mlp)
-#     avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
-#     plt.plot(rec, prec, label=f"MLPODEF-based (AP = {avg_prec_mlp:.2f})")
-#     plt.xlabel("Recall")
-#     plt.ylabel("Precision")
-#     plt.title(
-#         f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp/np.mean(np.abs(A_true) > 0)}"
-#     )
-#     plt.legend()
-#     plt.grid(True)
-#     plt.tight_layout()
-#     plt.show()
+if __name__ == "__main__":
+    main()

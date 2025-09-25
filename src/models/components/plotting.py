@@ -7,7 +7,7 @@ import pandas as pd
 import scprep
 import seaborn as sb
 import torch
-from sklearn.metrics import average_precision_score, precision_recall_curve
+from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score
 
 
 def plot_scatter(obs, model, title="fig", wandb_logger=None):
@@ -324,6 +324,16 @@ def maskdiag(A):
         
     return A_masked
 
+def to_numpy(x):
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
+
+def maskdiag_np(A):
+    A = to_numpy(A)
+    n = A.shape[0]
+    return A * (1 - np.eye(n, dtype=A.dtype))
+
 
 def plot_aupr_curve(A_true, W_v, prefix="val"):
     """Plots the precision-recall curve based on the true and estimated adjacency matrices.
@@ -518,13 +528,18 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0, m
     print("AUPR ratio: ", avg_prec_mlp / np.mean(np.abs(masked_true_graph) > 0))
 
 
-def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0, mask_diagonal=True):
+def log_causal_graph_matrices(A_estim=None, W_v=None, A_true=None, logger=None, global_step=0, mask_diagonal=True, prefix="grn/"):
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
 
     # Apply masking based on parameter
-    A_estim_plot = maskdiag(A_estim) if mask_diagonal else A_estim
-    W_v_plot = maskdiag(W_v) if mask_diagonal else W_v
-    A_true_plot = maskdiag(A_true) if mask_diagonal else A_true
+    if A_estim is None:
+        A_estim_plot = np.zeros_like(A_true)
+    else:
+        A_estim_plot = maskdiag(A_estim) if mask_diagonal else A_estim
+
+    W_v_plot = maskdiag_np(W_v.T) if mask_diagonal else W_v.T
+    print(W_v_plot)
+    A_true_plot = maskdiag_np(A_true) if mask_diagonal else A_true
 
     # --- A_estim ---
     im1 = axs[0].imshow(A_estim_plot, vmin=-0.5, vmax=0.5, cmap="RdBu_r")
@@ -533,7 +548,7 @@ def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0, 
     fig.colorbar(im1, ax=axs[0])
 
     # --- W_v ---
-    im2 = axs[1].imshow(W_v_plot, cmap="Reds")
+    im2 = axs[1].imshow(W_v_plot, cmap="Reds", vmin=0, vmax=1)
     axs[1].invert_yaxis()
     axs[1].set_title("Causal Graph (from MLPODEF)")
     fig.colorbar(im2, ax=axs[1])
@@ -546,8 +561,65 @@ def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0, 
 
     fig.tight_layout()
 
-    if logger is not None:
-        logger.experiment.add_figure("Causal_Graph_Matrices", fig, global_step=global_step)
+    y_true = np.abs(np.sign(maskdiag_np(A_true)).astype(int).flatten())
+    if A_estim is not None:
+        y_pred = np.abs(maskdiag_np(A_estim).flatten())
+        avg_prec = average_precision_score(y_true, y_pred)
+        print(f"A_estim AUPR: {avg_prec:.4f}")
+    if W_v is not None:
+        y_pred_mlp = np.abs(maskdiag_np(W_v.T).flatten())
+        avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
+        auroc_mlp = roc_auc_score(y_true, y_pred_mlp)
+        aupr_ratio_mlp = avg_prec_mlp / np.mean(np.abs(maskdiag_np(A_true)) > 0)
+        print(f"MLPODEF AUPR: {avg_prec_mlp:.4f}")
+        print(f"MLPODEF AUPR ratio: {avg_prec_mlp / np.mean(np.abs(maskdiag_np(A_true)) > 0):.4f}")
+        print(f"MLPODEF AUROC: {auroc_mlp:.4f}")
+
+    # --- Logging ---
+    logged = False
+    if logger is not None and hasattr(logger, "experiment"):
+        exp = logger.experiment
+        if hasattr(exp, "log"):  
+            try:
+                import wandb
+                payload = {
+                    f"{prefix}Causal_Graph_Matrices": wandb.Image(fig),
+                    f"{prefix}MLP/AP": avg_prec_mlp,
+                    f"{prefix}MLP/AP_ratio": aupr_ratio_mlp,
+                    f"{prefix}MLP/AUROC": auroc_mlp,
+                    "trainer/step": global_step,
+                }
+                exp.log(payload, step=global_step)
+                logged = True
+            except Exception:
+                pass
+        # TensorBoard
+        if not logged and hasattr(exp, "add_figure"):
+            exp.add_figure(f"{prefix}Causal_Graph_Matrices", fig, global_step=global_step)
+            try:
+                exp.add_scalar(f"{prefix}MLP/AUPR", avg_prec_mlp, global_step)
+                exp.add_scalar(f"{prefix}MLP/AUPR_ratio", aupr_ratio_mlp, global_step)
+                exp.add_scalar(f"{prefix}MLP/AUROC", auroc_mlp, global_step)
+            except Exception:
+                pass
+            logged = True
+
+    if not logged:
+        try:
+            import wandb
+            if wandb.run is not None:
+                wandb.log({
+                    f"{prefix}Causal_Graph_Matrices": wandb.Image(fig),
+                    f"{prefix}MLP/AUPR": avg_prec_mlp,
+                    f"{prefix}MLP/AUPR_ratio": aupr_ratio_mlp,
+                    f"{prefix}MLP/AUROC": auroc_mlp,
+                    "trainer/step": global_step,
+                }, step=global_step)
+                logged = True
+        except Exception:
+            pass
+
+    if logged:
         plt.close(fig)
     else:
         plt.show()
