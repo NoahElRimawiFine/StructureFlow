@@ -21,7 +21,6 @@ setup(
     description="Describe Your Cool Project",
     author="",
     author_email="",
-    url="https://github.com/NoahElRimawiFine/sf2m-grn-hydra",
     install_requires=["lightning", "hydra-core"],
     packages=find_packages(),
     # use this to customize global commands available in the terminal after installing the package
