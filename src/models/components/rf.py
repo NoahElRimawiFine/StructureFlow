@@ -45,7 +45,10 @@ class Estimator:
         self.kos = kos
         self.t_key = t_key
         assert all(
-            [all(adatas[0].var.index == adatas[i].var.index) for i in range(1, len(adatas))]
+            [
+                all(adatas[0].var.index == adatas[i].var.index)
+                for i in range(1, len(adatas))
+            ]
         ), "adatas do not share the same var.index"
         self.genes = adatas[0].var.index
         self.n_genes = len(self.genes)
@@ -54,25 +57,32 @@ class Estimator:
         self.norm = norm
         self.timepoints = sorted(self.adatas[0].obs[t_key].unique())
         self.T = len(self.timepoints) if num_timepoints is None else num_timepoints
-        self.dt = np.diff(self.timepoints)
         self.drift = drift
         if self.norm:
-            self.scaler = sk.preprocessing.StandardScaler(with_mean=True, with_std=True).fit(
-                np.vstack([adata.X for adata in self.adatas])
-            )
+            self.scaler = sk.preprocessing.StandardScaler(
+                with_mean=True, with_std=True
+            ).fit(np.vstack([adata.X for adata in self.adatas]))
             self.std = torch.tensor(np.sqrt(self.scaler.var_))
             self.Xs = [
-                [adata.X[adata.obs.t == t, :] - self.scaler.mean_ for t in self.timepoints]
+                [
+                    adata.X[adata.obs.t == t, :] - self.scaler.mean_
+                    for t in self.timepoints
+                ]
                 for adata in adatas
             ]
         else:
             self.scaler = None
-            self.Xs = [[adata.X[adata.obs.t == t, :] for t in self.timepoints] for adata in adatas]
+            self.Xs = [
+                [adata.X[adata.obs.t == t, :] for t in self.timepoints]
+                for adata in adatas
+            ]
             self.std = torch.ones(adatas[0].X.shape[1])
 
         if self.pca == "common":
             # calculate a common, global PCA basis (across all conditions)
-            self.pca = sk.decomposition.PCA().fit(np.vstack([np.vstack(x) for x in self.Xs]))
+            self.pca = sk.decomposition.PCA().fit(
+                np.vstack([np.vstack(x) for x in self.Xs])
+            )
             self.M_pca = [
                 torch.tensor(self.pca.components_.T, device=self.device)
                 for _ in range(len(self.kos))
@@ -80,12 +90,14 @@ class Estimator:
         elif self.pca == "separate":
             self.pca = [sk.decomposition.PCA().fit(np.vstack(x)) for x in self.Xs]
             self.M_pca = [
-                torch.tensor(_pca.components_.T, device=self.device) for _pca in self.pca
+                torch.tensor(_pca.components_.T, device=self.device)
+                for _pca in self.pca
             ]
         elif self.pca is None:
             self.pca = [None for x in self.Xs]
             self.M_pca = [
-                torch.eye(self.n_genes, dtype=torch.float64).to(self.device) for _ in self.pca
+                torch.eye(self.n_genes, dtype=torch.float64).to(self.device)
+                for _ in self.pca
             ]
         self.Xs = [[torch.tensor(x).to(self.device) for x in y] for y in self.Xs]
         # set up scale
@@ -127,7 +139,9 @@ class Estimator:
         ]
         self.vs = [
             [
-                torch.zeros(self.Xs[i][j + 1].shape[0], dtype=torch.float64).to(self.device)
+                torch.zeros(self.Xs[i][j + 1].shape[0], dtype=torch.float64).to(
+                    self.device
+                )
                 for j in range(self.T - 1)
             ]
             for i in range(len(self.kos))
@@ -158,13 +172,13 @@ class Estimator:
                 _Ts = []
                 for j in range(self.T - 1):
                     with torch.no_grad():
-                        P = torch.linalg.matrix_exp(self.dt[j] * A * self.Ms[i])
+                        P = torch.linalg.matrix_exp(t * A * self.Ms[i])
                     # C = ot.utils.euclidean_distances((self.Xs[i][j] @ P) @ self.M_pca[i][:, :self.n_pca_components], self.Xs[i][j+1] @ self.M_pca[i][:, :self.n_pca_components], squared=True)
                     C = ot.utils.euclidean_distances(
                         (
                             (
                                 (self.Xs[i][j] / self.std) @ P
-                                + self.dt[j] * (self.b * self.Ms[i][0, :])
+                                + t * (self.b * self.Ms[i][0, :])
                             )
                             * self.std
                         )
@@ -207,7 +221,9 @@ class Estimator:
                     squared=True,
                 )
                 eps = self.reg_sinkhorn * scale[i]
-                p, q = ot.utils.unif(C.shape[0], type_as=C), ot.utils.unif(C.shape[1], type_as=C)
+                p, q = ot.utils.unif(C.shape[0], type_as=C), ot.utils.unif(
+                    C.shape[1], type_as=C
+                )
                 if self.ot_coupling:
                     _, log = ot.sinkhorn2(
                         p,
@@ -223,7 +239,11 @@ class Estimator:
                         us[i] = torch.log(log["u"])
                         vs[i] = torch.log(log["v"])
                     Ls.append(
-                        eps * ((torch.log(log["u"]) * p).sum() + (torch.log(log["v"]) * q).sum())
+                        eps
+                        * (
+                            (torch.log(log["u"]) * p).sum()
+                            + (torch.log(log["v"]) * q).sum()
+                        )
                     )
                 else:
                     T = outer(p, q)

@@ -219,10 +219,10 @@ def aggregate_results(
                 overall_avg = {
                     "Model": model_type,
                     "Dataset": f"{dataset_type}{dataset_suffix}",
-                    "W-Dist (ODE)": f"{agg_summary['avg_ode_distance_mean'].mean():.4f} ± {agg_summary['avg_ode_distance_std'].mean():.4f}",
-                    "W-Dist (SDE)": f"{agg_summary['avg_sde_distance_mean'].mean():.4f} ± {agg_summary['avg_sde_distance_std'].mean():.4f}",
-                    "MMD2 (ODE)": f"{agg_summary['avg_mmd2_ode_mean'].mean():.4f} ± {agg_summary['avg_mmd2_ode_std'].mean():.4f}",
-                    "MMD2 (SDE)": f"{agg_summary['avg_mmd2_sde_mean'].mean():.4f} ± {agg_summary['avg_mmd2_sde_std'].mean():.4f}",
+                    "W-Dist (ODE)": f"{agg_summary['avg_ode_distance_mean'].mean():.12f} ± {agg_summary['avg_ode_distance_std'].mean():.12f}",
+                    "W-Dist (SDE)": f"{agg_summary['avg_sde_distance_mean'].mean():.12f} ± {agg_summary['avg_sde_distance_std'].mean():.12f}",
+                    "MMD2 (ODE)": f"{agg_summary['avg_mmd2_ode_mean'].mean():.12f} ± {agg_summary['avg_mmd2_ode_std'].mean():.12f}",
+                    "MMD2 (SDE)": f"{agg_summary['avg_mmd2_sde_mean'].mean():.12f} ± {agg_summary['avg_mmd2_sde_std'].mean():.12f}",
                 }
                 all_summary_rows.append(overall_avg)
 
@@ -237,10 +237,10 @@ def aggregate_results(
                     timepoint_comparisons[(dataset_key, timepoint)].append(
                         {
                             "Model": model_type,
-                            "W-Dist (ODE)": f"{row['avg_ode_distance_mean']:.4f} ± {row['avg_ode_distance_std']:.4f}",
-                            "W-Dist (SDE)": f"{row['avg_sde_distance_mean']:.4f} ± {row['avg_sde_distance_std']:.4f}",
-                            "MMD2 (ODE)": f"{row['avg_mmd2_ode_mean']:.4f} ± {row['avg_mmd2_ode_std']:.4f}",
-                            "MMD2 (SDE)": f"{row['avg_mmd2_sde_mean']:.4f} ± {row['avg_mmd2_sde_std']:.4f}",
+                            "W-Dist (ODE)": f"{row['avg_ode_distance_mean']:.12f} ± {row['avg_ode_distance_std']:.12f}",
+                            "W-Dist (SDE)": f"{row['avg_sde_distance_mean']:.12f} ± {row['avg_sde_distance_std']:.12f}",
+                            "MMD2 (ODE)": f"{row['avg_mmd2_ode_mean']:.12f} ± {row['avg_mmd2_ode_std']:.12f}",
+                            "MMD2 (SDE)": f"{row['avg_mmd2_sde_mean']:.12f} ± {row['avg_mmd2_sde_std']:.12f}",
                         }
                     )
 
@@ -364,7 +364,7 @@ def main():
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=None,
+        default=1,
         help="Number of parallel workers (default: auto-detect based on CPU cores)",
     )
     parser.add_argument(
@@ -375,10 +375,13 @@ def main():
     args = parser.parse_args()
 
     # Configuration
-    model_types = ["sf2m", "mlp_baseline", "rf"]
+    model_types = ["rf"]
     dataset_types = ["Synthetic", "Curated"]
     synthetic_datasets = ["dyn-TF", "dyn-CY", "dyn-LL", "dyn-BF", "dyn-SW"]
     seeds = [1, 2, 3]
+    # dataset_types = ["Synthetic"]
+    # synthetic_datasets = ["dyn-TF"]
+    # seeds = [42]
 
     # Create base results directory
     os.makedirs(args.base_results_dir, exist_ok=True)
@@ -393,7 +396,6 @@ def main():
 
         for dataset_type in dataset_types:
             if dataset_type == "Synthetic":
-                # For Synthetic, run each dataset
                 for dataset in synthetic_datasets:
                     for model_type in model_types:
                         for seed in seeds:
@@ -407,7 +409,6 @@ def main():
                                 )
                             )
             else:
-                # For Curated, just run once without dataset parameter
                 for model_type in model_types:
                     for seed in seeds:
                         experiment_configs.append(

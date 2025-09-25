@@ -646,13 +646,267 @@ def plot_scaling_results_summary():
                 print(" | RF: N/A")
 
 
+def plot_scaling_results_3x3_grid():
+    """
+    Create a 3x3 grid of plots with pastel red, green, blue theme.
+    Rows: metrics (AUPRC, AUROC, Time)
+    Columns: sparsity levels (5%, 20%, 40%)
+    """
+    stats_df = plot_scaling_results()
+
+    # Set up the plotting style
+    plt.style.use("default")
+
+    # Define vivid red, green, blue color palette for methods
+    method_colors = {
+        "StructureFlow": "#E74C3C",  # Vivid red
+        "NGM-NODE": "#27AE60",  # Vivid green
+        "RF": "#3498DB",  # Vivid blue
+    }
+
+    method_styles = {"StructureFlow": "-", "NGM-NODE": "--", "RF": ":"}
+
+    method_markers = {"StructureFlow": "o", "NGM-NODE": "s", "RF": "^"}
+
+    sparsity_levels = [0.05, 0.2, 0.4]
+    sparsity_labels = {0.05: "5% sparse", 0.2: "20% sparse", 0.4: "40% sparse"}
+    metrics = ["AP", "AUROC", "Time"]
+
+    # Create 3x3 subplot grid with compressed vertical layout
+    fig, axes = plt.subplots(3, 3, figsize=(36, 26))
+
+    for row_idx, metric in enumerate(metrics):
+        for col_idx, sparsity in enumerate(sparsity_levels):
+            sparsity_data = stats_df[stats_df["sparsity"] == sparsity]
+            ax = axes[row_idx, col_idx]
+
+            if metric == "AP":
+                # Plot AUPRC
+                for method in ["StructureFlow", "NGM-NODE", "RF"]:
+                    if method == "RF":
+                        col_name = "ReferenceFitting_AUPRC_mean"
+                        std_col_name = "ReferenceFitting_AUPRC_std"
+                        count_col_name = "ReferenceFitting_AUPRC_count"
+                    else:
+                        col_name = f"{method}_AUPRC_mean"
+                        std_col_name = f"{method}_AUPRC_std"
+                        count_col_name = f"{method}_AUPRC_count"
+                    if col_name in sparsity_data.columns:
+                        method_data = sparsity_data.dropna(subset=[col_name])
+                        if not method_data.empty:
+                            x_data = method_data["system_size"]
+                            y_data = method_data[col_name]
+                            ax.plot(
+                                x_data,
+                                y_data,
+                                color=method_colors[method],
+                                linestyle=method_styles[method],
+                                marker=method_markers[method],
+                                linewidth=7,
+                                markersize=8,
+                                label=method,
+                                markeredgecolor="white",
+                                markeredgewidth=1.5,
+                            )
+                            # Add confidence interval
+                            if (
+                                std_col_name in method_data.columns
+                                and count_col_name in method_data.columns
+                            ):
+                                y_err = method_data[std_col_name] / np.sqrt(
+                                    method_data[count_col_name]
+                                )
+                                ax.fill_between(
+                                    x_data,
+                                    y_data - y_err,
+                                    y_data + y_err,
+                                    color=method_colors[method],
+                                    alpha=0.2,
+                                )
+                if col_idx == 0:
+                    ax.set_ylabel("AP", fontsize=56)
+                else:
+                    ax.set_ylabel("")  # Only leftmost column gets y-label
+                ax.set_ylim(0.0, 1.0)
+
+            elif metric == "AUROC":
+                # Plot AUROC
+                for method in ["StructureFlow", "NGM-NODE", "RF"]:
+                    if method == "RF":
+                        col_name = "ReferenceFitting_AUROC_mean"
+                        std_col_name = "ReferenceFitting_AUROC_std"
+                        count_col_name = "ReferenceFitting_AUROC_count"
+                    else:
+                        col_name = f"{method}_AUROC_mean"
+                        std_col_name = f"{method}_AUROC_std"
+                        count_col_name = f"{method}_AUROC_count"
+                    if col_name in sparsity_data.columns:
+                        method_data = sparsity_data.dropna(subset=[col_name])
+                        if not method_data.empty:
+                            x_data = method_data["system_size"]
+                            y_data = method_data[col_name]
+                            ax.plot(
+                                x_data,
+                                y_data,
+                                color=method_colors[method],
+                                linestyle=method_styles[method],
+                                marker=method_markers[method],
+                                linewidth=7,
+                                markersize=8,
+                                label=method,
+                                markeredgecolor="white",
+                                markeredgewidth=1.5,
+                            )
+                            # Add confidence interval
+                            if (
+                                std_col_name in method_data.columns
+                                and count_col_name in method_data.columns
+                            ):
+                                y_err = method_data[std_col_name] / np.sqrt(
+                                    method_data[count_col_name]
+                                )
+                                ax.fill_between(
+                                    x_data,
+                                    y_data - y_err,
+                                    y_data + y_err,
+                                    color=method_colors[method],
+                                    alpha=0.2,
+                                )
+                if col_idx == 0:
+                    ax.set_ylabel("AUROC", fontsize=56)
+                else:
+                    ax.set_ylabel("")  # Only leftmost column gets y-label
+                ax.set_ylim(0.5, 1.0)
+
+            else:  # Time
+                # Plot Training Time
+                for method in ["StructureFlow", "NGM-NODE", "RF"]:
+                    if method == "RF":
+                        col_name = "ReferenceFitting_training_time_mean"
+                        std_col_name = "ReferenceFitting_training_time_std"
+                        count_col_name = "ReferenceFitting_training_time_count"
+                    else:
+                        col_name = f"{method}_training_time_mean"
+                        std_col_name = f"{method}_training_time_std"
+                        count_col_name = f"{method}_training_time_count"
+                    if col_name in sparsity_data.columns:
+                        method_data = sparsity_data.dropna(subset=[col_name])
+                        if not method_data.empty:
+                            x_data = method_data["system_size"]
+                            y_data = method_data[col_name]
+                            ax.plot(
+                                x_data,
+                                y_data,
+                                color=method_colors[method],
+                                linestyle=method_styles[method],
+                                marker=method_markers[method],
+                                linewidth=7,
+                                markersize=8,
+                                label=method,
+                                markeredgecolor="white",
+                                markeredgewidth=1.5,
+                            )
+                            # Add confidence interval
+                            if (
+                                std_col_name in method_data.columns
+                                and count_col_name in method_data.columns
+                            ):
+                                y_err = method_data[std_col_name] / np.sqrt(
+                                    method_data[count_col_name]
+                                )
+                                ax.fill_between(
+                                    x_data,
+                                    y_data - y_err,
+                                    y_data + y_err,
+                                    color=method_colors[method],
+                                    alpha=0.2,
+                                )
+                if col_idx == 0:
+                    ax.set_ylabel("Training Time (s)", fontsize=56)
+                else:
+                    ax.set_ylabel("")  # Only leftmost column gets y-label
+                ax.set_yscale("log")
+                # Set consistent y-axis limits and ticks for time plots to align grid lines
+                ax.set_ylim(1, 12000)  # Upper limit slightly above 10^4 to fit data
+                ax.set_yticks([1, 10, 100, 1000, 10000])
+
+            # Common styling for all subplots
+            ax.set_xscale("log")
+            ax.set_xticks([10, 25, 50, 100, 200, 500])
+
+            # Only show tick labels on bottom row and left column
+            if row_idx == 2:  # Bottom row
+                ax.set_xticklabels([10, 25, 50, 100, 200, 500], fontsize=36)
+            else:
+                ax.set_xticklabels([])  # No x-axis labels for top/middle rows
+
+            if col_idx == 0:  # Left column
+                ax.tick_params(axis="y", labelsize=52)
+            else:
+                ax.tick_params(
+                    axis="y", labelsize=0
+                )  # No y-axis labels for middle/right columns
+            ax.grid(True, alpha=0.3, linestyle="-", linewidth=0.5)
+            ax.set_facecolor("#FAFAFA")
+
+            # Set titles and labels
+            if row_idx == 0:
+                ax.set_title(
+                    f"{sparsity_labels[sparsity]}",
+                    fontsize=56,
+                    pad=20,
+                )
+
+            if row_idx == 2:
+                ax.set_xlabel("System Size", fontsize=56)
+
+            # No additional text labels needed - titles and y-labels handle everything
+
+            # Add legend only to bottom-center subplot (middle column, bottom row)
+            if row_idx == 2 and col_idx == 1:
+                legend = ax.legend(
+                    loc="lower center",
+                    bbox_to_anchor=(0.5, -0.45),
+                    ncol=3,
+                    fontsize=56,
+                    frameon=True,
+                    fancybox=True,
+                    shadow=True,
+                )
+                # Make legend lines thicker
+                for line in legend.get_lines():
+                    line.set_linewidth(7)
+
+    # Manual subplot adjustment with compressed vertical layout and no vertical spacing
+    plt.subplots_adjust(
+        left=0.08,  # left margin for y-axis labels
+        right=0.98,  # right margin
+        top=0.95,  # top margin for titles
+        bottom=0.02,  # bottom margin for legend
+        hspace=0.15,  # minimal vertical spacing between rows
+        wspace=0.1,  # minimal horizontal spacing between columns
+    )
+
+    # Save plots
+    plt.savefig("scaling_experiment_3x3_grid.png", dpi=300, bbox_inches="tight")
+    plt.savefig("scaling_experiment_3x3_grid.pdf", bbox_inches="tight")
+    print("3x3 grid plots saved to scaling_experiment_3x3_grid.png and .pdf")
+    plt.show()
+
+    return fig, stats_df
+
+
 if __name__ == "__main__":
-    # Create both versions of the plots
-    print("Creating plots with confidence intervals...")
-    fig_conf, stats_df = plot_scaling_results_with_confidence()
+    # Create the new 3x3 grid plot
+    print("Creating 3x3 grid plot with pastel theme...")
+    fig_3x3, stats_df = plot_scaling_results_3x3_grid()
+
+    # Create both versions of the original plots
+    print("\nCreating plots with confidence intervals...")
+    # fig_conf, _ = plot_scaling_results_with_confidence()
 
     print("\nCreating clean plots...")
-    fig_clean, _ = plot_scaling_results_clean()
+    # fig_clean, _ = plot_scaling_results_clean()
 
     # Print summary statistics
-    plot_scaling_results_summary()
+    # plot_scaling_results_summary()

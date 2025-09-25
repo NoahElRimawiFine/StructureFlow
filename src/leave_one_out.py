@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
+from sklearn.metrics import average_precision_score, roc_auc_score
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.loggers import TensorBoardLogger
 import os
@@ -26,7 +27,7 @@ from src.models.components.solver import simulate_trajectory, wasserstein, mmd_s
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Synthetic"
 DEFAULT_DATASET = "dyn-TF"
-DEFAULT_MODEL_TYPE = "rf"
+DEFAULT_MODEL_TYPE = "sf2m"
 DEFAULT_N_STEPS_PER_FOLD = 15000
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
@@ -40,7 +41,7 @@ DEFAULT_CORRECTION_HIDDEN = [64, 64]
 DEFAULT_SIGMA = 1.0
 DEFAULT_N_TIMES_SIM = 100
 DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
-DEFAULT_SEED = 1
+DEFAULT_SEED = 2
 DEFAULT_RESULTS_DIR = "loo_results"
 DEFAULT_USE_CORRECTION_MLP = True
 
@@ -50,6 +51,69 @@ DEFAULT_USE_CORRECTION_MLP = True
 # DEFAULT_REG = 5e-8
 # DEFAULT_ALPHA = 0.1
 # DEFAULT_GL_REG = 0.02
+
+
+def compute_causal_graph_metrics(estimated_graph, true_graph, mask_diagonal=True):
+    """
+    Compute AP and AUROC metrics for causal graph evaluation.
+
+    Args:
+        estimated_graph: Estimated adjacency matrix (numpy array)
+        true_graph: True adjacency matrix (numpy array or pandas DataFrame)
+        mask_diagonal: Whether to mask diagonal elements
+
+    Returns:
+        dict: Dictionary containing AP and AUROC scores
+    """
+    # Convert DataFrame to numpy if needed
+    if hasattr(true_graph, "values"):
+        true_graph = true_graph.values
+
+    # Mask diagonal if requested
+    if mask_diagonal:
+        n = min(true_graph.shape[0], estimated_graph.shape[0])
+        true_graph_masked = true_graph.copy()
+        estimated_graph_masked = estimated_graph.copy()
+        for i in range(n):
+            if i < true_graph_masked.shape[0] and i < true_graph_masked.shape[1]:
+                true_graph_masked[i, i] = 0
+            if (
+                i < estimated_graph_masked.shape[0]
+                and i < estimated_graph_masked.shape[1]
+            ):
+                estimated_graph_masked[i, i] = 0
+    else:
+        true_graph_masked = true_graph
+        estimated_graph_masked = estimated_graph
+
+    # Create binary ground truth (presence/absence of edges)
+    y_true = np.abs(np.sign(true_graph_masked)).astype(int).flatten()
+
+    # Use absolute values of estimated graph as prediction scores
+    y_pred = np.abs(estimated_graph_masked).flatten()
+
+    # Compute metrics
+    try:
+        if (
+            len(np.unique(y_true)) > 1
+        ):  # Check if we have both positive and negative samples
+            ap_score = average_precision_score(y_true, y_pred)
+            auroc_score = roc_auc_score(y_true, y_pred)
+        else:
+            # If all true labels are the same, metrics are undefined
+            ap_score = np.nan
+            auroc_score = np.nan
+    except Exception as e:
+        print(f"Warning: Could not compute AP/AUROC metrics: {e}")
+        ap_score = np.nan
+        auroc_score = np.nan
+
+    return {
+        "ap_score": ap_score,
+        "auroc_score": auroc_score,
+        "n_true_edges": np.sum(y_true),
+        "n_total_edges": len(y_true),
+    }
 
 
 def create_trajectory_pca_plot(
@@ -457,9 +521,7 @@ def create_multi_ko_pca_plot_wgrey(
 
     # Save the figure
     filename_base = f"multi_ko_comparison_{model_type}_holdout_{held_out_time}"
-    plt.savefig(
-        os.path.join(folder_path, f"{filename_base}_finalmain.pdf"), bbox_inches="tight"
-    )
+    plt.savefig(os.path.join(folder_path, f"{filename_base}.pdf"), bbox_inches="tight")
     plt.savefig(
         os.path.join(folder_path, f"{filename_base}.png"), dpi=300, bbox_inches="tight"
     )
@@ -618,6 +680,106 @@ def main(args):
         if MODEL_TYPE != "rf":  # SF2M and MLP need explicit device placement
             model.to(DEVICE)
 
+        # --- 2.6.1 Compute Causal Graph Metrics ---
+        causal_metrics = {}
+        try:
+            if MODEL_TYPE == "rf":
+                # For RF model, get the adjacency matrix directly
+                interaction_matrix = model.get_interaction_matrix()
+                if interaction_matrix is not None:
+                    # Convert to numpy if it's a tensor
+                    if hasattr(interaction_matrix, "detach"):
+                        W_v = interaction_matrix.detach().cpu().numpy()
+                    else:
+                        W_v = np.array(interaction_matrix)
+                    A_estim = W_v.copy()  # For RF, they are the same
+                else:
+                    print("Warning: RF model has no interaction matrix")
+                    W_v = None
+                    A_estim = None
+            else:  # SF2M or MLP Baseline
+                # Compute the global Jacobian for SF2M models
+                with torch.no_grad():
+                    A_estim = compute_global_jacobian(
+                        model.func_v, fold_adatas, dt=DT_data, device=DEVICE
+                    )
+                # Get the causal graph from the model
+                W_v = model.func_v.causal_graph(w_threshold=0.0).T
+
+            # Get the ground truth matrix
+            true_matrix = datamodule.true_matrix
+
+            # Compute metrics for both Jacobian and causal graph if available
+            if A_estim is not None and W_v is not None:
+                # Handle different dataset types for matrix alignment
+                if DATASET_TYPE == "Renge":
+                    # Get gene names from the dataset
+                    gene_names = datamodule.adatas[0].var_names
+
+                    # Get reference network rows and columns
+                    ref_rows = true_matrix.index
+                    ref_cols = true_matrix.columns
+
+                    # Create DataFrames for the estimated graphs with all genes
+                    A_estim_df = pd.DataFrame(
+                        A_estim, index=gene_names, columns=gene_names
+                    )
+                    W_v_df = pd.DataFrame(W_v, index=gene_names, columns=gene_names)
+
+                    # Extract the exact subset that corresponds to the reference network dimensions
+                    A_estim_subset = A_estim_df.loc[ref_rows, ref_cols]
+                    W_v_subset = W_v_df.loc[ref_rows, ref_cols]
+
+                    # Convert to numpy arrays for evaluation
+                    A_estim_eval = A_estim_subset.values
+                    W_v_eval = W_v_subset.values
+                    A_true_eval = true_matrix.values
+                    mask_diag = False  # Don't mask diagonal for Renge
+                else:
+                    # For synthetic data, use matrices directly
+                    A_estim_eval = A_estim
+                    W_v_eval = W_v
+                    A_true_eval = true_matrix
+                    mask_diag = True  # Mask diagonal for synthetic data
+
+                # Compute metrics for Jacobian-based estimation
+                jacobian_metrics = compute_causal_graph_metrics(
+                    A_estim_eval, A_true_eval, mask_diagonal=mask_diag
+                )
+                causal_metrics["jacobian_ap"] = jacobian_metrics["ap_score"]
+                causal_metrics["jacobian_auroc"] = jacobian_metrics["auroc_score"]
+
+                # Compute metrics for causal graph extraction
+                causal_graph_metrics = compute_causal_graph_metrics(
+                    W_v_eval, A_true_eval, mask_diagonal=mask_diag
+                )
+                causal_metrics["causal_graph_ap"] = causal_graph_metrics["ap_score"]
+                causal_metrics["causal_graph_auroc"] = causal_graph_metrics[
+                    "auroc_score"
+                ]
+
+                print(
+                    f"  Causal Graph Metrics - Jacobian AP: {jacobian_metrics['ap_score']:.4f}, AUROC: {jacobian_metrics['auroc_score']:.4f}"
+                )
+                print(
+                    f"  Causal Graph Metrics - Graph AP: {causal_graph_metrics['ap_score']:.4f}, AUROC: {causal_graph_metrics['auroc_score']:.4f}"
+                )
+            else:
+                print(
+                    "  Warning: Could not compute causal graph metrics (missing matrices)"
+                )
+                causal_metrics["jacobian_ap"] = np.nan
+                causal_metrics["jacobian_auroc"] = np.nan
+                causal_metrics["causal_graph_ap"] = np.nan
+                causal_metrics["causal_graph_auroc"] = np.nan
+
+        except Exception as e:
+            print(f"  Warning: Error computing causal graph metrics: {e}")
+            causal_metrics["jacobian_ap"] = np.nan
+            causal_metrics["jacobian_auroc"] = np.nan
+            causal_metrics["causal_graph_ap"] = np.nan
+            causal_metrics["causal_graph_auroc"] = np.nan
+
         # Create folder for trajectory PCA plots
         # Only create plots for the last timepoint (T_max)
         if held_out_time == T_max - 1:
@@ -653,19 +815,21 @@ def main(args):
                     is_wildtype = False  # Always use the full model
 
                     # Simulate trajectory using RF model
+                    sort_indices = torch.argsort(x0[:, 0])
+                    x0_sorted = x0[sort_indices]
                     traj_rf = model.simulate_trajectory(
-                        x0,
+                        x0_sorted,
                         n_times=1,  # Simulate one time step
                         use_wildtype=is_wildtype,  # Always use full model
                         n_points=N_TIMES_SIM,
                     )
 
                     # RF simulation result
-                    sim_rf_final = traj_rf[-1].cpu()
+                    # traj_rf = traj_rf[-1].cpu()
 
                     # Calculate metrics
-                    w_dist_rf = wasserstein(sim_rf_final, true_dist_cpu)
-                    mmd2_rf = mmd_squared(sim_rf_final, true_dist_cpu)
+                    w_dist_rf = wasserstein(traj_rf, true_dist_cpu)
+                    mmd2_rf = mmd_squared(traj_rf, true_dist_cpu)
 
                     # Use same values for both ODE and SDE metrics for consistent formatting
                     w_dist_ode = w_dist_rf
@@ -675,12 +839,12 @@ def main(args):
 
                     # Store predictions for multi-KO plot
                     if held_out_time == T_max - 1:
-                        predictions_dict[i] = sim_rf_final.numpy()
+                        predictions_dict[i] = traj_rf.numpy()
 
                         # Create individual trajectory PCA plot
                         create_trajectory_pca_plot(
                             adata_full,
-                            sim_rf_final.numpy(),
+                            traj_rf.numpy(),
                             ko_name,
                             held_out_time,
                             fold_pca_folder,
@@ -804,16 +968,20 @@ def main(args):
             if MODEL_TYPE != "rf":
                 print(f"Fold {fold_name} Avg W_dist: SDE={avg_sde_dist:.4f}")
 
-            results.append(
-                {
-                    "held_out_time": held_out_time,
-                    "model_type": MODEL_TYPE,
-                    "avg_ode_distance": avg_ode_dist,
-                    "avg_sde_distance": avg_sde_dist,
-                    "avg_mmd2_ode": avg_mmd2_ode,
-                    "avg_mmd2_sde": avg_mmd2_sde,
-                }
-            )
+            # Add causal graph metrics to the results
+            fold_result = {
+                "held_out_time": held_out_time,
+                "model_type": MODEL_TYPE,
+                "avg_ode_distance": avg_ode_dist,
+                "avg_sde_distance": avg_sde_dist,
+                "avg_mmd2_ode": avg_mmd2_ode,
+                "avg_mmd2_sde": avg_mmd2_sde,
+            }
+
+            # Add causal graph metrics
+            fold_result.update(causal_metrics)
+
+            results.append(fold_result)
 
             # Add individual distances to a global list for detailed analysis later
             for record in fold_distances_list:
@@ -824,16 +992,17 @@ def main(args):
                 all_fold_metrics.append(record)
         else:
             print(f"Fold {fold_name}: No evaluation results.")
-            results.append(
-                {
-                    "held_out_time": held_out_time,
-                    "model_type": MODEL_TYPE,
-                    "avg_ode_distance": np.nan,
-                    "avg_sde_distance": np.nan,
-                    "avg_mmd2_ode": np.nan,
-                    "avg_mmd2_sde": np.nan,
-                }
-            )
+            fold_result = {
+                "held_out_time": held_out_time,
+                "model_type": MODEL_TYPE,
+                "avg_ode_distance": np.nan,
+                "avg_sde_distance": np.nan,
+                "avg_mmd2_ode": np.nan,
+                "avg_mmd2_sde": np.nan,
+            }
+            # Add causal graph metrics (will be NaN if not computed)
+            fold_result.update(causal_metrics)
+            results.append(fold_result)
 
         # if MODEL_TYPE == "sf2m" and held_out_time == T_max:  # Only for SF2M
         #     with torch.no_grad():
@@ -881,6 +1050,35 @@ def main(args):
         print(
             f"Overall Average MMD2 (SDE): {final_avg_mmd2_sde:.4f} +/- {final_std_mmd2_sde:.4f}"
         )
+
+        # Calculate and report causal graph metrics if available
+        if "jacobian_ap" in summary_df.columns:
+            final_avg_jac_ap = summary_df["jacobian_ap"].mean()
+            final_std_jac_ap = summary_df["jacobian_ap"].std()
+            final_avg_jac_auroc = summary_df["jacobian_auroc"].mean()
+            final_std_jac_auroc = summary_df["jacobian_auroc"].std()
+
+            print(f"\nCausal Graph Metrics (Jacobian-based):")
+            print(
+                f"Overall Average AP: {final_avg_jac_ap:.4f} +/- {final_std_jac_ap:.4f}"
+            )
+            print(
+                f"Overall Average AUROC: {final_avg_jac_auroc:.4f} +/- {final_std_jac_auroc:.4f}"
+            )
+
+        if "causal_graph_ap" in summary_df.columns:
+            final_avg_cg_ap = summary_df["causal_graph_ap"].mean()
+            final_std_cg_ap = summary_df["causal_graph_ap"].std()
+            final_avg_cg_auroc = summary_df["causal_graph_auroc"].mean()
+            final_std_cg_auroc = summary_df["causal_graph_auroc"].std()
+
+            print(f"\nCausal Graph Metrics (Graph extraction-based):")
+            print(
+                f"Overall Average AP: {final_avg_cg_ap:.4f} +/- {final_std_cg_ap:.4f}"
+            )
+            print(
+                f"Overall Average AUROC: {final_avg_cg_auroc:.4f} +/- {final_std_cg_auroc:.4f}"
+            )
 
         # Save summary results
         summary_df.to_csv(

@@ -30,7 +30,7 @@ class ReferenceFittingModule(pl.LightningModule):
         # Add a dummy parameter so that configure_optimizers has something to optimize.
         self.dummy_param = torch.nn.Parameter(torch.tensor(0.0))
 
-    def fit_model(self, adatas, kos, also_wt=True):
+    def fit_model(self, adatas, kos, also_wt=False):
         """Fits the reference model using both knockout and wild-type data.
 
         This method replicates your original 'train' method.
@@ -39,49 +39,66 @@ class ReferenceFittingModule(pl.LightningModule):
         ko_idx = list(range(len(kos)))  # all indices
         wt_idx = [i for i, ko in enumerate(kos) if ko is None]
 
+        # Sort adatas by first gene expression for determinism
+        sorted_adatas = []
+        for adata in adatas:
+            sort_indices = np.argsort(adata.X[:, 0])
+            sorted_adata = adata[sort_indices].copy()
+            sorted_adatas.append(sorted_adata)
+
         print("Training reference model with knockouts...")
         self.estimator = rf.Estimator(
-            [adatas[i] for i in ko_idx], [kos[i] for i in ko_idx], **self.options
+            [sorted_adatas[i] for i in ko_idx], [kos[i] for i in ko_idx], **self.options
         )
         self.estimator.fit(print_iter=100, alg="alternating", update_couplings_iter=250)
 
         if also_wt:
             print("Training reference model with wild type data only...")
             self.estimator_wt = rf.Estimator(
-                [adatas[i] for i in wt_idx], [kos[i] for i in wt_idx], **self.options
+                [sorted_adatas[i] for i in wt_idx],
+                [kos[i] for i in wt_idx],
+                **self.options,
             )
             self.estimator_wt.fit(
                 print_iter=100, alg="alternating", update_couplings_iter=250
             )
 
-    def fit_model_with_holdout(self, adatas, kos, left_out_time):
+    def fit_model_with_holdout(self, adatas, kos, left_out_time, also_wt=False):
         """Fits the reference model using both knockout and wild-type data, taking into account a
         hold-out time.
 
         Replicates your original 'train_with_holdout' method.
         """
-        ko_idx = list(range(len(kos)))  # all indices
+        all_idx = list(range(len(kos)))  # all indices
         wt_idx = [i for i, ko in enumerate(kos) if ko is None]
+
+        # Sort adatas by first gene expression for determinism
+        sorted_adatas = []
+        for adata in adatas:
+            sort_indices = np.argsort(adata.X[:, 0])
+            sorted_adata = adata[sort_indices].copy()
+            sorted_adatas.append(sorted_adata)
 
         print("Training reference model with knockouts...")
         self.estimator = rf.Estimator(
-            [adatas[i] for i in ko_idx],
-            [kos[i] for i in ko_idx],
+            [sorted_adatas[i] for i in all_idx],
+            [kos[i] for i in all_idx],
             **self.options,
-            num_timepoints=len(adatas[0].obs["t"].unique())
+            num_timepoints=len(sorted_adatas[0].obs["t"].unique()),
         )
         self.estimator.fit(print_iter=100, alg="alternating", update_couplings_iter=250)
 
-        print("Training reference model with wild type data only...")
-        self.estimator_wt = rf.Estimator(
-            [adatas[i] for i in wt_idx],
-            [kos[i] for i in wt_idx],
-            **self.options,
-            num_timepoints=len(adatas[0].obs["t"].unique())
-        )
-        self.estimator_wt.fit(
-            print_iter=100, alg="alternating", update_couplings_iter=250
-        )
+        if also_wt:
+            print("Training reference model with wild type data only...")
+            self.estimator_wt = rf.Estimator(
+                [sorted_adatas[i] for i in wt_idx],
+                [kos[i] for i in wt_idx],
+                **self.options,
+                num_timepoints=len(sorted_adatas[0].obs["t"].unique()),
+            )
+            self.estimator_wt.fit(
+                print_iter=100, alg="alternating", update_couplings_iter=250
+            )
 
     def get_interaction_matrix(self):
         """Return the interaction matrix from the full model."""
@@ -91,32 +108,23 @@ class ReferenceFittingModule(pl.LightningModule):
         """Return the interaction matrix from the wild-type only model."""
         return self.estimator_wt.A if self.estimator_wt else None
 
-    def simulate_trajectory(self, x0, n_times, use_wildtype=False, n_points=400):
-        """Simulate trajectory using the interaction matrix A.
-
-        Args:
-            x0: Initial conditions (tensor)
-            n_times: Number of timepoints
-            use_wildtype: If True, use wildtype-only model
-            n_points: Number of points in trajectory
-        """
-        ts = np.linspace(0, n_times - 1, n_points)
-        x0 = x0.cpu().numpy()
-
-        # Select the appropriate estimator.
+    def simulate_trajectory(
+        self, x0, n_times, use_wildtype=False, n_points=400, ko_condition=None
+    ):
         estimator = self.estimator_wt if use_wildtype else self.estimator
+        A = estimator.A_orig
+        x0 = x0.float()
+        A = A.float()
 
-        # Initialize trajectory array with the proper shape.
-        trajectory = np.zeros((len(ts), *x0.shape))
-        trajectory[0] = x0
+        # t = 1.0 / estimator.T
+        t = 1.0 / estimator.T
+        P = torch.linalg.matrix_exp(t * A)
 
-        # Simulate trajectory over the time steps.
-        for t in range(1, len(ts)):
-            dx = estimator.A @ trajectory[t - 1].T
-            update = dx.T * (ts[t] - ts[t - 1])
-            trajectory[t] = np.add(trajectory[t - 1], update)
+        x1 = (
+            (x0 / estimator.std.float()) @ P + t * (estimator.b.float())
+        ) * estimator.std.float()
 
-        return torch.from_numpy(trajectory).float()
+        return x1
 
     def training_step(self, batch, batch_idx):
         """In our Lightning training_step we assume that the datamodule (e.g. grn_datamodule)
