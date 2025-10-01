@@ -196,8 +196,6 @@ def _worker(gpu_id: int, task_queue, results_list, csv_dir, print_lock, base_see
         # Make run seed vary per-task but reproducible
         cfg = copy.deepcopy(cfg)
         cfg["seed"] = base_seed + idx
-        # You can also explicitly force device inside your model by passing "cuda:0"
-        # since we masked to a single physical GPU for this process:
         cfg["device"] = "cuda:0" if torch.cuda.is_available() else "cpu"
 
         with print_lock:
