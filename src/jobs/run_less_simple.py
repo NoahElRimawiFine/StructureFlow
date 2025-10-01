@@ -15,9 +15,6 @@ results/
     │   └── <all PNG/CSV from WT>    #  ─┐
     └── full/                        # full (concatenated)   ─┘ identical layout
 """
-
-# ░░░ Imports
-# ----------------------------------------------------------------
 import argparse
 import os
 import shutil
@@ -62,11 +59,11 @@ args = parser.parse_args()
 
 
 script_dir   = Path(__file__).resolve().parent
-dataset_name = Path(args.path).name                    # dyn-TF-1000-1
-regime_tag   = "full" if args.concat_all else "wt"     # wt | full
+dataset_name = Path(args.path).name                    
+regime_tag   = "full" if args.concat_all else "wt"     
 
-dataset_root = script_dir / "results-curated" / dataset_name   # <dataset>/
-results_dir  = dataset_root / regime_tag               # <dataset>/wt or /full
+dataset_root = script_dir / "results-curated" / dataset_name   
+results_dir  = dataset_root / regime_tag               
 results_dir.mkdir(parents=True, exist_ok=True)
 random.seed(args.seed)
 

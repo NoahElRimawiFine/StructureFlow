@@ -11,6 +11,7 @@ import scipy.sparse as sp
 import argparse
 import torch
 import random
+from scipy.sparse import issparse
 import torch.optim as optim
 from tigon.utility import *
 import scipy
@@ -18,12 +19,20 @@ import matplotlib.pyplot as plt
 import math
 import ot
 from TorchDiffEqPack import odesolve
+import glob
+import dcor
+import geomloss
+import ot.utils
+from ot.backend import get_backend
+import numpy as np
+import torch
 
 import warnings
 warnings.filterwarnings("ignore")
 _parser = argparse.ArgumentParser(description="TIGON synthetic runner")
 
 # dataset layout
+_parser.add_argument("--dataset", default="Synthetic")
 _parser.add_argument("--backbone", default="dyn-TF",
                      help="dyn‑BF, dyn‑TF, … (folder name inside data/Synthetic)")
 _parser.add_argument("--subset", choices=["wt", "ko", "all"], default="wt",
@@ -69,6 +78,106 @@ sklearn.utils.check_random_state(seed)
 
 ROOT_SYN = Path(__file__).resolve().parents[2] / "data" / "Synthetic"
 backbone = args.backbone
+
+
+def emd_samples(x, y, x_w = None, y_w = None):
+    C = ot.utils.euclidean_distances(x, y, squared=True)
+    nx = get_backend(x, y)
+    p = nx.full((x.shape[0], ), 1/x.shape[0]) if x_w is None else x_w / x_w.sum()
+    q = nx.full((y.shape[0], ), 1/y.shape[0]) if y_w is None else y_w / y_w.sum()
+    return ot.emd2(p, q, C)
+
+def sinkhorn_divergence(x, y, x_w = None, y_w = None, reg = 1.0):
+    # p = np.full((x.shape[0], ), 1/x.shape[0]) if x_w is None else x_w / x_w.sum()
+    # q = np.full((y.shape[0], ), 1/y.shape[0]) if y_w is None else y_w / y_w.sum()
+    # return ot.bregman.empirical_sinkhorn_divergence(x, y, reg, a = p, b = q)
+    p = torch.full((x.shape[0], ), 1/x.shape[0]) if x_w is None else x_w / x_w.sum()
+    q = torch.full((y.shape[0], ), 1/y.shape[0]) if y_w is None else y_w / y_w.sum()
+    loss = geomloss.SamplesLoss(loss = 'sinkhorn')
+    return loss(p, x, q, y)
+
+def energy_distance(x, y, x_w = None, y_w = None):
+    nx = get_backend(x, y)
+    x_w = nx.full((x.shape[0], ), 1/x.shape[0]) if x_w is None else x_w / x_w.sum()
+    y_w = nx.full((y.shape[0], ), 1/y.shape[0]) if y_w is None else y_w / y_w.sum()
+    xy=nx.dot(x_w, ot.utils.euclidean_distances(x, y, squared=False) @ y_w)
+    xx=nx.dot(x_w, ot.utils.euclidean_distances(x, x, squared=False) @ x_w)
+    yy=nx.dot(y_w, ot.utils.euclidean_distances(y, y, squared=False) @ y_w)
+    return 2*xy-xx-yy
+
+def energy_distance_paths(x, y):
+    return energy_distance(x.reshape(x.shape[0], -1), y.reshape(y.shape[0], -1))
+
+def emd_paths(x, y):
+    return emd_samples(x.reshape(x.shape[0], -1), y.reshape(y.shape[0], -1))
+
+def load_renge_dataset(
+        n_bins: int = 4,                
+        data_dir: Path = Path("../../data/Renge")
+    ) -> dict[str, Any]:
+    """
+    Returns the same dict keys as load_synth_dataset()
+    """
+    X = pd.read_csv('../../data/Renge/X_renge_d2_80.csv', index_col=0)
+    E = pd.read_csv('../../data/Renge/E_renge_d2_80.csv', index_col=0)
+
+    adata_ = ad.AnnData(E)
+    adata_.obs["condition"] = None
+    adata_.obs.loc[X.index[X.iloc[:, :-1].T.sum(0) == 0], "condition"] = "wt"
+    idx_ko = X.index[X.iloc[:, :-1].T.sum(0) == 1]
+    adata_.obs.loc[idx_ko, "condition"] = X.columns[np.argmax(X.loc[idx_ko, :].iloc[:, :-1], -1)]
+    sc.pp.pca(adata_)
+    sc.pp.neighbors(adata_)
+    adata_.obs["t"] = X.t
+    adata  = sc.read_h5ad(data_dir / "hipsc.h5ad")
+    # use gene symbols as var_names
+    dists_ko = pd.Series({k : dcor.energy_distance(adata.obsm["X_pca"][adata.obs.ko == "WT", :], adata.obsm["X_pca"][adata.obs.ko == k, :]) for k in adata.obs.ko.unique()})
+    adata_tf = adata.copy()
+    mask = adata_tf.var["gene"].isin(E.columns).values
+    adata_tf = adata_tf[:, mask].copy()
+    adata_tf.var_names = adata_tf.var["gene"]
+    
+    _kos = list(dists_ko.sort_values()[::-1][range(8)].index)
+    
+    _adatas = []
+    for k in _kos:
+        _adatas.append(adata_tf[adata_tf.obs.ko == k, :].copy())
+        _adatas[-1].X = np.asarray(_adatas[-1].X.todense(), dtype = np.float64)
+        _adatas[-1].obs.t -= 2
+        _adatas[-1].var.index = _adatas[-1].var.gene
+    if _kos[0] == "WT":
+        _kos[0] = None 
+
+    # Construct reference 
+    refs = {}
+    for f in glob.glob("../../data/Renge/chip_1kb/*.tsv"):
+        print(f)
+        gene = os.path.splitext(os.path.basename(f))[0].split(".")[0]
+        df = pd.read_csv(f, sep = "\t")
+        df.index = df.Target_genes
+        # if len(df.columns[df.columns.str.contains("iPS_cells|ES_cells")]) == 0:
+        #     print(pd.unique(df.columns.str.split("|").str[1]))
+        y = pd.Series(df.loc[:, df.columns.str.contains("iPS_cells")].values.mean(-1), index = df.index)
+        # y = pd.Series(df.iloc[:, 2:].values.mean(-1), index = df.index) 
+        # y = pd.Series(df.iloc[:, 1], index = df.index) 
+        refs[gene] = y
+
+    A_ref = pd.DataFrame(refs).T
+    A_ref[np.isnan(A_ref.values)] = 0
+    print(A_ref)
+
+    tfs = A_ref.index
+    tfs_no_ko = [i for i in tfs if i not in _kos]
+    tfs_ko = [i for i in tfs if i in _kos]
+
+    # build counts_all
+    print(adata_tf)
+    return adata_tf, A_ref
+
+def to_torch_dense(x, device):
+    if issparse(x):
+        x = x.toarray()          # or x.A
+    return torch.tensor(x, dtype=torch.float32, device=device)
 
 def discover_subset(root: Path, backbone: str, subset: str):
     """
@@ -125,7 +234,7 @@ def to_tigon_coords(adata: ad.AnnData):
     coords_all = []
     for tb in sorted(adata.obs["t"].unique()):
         sl = adata[adata.obs.t == tb]
-        X = sl.X.A if sp.issparse(sl.X) else sl.X   
+        X = sl.X   #sl.X.A if sp.issparse(sl.X) else
         coords_all.append(X)
     return coords_all
 
@@ -294,35 +403,45 @@ def validate_one_bin(func,
     # ----- metrics ----------------------------------------------------- #
     wd   = wasserstein(z_pred.detach(), z_true.detach())
     mmd2 = mmd_squared(z_pred.detach(), z_true.detach())
+    energy = energy_distance(z_pred.detach(), z_true.detach())
 
     return {"t_star": t_star,
             "src": src,
             "WD2": wd,
-            "MMD": mmd2}
+            "MMD": mmd2,
+            "Energy_dist": energy
+            }
     
 
 
 def main(): 
-    ds = [load_synth_dataset(p, n_bins=5) for p in paths]
-    adatas     = [d["adata"] for d in ds]  
+    if args.dataset != "renge":
+        ds = [load_synth_dataset(p, n_bins=5) for p in paths]
+        adatas     = [d["adata"] for d in ds]  
 
-    adata_big = ad.concat(adatas, axis=0, join="inner",
-                      label="rep", keys=[p.name for p in paths],
-                      index_unique=None)
-    print(adata_big)
-    coords_all = to_tigon_coords(adata_big)
+        adata_big = ad.concat(adatas, axis=0, join="inner",
+                        label="rep", keys=[p.name for p in paths],
+                        index_unique=None)
+        print(adata_big)
+        coords_all = to_tigon_coords(adata_big)
+        
+        true_mat = ds[0]["ref_network"].T
+    else:
+        adata, true_mat = load_renge_dataset()
+        coords_all = to_tigon_coords(adata)
+        A_renge = pd.read_csv("../../data/Renge/A_renge_output.csv", index_col=0)
+        genes_common = pd.Index(set(true_mat.columns).intersection(set(A_renge.index)))
+        print(genes_common)
+        tfs = true_mat.index
+        true_mat = (true_mat.loc[tfs, genes_common] > 0).values.flatten()
     
-    true_mat = ds[0]["ref_network"].T
 
     all_metrics = []
     Nt = len(coords_all)                   
     print(f"[INFO] {Nt} time bins found in the dataset")
     device = 'cpu'
     mse = nn.MSELoss()
-    data_all   = [torch.tensor(coords_all[t],      
-                           dtype=torch.float32,
-                           device=device)
-              for t in range(Nt)] 
+    data_all   = [to_torch_dense(coords_all[t],device) for t in range(Nt)] 
 
     for t_star in range(1,4):
          # configure training options
@@ -337,17 +456,12 @@ def main():
 
         print(f"\n===  Leaving out time bin {t_star}/{Nt-1}  ===")
 
-        # ---------------------------
-        # Data split
-        # ---------------------------
         leave_1_out = [t_star]
         train_time  = [t for t in range(Nt) if t not in leave_1_out]
         print(f"Training on time bins: {train_time}")
 
-        data_train  = [torch.tensor(coords_all[t], dtype=torch.float32,
-                                    device=device) for t in train_time]
-        z_val       = torch.tensor(coords_all[t_star],
-                                dtype=torch.float32, device=device)
+        data_train  = [to_torch_dense(coords_all[t],device) for t in train_time]
+        z_val       = to_torch_dense(coords_all[t_star],device)
         integral_time = [args.timepoints[t] for t in train_time]
 
         func = UOT(in_out_dim=data_train[0].shape[1],
@@ -378,7 +492,7 @@ def main():
                                options,
                                device)
         all_metrics.append(metric_dict)
-        print(f"bin {t_star}: WD2={metric_dict['WD2']:.4f} | MMD={metric_dict['MMD']:.4f}")
+        print(f"bin {t_star}: WD2={metric_dict['WD2']:.4f} | MMD={metric_dict['MMD']:.4f} | Energy_dist={metric_dict['Energy_dist']:.4f}")
     
 
     # data_train = [torch.tensor(c, dtype=torch.float32, device='cuda' if torch.cuda.is_available() else 'cpu') for c in coords_all]

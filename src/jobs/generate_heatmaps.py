@@ -104,10 +104,6 @@ def panel_key(title: str) -> int:           # order helper
     except ValueError:
         return len(PANEL_ORDER) + 1
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 2. main routine
-# ──────────────────────────────────────────────────────────────────────────────
 def generate_heatmaps(
     source: str,
     output_base_dir: str = "heatmaps",
@@ -140,7 +136,7 @@ def generate_heatmaps(
                 groups.setdefault((ds, target_cond), []).extend(lst)
 
     for (dataset, cond), paths in groups.items():
-        if cond == "TRUE":                 # we embedded this already
+        if cond == "TRUE":                 
             continue
 
         # ---- read matrices --------------------------------------------------
@@ -203,7 +199,7 @@ def generate_heatmaps(
         plt.savefig(out_pdf, bbox_inches="tight")
         plt.close(fig)
 
-        print(f"✔ Saved {out_pdf}")
+        print(f"Saved {out_pdf}")
 
 if __name__ == "__main__":
     generate_heatmaps(

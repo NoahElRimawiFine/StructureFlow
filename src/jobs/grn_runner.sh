@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # grn_runner.sh – run run_less_simple.py once per dataset
-#                 (wild-type   ➜ default flags)
-#                 (full data  ➜ --concat_all)
+#                 (wild-type   -> default flags)
+#                 (full data  -> --concat_all)
 # -----------------------------------------------------------------
 set -euo pipefail
 
-# ─── Edit just this array to add/remove datasets ─────────────────
-datasets=(dyn-TF dyn-CY dyn-BF dyn-LL dyn-SW)
-seeds=(1 2 3 4 5)
+datasets=(HSC)
+seeds=(1)
 
-ROOT="../../data/Synthetic"        # common parent
+ROOT="../../data/Curated"        # common parent
 SCRIPT="run_less_simple.py"        # python entry-point
 PYTHON="python3"
 T=5                                # pseudo-time bins
@@ -31,5 +30,5 @@ for ds in "${datasets[@]}"; do
   done
 done
 
-echo -e "\n✓ All datasets processed."
+echo -e "\nAll datasets processed."
 

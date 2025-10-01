@@ -60,7 +60,7 @@ random.seed(seed)
 sklearn.utils.check_random_state(seed)
 
 
-if args.backbone not in ["dyn-BF", "dyn-TF", "dyn-SW", "dyn-CY", "dyn-LL"]:
+if args.backbone not in ["dyn-BF", "dyn-TF", "dyn-SW", "dyn-CY", "dyn-LL", "dyn-LI"]:
     ROOT_SYN = Path(__file__).resolve().parents[2] / "data" / "Curated"
 else:
     ROOT_SYN = Path(__file__).resolve().parents[2] / "data" / "Synthetic"
@@ -518,6 +518,15 @@ def otvelo_loto_one_fold(counts_all, t_star, *, eps=1e-2, alpha=0.5, pca):
     mmd = mmd_squared(Xp, Xt, gamma=gamma)
     return w2, mmd
 
+def save_adj_heat(mat, title, out_name, cmap="RdBu_r"):
+        fig, ax = plt.subplots(figsize=(4, 4))
+        im = ax.imshow(mat, cmap=cmap, vmin=-1, vmax=1)
+        ax.set_title(title); ax.invert_yaxis()
+        fig.colorbar(im, ax=ax, shrink=0.8)
+        fig.tight_layout()
+        fig.savefig(f"{out_name}.pdf", dpi=300)
+        plt.close(fig)
+
 def main(): 
     if args.dataset == "synthetic":
         ds = [load_synth_dataset(p, n_bins=5) for p in paths]
@@ -547,21 +556,6 @@ def main():
 
         counts_pca, pca = visualize_pca(counts, labels, group_labels, viz_opt="pca")
 
-        folds = []
-        for held_out_t in range(1, Nt-1):          # 0 & Nt not held out
-            print(f"\n===== OTVelo – hold-out t={held_out_t} =====")
-
-            w2, mmd = otvelo_loto_one_fold(counts_all,
-                               held_out_t,
-                               eps=1e-2, alpha=0.5,
-                               pca=pca)
-            folds.append({"t": held_out_t, "w2": w2, "mmd2": mmd})
-            print(f"t={held_out_t}:  W₂={w2:.4f}   MMD²={mmd:.4e}")
-
-        df = pd.DataFrame(folds)
-        print("\nMean W₂  :", df.w2.mean())
-        print("Mean MMD²:", df.mmd2.mean())
-
     elif args.dataset == "renge":
         ds = load_renge_dataset()
         ds = copy.deepcopy(ds)
@@ -588,20 +582,20 @@ def main():
     
     counts_pca, pca = visualize_pca(counts, labels, group_labels, viz_opt="pca")
 
-    folds = []
-    for held_out_t in range(1, Nt-1):          # 0 & Nt not held out
-        print(f"\n===== OTVelo – hold-out t={held_out_t} =====")
+    # folds = []
+    # for held_out_t in range(1, Nt-1):          # 0 & Nt not held out
+    #     print(f"\n===== OTVelo – hold-out t={held_out_t} =====")
 
-        w2, mmd = otvelo_loto_one_fold(counts_all,
-                            held_out_t,
-                            eps=1e-2, alpha=0.5,
-                            pca=pca)
-        folds.append({"t": held_out_t, "w2": w2, "mmd2": mmd})
-        print(f"t={held_out_t}:  W₂={w2:.4f}   MMD²={mmd:.4e}")
+    #     w2, mmd = otvelo_loto_one_fold(counts_all,
+    #                         held_out_t,
+    #                         eps=1e-2, alpha=0.5,
+    #                         pca=pca)
+    #     folds.append({"t": held_out_t, "w2": w2, "mmd2": mmd})
+    #     print(f"t={held_out_t}:  W₂={w2:.4f}   MMD²={mmd:.4e}")
 
-    df = pd.DataFrame(folds)
-    print("\nMean W₂  :", df.w2.mean())
-    print("Mean MMD²:", df.mmd2.mean())
+    # df = pd.DataFrame(folds)
+    # print("\nMean W₂  :", df.w2.mean())
+    # print("Mean MMD²:", df.mmd2.mean())
 
 
     vel_all, vel_all_signed = solve_velocities(counts_all, Ts_prior,
@@ -615,6 +609,7 @@ def main():
                                  elastic_Net=False,tune=False,signed=True, return_slice=True)
 
     Tv_corr -= np.diag(np.diag(Tv_corr))
+    save_adj_heat(Tv_corr, "OTVelo (Jacobian)", "OTvelo.pdf", cmap="RdBu_r")
 
     if args.dataset != "renge":
         true_mat -= np.diag(np.diag(true_mat))
