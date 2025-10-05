@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import math
 import ot
 from TorchDiffEqPack import odesolve
+import dcor
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -129,6 +130,73 @@ def to_tigon_coords(adata: ad.AnnData):
         coords_all.append(X)
     return coords_all
 
+def load_renge_dataset():
+    PLT_CELL = 3.5
+    adata = sc.read_h5ad('../hipsc.h5ad')
+
+    X = pd.read_csv('../../tools/renge/examples/data/X_renge_d2_80.csv', index_col=0)
+    E = pd.read_csv('../../tools/renge/examples/data/E_renge_d2_80.csv', index_col=0)
+
+    adata_ = ad.AnnData(E)
+    adata_.obs["condition"] = None
+    adata_.obs.loc[X.index[X.iloc[:, :-1].T.sum(0) == 0], "condition"] = "wt"
+    idx_ko = X.index[X.iloc[:, :-1].T.sum(0) == 1]
+    adata_.obs.loc[idx_ko, "condition"] = X.columns[np.argmax(X.loc[idx_ko, :].iloc[:, :-1], -1)]
+    sc.pp.pca(adata_)
+    sc.pp.neighbors(adata_)
+    adata_.obs["t"] = X.t
+
+    dists_ko = pd.Series({k : dcor.energy_distance(adata.obsm["X_pca"][adata.obs.ko == "WT", :], adata.obsm["X_pca"][adata.obs.ko == k, :]) for k in adata.obs.ko.unique()})
+    adata_tf = adata.copy()
+    mask = adata_tf.var["gene"].isin(E.columns).values
+    adata_tf = adata_tf[:, mask].copy()
+    adata_tf.var_names = adata_tf.var["gene"]
+
+    _kos = list(dists_ko.sort_values()[::-1][range(8)].index)
+
+
+    _adata = adata[adata.obs.ko.isin(_kos), :]
+
+
+    _adatas = []
+    for k in _kos:
+        _adatas.append(adata_tf[adata_tf.obs.ko == k, :].copy())
+        _adatas[-1].X = np.asarray(_adatas[-1].X.todense(), dtype = np.float64)
+        _adatas[-1].obs.t -= 2
+        _adatas[-1].var.index = _adatas[-1].var.gene
+    if _kos[0] == "WT":
+        _kos[0] = None
+
+    # Construct reference
+    refs = {}
+    for f in glob.glob("chip_1kb/*.tsv"):
+        gene = os.path.splitext(os.path.basename(f))[0].split(".")[0]
+        df = pd.read_csv(f, sep = "\t")
+        df.index = df.Target_genes
+        # if len(df.columns[df.columns.str.contains("iPS_cells|ES_cells")]) == 0:
+        #     print(pd.unique(df.columns.str.split("|").str[1]))
+        y = pd.Series(df.loc[:, df.columns.str.contains("iPS_cells")].values.mean(-1), index = df.index)
+        # y = pd.Series(df.iloc[:, 2:].values.mean(-1), index = df.index)
+        # y = pd.Series(df.iloc[:, 1], index = df.index)
+        refs[gene] = y
+
+    A_ref = pd.DataFrame(refs).T
+    A_ref[np.isnan(A_ref.values)] = 0
+
+    tfs = A_ref.index
+    tfs_no_ko = [i for i in tfs if i not in _kos]
+    tfs_ko = [i for i in tfs if i in _kos]
+
+
+    A_renge = pd.read_csv("A_renge_output.csv", index_col=0)
+
+    batch_size = 64
+    n = _adatas[0].X.shape[1]
+    ko_indices = {ko: idx for idx, ko in enumerate(_kos)}
+
+    _tfs = tfs
+    _thresh = 0
+    
 
 def load_synth_dataset(name: str, n_bins: int = 5) -> Dict[str, Any]:
     """
@@ -296,7 +364,6 @@ def validate_one_bin(func,
             "src": src,
             "WD2": wd,
             "MMD": mmd2}
-    
 
 
 def main(): 
