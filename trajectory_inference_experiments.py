@@ -376,7 +376,7 @@ def main():
 
     # Configuration
     model_types = ["rf"]
-    dataset_types = ["Synthetic", "Curated"]
+    dataset_types = ["Synthetic", "Curated", "Renge"]
     synthetic_datasets = ["dyn-TF", "dyn-CY", "dyn-LL", "dyn-BF", "dyn-SW"]
     seeds = [1, 2, 3]
     # dataset_types = ["Synthetic"]
