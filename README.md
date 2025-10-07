@@ -138,112 +138,34 @@ python src/train.py trainer.max_epochs=20 data.batch_size=64
 
 ### Trajectory Inference Experiments
 
-Run leave-one-timepoint-out trajectory inference experiments across multiple datasets:
-
 ```bash
 python3 trajectory_inference_experiments.py
 ```
 
-Optional arguments:
-- `--base_results_dir`: Directory to save results (default: `loo_results`)
-- `--only_aggregate`: Skip running experiments and only aggregate existing results
-- `--num_workers`: Number of parallel workers (default: 1)
-- `--sequential`: Run experiments sequentially instead of in parallel
-
-Example with parallel execution:
-```bash
-python3 trajectory_inference_experiments.py --num_workers 4 --base_results_dir my_results
-```
-
-The script will:
-- Run experiments on Synthetic (dyn-TF, dyn-CY, dyn-LL, dyn-BF, dyn-SW), Curated, and Renge datasets
-- Test each dataset with multiple random seeds
-- Aggregate results across seeds
-- Generate comparison tables by timepoint and overall performance metrics
-
 ### Knockout Inference Experiments
-
-Run leave-knockout-out inference experiments to test perturbation predictions:
 
 ```bash
 python3 ko_inference_experiments.py
 ```
 
-Optional arguments:
-- `--base_results_dir`: Directory to save results (default: `lko_results`)
-- `--only_aggregate`: Skip running experiments and only aggregate existing results
-- `--num_workers`: Number of parallel workers (default: 1)
-- `--sequential`: Run experiments sequentially instead of in parallel
-
-Example:
-```bash
-python3 ko_inference_experiments.py --num_workers 2 --base_results_dir knockout_results
-```
-
 ### Scaling Experiments
-
-Run causal discovery experiments across different system sizes and sparsity levels:
 
 ```bash
 cd scaling_experiment
 python3 scaling_experiment.py
 ```
 
-The scaling experiment:
-- Tests causal discovery performance on systems ranging from 10 to 500 variables
-- Evaluates multiple sparsity levels (0.05, 0.2, 0.4)
-- Compares multiple methods: StructureFlow (SF2M), NGM-NODE, Reference Fitting (RF), and Correlation
-- Uses sparsity-aware hyperparameter adjustments
-- Generates AUROC and AUPRC metrics for causal graph recovery
-
-You can customize the methods to run by editing the `main()` call at the bottom of the script:
-```python
-main(methods_to_run=["correlation", "rf", "sf2m", "ngm-node"])
-```
-
 ### Baseline Comparisons
-
-#### OTVelo Baseline
-
-Run the OTVelo baseline on synthetic and curated datasets:
 
 ```bash
 cd tools/OTVelo
 bash otvelo_runner.sh
 ```
 
-Environment variables (optional):
-- `PYTHON`: Python executable to use (default: `python3`)
-- `SCRIPT`: Script to run (default: `otvelo_baseline.py`)
-- `DATA_ROOT`: Root directory for synthetic data (default: `../../data/Synthetic`)
-- `HSC_PATH`: Path to curated data (default: `../../data/Curated`)
-
-Example with custom paths:
-```bash
-DATA_ROOT=/path/to/data PYTHON=python3 bash otvelo_runner.sh
-```
-
-#### TIGON Baseline
-
-Run the TIGON baseline on synthetic and curated datasets:
-
 ```bash
 cd tools/TIGON
 bash tigon_runner.sh
 ```
-
-Environment variables (optional):
-- `PYTHON`: Python executable to use (default: `python3`)
-- `SCRIPT`: Script to run (default: `tigon_baseline.py`)
-- `DATA_ROOT`: Root directory for synthetic data (default: `../../data/Synthetic`)
-- `HSC_PATH`: Path to curated data (default: `../../data/Curated`)
-
-Both baseline runners:
-- Run experiments across multiple seeds (1, 2, 3)
-- Process synthetic datasets (dyn-BF, dyn-TF, dyn-SW, dyn-CY, dyn-LL)
-- Include HSC curated dataset if available
-- Automatically aggregate results across seeds
-- Report any failed runs
 
 ## License
 
