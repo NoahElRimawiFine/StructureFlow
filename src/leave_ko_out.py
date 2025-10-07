@@ -7,6 +7,7 @@ from sklearn.decomposition import PCA
 from lightning.pytorch import Trainer, seed_everything
 import os
 import argparse
+import umap
 
 # --- Project Specific Imports ---
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
@@ -22,9 +23,9 @@ from src.models.components.plotting import (
 
 # Default configuration values (will be overridden by command line arguments)
 DEFAULT_DATA_PATH = "data/"
-DEFAULT_DATASET_TYPE = "Curated"
+DEFAULT_DATASET_TYPE = "Renge"
 DEFAULT_DATASET = "dyn-TF"
-DEFAULT_MODEL_TYPE = "rf"
+DEFAULT_MODEL_TYPE = "sf2m"
 DEFAULT_N_STEPS_PER_FOLD = 15000
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
@@ -312,10 +313,11 @@ def create_multi_ko_pca_plot_wgrey(
     left_out_ko_indices,
     folder_path,
     model_type,
+    dataset_type="Synthetic",
 ):
     """
-    Create and save a PCA plot showing multiple left-out KO trajectories with predictions in subplots.
-    Uses grayscale for different time points and highlights predictions.
+    Create and save a dimensionality reduction plot showing multiple left-out KO trajectories with predictions in subplots.
+    Uses UMAP for Renge data and PCA for other datasets. Uses grayscale for different time points and highlights predictions.
 
     Args:
         full_adatas: List of AnnData objects containing the full trajectory data
@@ -324,6 +326,7 @@ def create_multi_ko_pca_plot_wgrey(
         left_out_ko_indices: List of indices of left-out knockouts
         folder_path: Path to save the plot
         model_type: Type of model used ("rf", "sf2m", etc.)
+        dataset_type: Type of dataset ("Renge", "Synthetic", "Curated")
     """
     os.makedirs(folder_path, exist_ok=True)
 
@@ -339,8 +342,30 @@ def create_multi_ko_pca_plot_wgrey(
     fig, axes = plt.subplots(1, 3, figsize=(18, 9))
 
     all_data = np.vstack([adata.X for adata in full_adatas])
-    pca = PCA(n_components=2)
-    pca.fit(all_data)
+
+    # Choose dimensionality reduction method based on dataset type
+    if dataset_type == "Renge":
+        # For Renge, compute UMAP fresh so predictions and data are in same space
+        # Use PCA first then UMAP (matching scanpy's approach)
+        print("Computing UMAP for Renge data (need to project predictions)")
+
+        # First reduce to PCA space (using 50 components like scanpy default)
+        pca_reducer = PCA(n_components=min(50, all_data.shape[0], all_data.shape[1]))
+        all_data_pca = pca_reducer.fit_transform(all_data)
+
+        # Then run UMAP on PCA space
+        reducer = umap.UMAP(
+            n_components=2, random_state=42, n_neighbors=15, min_dist=0.1
+        )
+        reducer.fit(all_data_pca)
+        reduction_method = "UMAP"
+
+        # Store PCA reducer for transforming new data
+        reducer.pca_reducer = pca_reducer
+    else:
+        reducer = PCA(n_components=2)
+        reducer.fit(all_data)
+        reduction_method = "PCA"
 
     # Set reasonable font sizes
     plt.rcParams.update(
@@ -358,21 +383,35 @@ def create_multi_ko_pca_plot_wgrey(
     highlight_color = "#E41A1C"  # Bright red for the latest time point
     prediction_color = "#377EB8"  # Blue for predictions
 
-    x_min, x_max = float("inf"), float("-inf")
-    y_min, y_max = float("inf"), float("-inf")
+    # Transform all data for consistent plotting bounds
+    if dataset_type == "Renge":
+        all_data_reduced = reducer.transform(reducer.pca_reducer.transform(all_data))
+    else:
+        all_data_reduced = reducer.transform(all_data)
+    x_min, x_max = all_data_reduced[:, 0].min(), all_data_reduced[:, 0].max()
+    y_min, y_max = all_data_reduced[:, 1].min(), all_data_reduced[:, 1].max()
 
     for i, (ax, ko_idx) in enumerate(zip(axes, ko_indices_to_plot)):
         adata = full_adatas[ko_idx]
         ko_name = ko_names[ko_idx]
 
         times = adata.obs["t"].values
-        ko_data_pca = pca.transform(adata.X)
+        if dataset_type == "Renge":
+            ko_data_reduced = reducer.transform(reducer.pca_reducer.transform(adata.X))
+        else:
+            ko_data_reduced = reducer.transform(adata.X)
 
         if ko_idx in predictions_dict:
             predictions = predictions_dict[ko_idx]
             if isinstance(predictions, torch.Tensor):
                 predictions = predictions.cpu().numpy()
-            pred_pca = pca.transform(predictions)
+
+            if dataset_type == "Renge":
+                pred_reduced = reducer.transform(
+                    reducer.pca_reducer.transform(predictions)
+                )
+            else:
+                pred_reduced = reducer.transform(predictions)
         else:
             print(f"No predictions available for left-out KO: {ko_name}")
             continue
@@ -380,53 +419,115 @@ def create_multi_ko_pca_plot_wgrey(
         # Get the maximum time to determine which is the final time point
         max_time = max(times)
 
-        # Plot non-final times in grayscale with darker shades for later times
-        for t in sorted(set(times)):
-            if t == max_time:
-                continue
+        if dataset_type == "Renge":
+            # For Renge: Plot ALL data in grayscale background, then highlight specific condition
 
-            t_mask = times == t
-            shade = 0.3 + 0.5 * (t / max_time)  # Map to darkness between 0.3-0.8
-            gray_color = str(1 - shade)  # Grayscale as string: '0.2' to '0.7'
-
-            ax.scatter(
-                ko_data_pca[t_mask, 0],
-                ko_data_pca[t_mask, 1],
-                c=gray_color,
-                s=60,
-                label=f"t={t}" if i == 0 and t == min(times) else None,
+            # First plot all data in grayscale with time-based shading
+            data_start_idx = 0
+            max_time_global = max(
+                max(adata_temp.obs["t"].values) for adata_temp in full_adatas
             )
 
-        # Plot final time in highlight color
-        final_time_mask = times == max_time
-        if any(final_time_mask):
+            for adata_idx, adata_temp in enumerate(full_adatas):
+                temp_times = adata_temp.obs["t"].values
+                temp_data_size = adata_temp.X.shape[0]
+                temp_data_reduced = all_data_reduced[
+                    data_start_idx : data_start_idx + temp_data_size
+                ]
+
+                # Plot all conditions in grayscale
+                for t in sorted(set(temp_times)):
+                    t_mask = temp_times == t
+                    shade = 0.3 + 0.4 * (
+                        t / max_time_global
+                    )  # Map to darkness between 0.3-0.7
+                    gray_color = str(1 - shade)  # Grayscale as string
+
+                    ax.scatter(
+                        temp_data_reduced[t_mask, 0],
+                        temp_data_reduced[t_mask, 1],
+                        c=gray_color,
+                        s=60,
+                        alpha=0.6,
+                        label=(
+                            f"t={t}"
+                            if i == 0 and adata_idx == 0 and t == min(temp_times)
+                            else None
+                        ),
+                    )
+
+                data_start_idx += temp_data_size
+
+            # Now highlight the specific knockout condition at final time
+            final_time_mask = times == max_time
+            if any(final_time_mask):
+                ax.scatter(
+                    ko_data_reduced[final_time_mask, 0],
+                    ko_data_reduced[final_time_mask, 1],
+                    c=highlight_color,
+                    s=80,
+                    label=f"t={max_time} (final)" if i == 0 else None,
+                )
+
+            # Plot predictions
             ax.scatter(
-                ko_data_pca[final_time_mask, 0],
-                ko_data_pca[final_time_mask, 1],
-                c=highlight_color,
-                s=80,
-                label=f"t={max_time} (final)" if i == 0 else None,
+                pred_reduced[:, 0],
+                pred_reduced[:, 1],
+                c=prediction_color,
+                s=100,
+                marker="x",
+                linewidth=2,
+                label="Predictions" if i == 0 else None,
             )
 
-        # Plot predictions
-        ax.scatter(
-            pred_pca[:, 0],
-            pred_pca[:, 1],
-            c=prediction_color,
-            s=100,
-            marker="x",
-            linewidth=2,
-            label="Predictions" if i == 0 else None,
-        )
+        else:
+            # Original logic for non-Renge datasets
+            # Plot non-final times in grayscale with darker shades for later times
+            for t in sorted(set(times)):
+                if t == max_time:
+                    continue
 
-        x_min = min(x_min, ko_data_pca[:, 0].min(), pred_pca[:, 0].min())
-        x_max = max(x_max, ko_data_pca[:, 0].max(), pred_pca[:, 0].max())
-        y_min = min(y_min, ko_data_pca[:, 1].min(), pred_pca[:, 1].min())
-        y_max = max(y_max, ko_data_pca[:, 1].max(), pred_pca[:, 1].max())
+                t_mask = times == t
+                shade = 0.3 + 0.5 * (t / max_time)  # Map to darkness between 0.3-0.8
+                gray_color = str(1 - shade)  # Grayscale as string: '0.2' to '0.7'
 
-        ax.set_xlabel("PC1", fontsize=28)
+                ax.scatter(
+                    ko_data_reduced[t_mask, 0],
+                    ko_data_reduced[t_mask, 1],
+                    c=gray_color,
+                    s=60,
+                    label=f"t={t}" if i == 0 and t == min(times) else None,
+                )
+
+            # Plot final time in highlight color
+            final_time_mask = times == max_time
+            if any(final_time_mask):
+                ax.scatter(
+                    ko_data_reduced[final_time_mask, 0],
+                    ko_data_reduced[final_time_mask, 1],
+                    c=highlight_color,
+                    s=80,
+                    label=f"t={max_time} (final)" if i == 0 else None,
+                )
+
+            # Plot predictions
+            ax.scatter(
+                pred_reduced[:, 0],
+                pred_reduced[:, 1],
+                c=prediction_color,
+                s=100,
+                marker="x",
+                linewidth=2,
+                label="Predictions" if i == 0 else None,
+            )
+
+        # Use appropriate axis labels based on reduction method
+        component1_label = "UMAP1" if reduction_method == "UMAP" else "PC1"
+        component2_label = "UMAP2" if reduction_method == "UMAP" else "PC2"
+
+        ax.set_xlabel(component1_label, fontsize=28)
         if i == 0:
-            ax.set_ylabel("PC2", fontsize=28)
+            ax.set_ylabel(component2_label, fontsize=28)
 
         ko_label = "Wild Type" if ko_name is None else f"Knockout {ko_name}"
         ax.set_title(ko_label, pad=15, fontsize=28)
@@ -522,6 +623,15 @@ def main(args):
     full_adatas = datamodule.get_subset_adatas()
     if not full_adatas:
         raise ValueError("No datasets loaded.")
+
+    # Print data statistics for verification (especially useful for Renge)
+    if DATASET_TYPE == "Renge":
+        total_cells = sum(adata.shape[0] for adata in full_adatas)
+        n_genes = full_adatas[0].shape[1] if full_adatas else 0
+        print(f"Renge data: {total_cells} total cells, {n_genes} genes")
+        print(f"Knockout conditions: {datamodule.kos}")
+        for i, (adata, ko) in enumerate(zip(full_adatas, datamodule.kos)):
+            print(f"  KO {i} ({ko}): {adata.shape[0]} cells")
 
     # Determine the KO indices to leave out
     total_kos = len(full_adatas)
@@ -900,6 +1010,7 @@ def main(args):
             LEAVE_OUT_KO_INDICES,
             multi_ko_pca_folder,
             MODEL_TYPE,
+            DATASET_TYPE,
         )
         print(f"Multi-KO comparison plots saved to: {multi_ko_pca_folder}")
     elif len(LEAVE_OUT_KO_INDICES) < 3:
