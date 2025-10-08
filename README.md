@@ -134,7 +134,7 @@ You can override any parameter from command line like this
 python src/train.py trainer.max_epochs=20 data.batch_size=64
 ```
 
-## Running Experiments
+## Running Trajectory/Knockout Inference Experiments
 
 ### Trajectory Inference Experiments
 
@@ -148,13 +148,6 @@ python3 trajectory_inference_experiments.py
 python3 ko_inference_experiments.py
 ```
 
-### Scaling Experiments
-
-```bash
-cd scaling_experiment
-python3 scaling_experiment.py
-```
-
 ### Baseline Comparisons
 
 ```bash
@@ -166,6 +159,14 @@ bash otvelo_runner.sh
 cd tools/TIGON
 bash tigon_runner.sh
 ```
+
+## Scaling Experiments
+
+```bash
+cd scaling_experiment
+python3 scaling_experiment.py
+```
+
 
 ## License
 
