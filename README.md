@@ -136,19 +136,19 @@ python src/train.py trainer.max_epochs=20 data.batch_size=64
 
 ## Running Trajectory/Knockout Inference Experiments
 
-### Trajectory Inference Experiments
+### Trajectory Inference Experiments (runs Structure, SF2M, RF)
 
 ```bash
 python3 trajectory_inference_experiments.py
 ```
 
-### Knockout Inference Experiments
+### Knockout Inference Experiments (runs Structure, SF2M, RF)
 
 ```bash
 python3 ko_inference_experiments.py
 ```
 
-### Baseline Comparisons
+### Trajectory Inference Experiments (OTVelo + TIGON)
 
 ```bash
 cd tools/OTVelo
