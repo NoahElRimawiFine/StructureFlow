@@ -12,6 +12,7 @@ scipy
 scikit-learn
 scprep
 scanpy
+umap-learn
 torchdyn>=1.0.6   # 1.0.4 is broken on pypi
 pot
 torchdiffeq

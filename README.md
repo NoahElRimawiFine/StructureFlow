@@ -134,6 +134,40 @@ You can override any parameter from command line like this
 python src/train.py trainer.max_epochs=20 data.batch_size=64
 ```
 
+## Running Trajectory/Knockout Inference Experiments
+
+### Trajectory Inference Experiments (runs Structure, SF2M, RF)
+
+```bash
+python3 trajectory_inference_experiments.py
+```
+
+### Knockout Inference Experiments (runs Structure, SF2M, RF)
+
+```bash
+python3 ko_inference_experiments.py
+```
+
+### Trajectory Inference Experiments (OTVelo + TIGON)
+
+```bash
+cd tools/OTVelo
+bash otvelo_runner.sh
+```
+
+```bash
+cd tools/TIGON
+bash tigon_runner.sh
+```
+
+## Scaling Experiments
+
+```bash
+cd scaling_experiment
+python3 scaling_experiment.py
+```
+
+
 ## License
 
 Lightning-Hydra-Template is licensed under the MIT License.
