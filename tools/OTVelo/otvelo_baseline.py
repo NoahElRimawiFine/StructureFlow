@@ -469,6 +469,56 @@ def solve_prior_strict(counts, counts_pca, Nt, labels,
 
     return Ts, log
 
+def predict_via_velocity(counts_all, Ts, t_star):
+    """
+    Predict x_t from x_(t-1) using velocity estimated from bridge coupling.
+
+    OTVelo-style approach:
+    1. Use the bridge coupling (t-1 → t+1) to estimate velocity
+    2. Take one Euler step from t-1 to predict t
+
+    Args:
+        counts_all: List of count matrices (genes × n_cells) for each time point
+        Ts: List of coupling matrices from solve_prior_strict
+        t_star: The time point to predict
+
+    Returns:
+        X_pred_t: Predicted gene expression at time t_star (genes × n_cells)
+    """
+    T_bridge = Ts[t_star]
+    if T_bridge is None:
+        raise RuntimeError(f"No bridge coupling for t*={t_star}")
+
+    X_tminus1 = counts_all[t_star - 1]  # genes × n_cells (at t-1)
+    X_tplus1 = counts_all[t_star + 1]  # genes × n_cells (at t+1)
+    n_src = X_tminus1.shape[1]
+    n_tgt = X_tplus1.shape[1]
+
+    # Project t-1 cells forward to t+1 using the coupling
+    # This gives us where each cell at t-1 would end up at t+1
+    if T_bridge.shape == (n_src, n_tgt):
+        # Standard: rows = src (t-1), cols = tgt (t+1)
+        X_projected_tplus1 = (T_bridge @ X_tplus1.T).T  # (genes × n_src)
+    elif T_bridge.shape == (n_tgt, n_src):
+        # Transposed: rows = tgt, cols = src
+        X_projected_tplus1 = (T_bridge.T @ X_tplus1.T).T  # (genes × n_src)
+    else:
+        raise ValueError(
+            f"Coupling shape {T_bridge.shape} doesn't match "
+            f"(n_src={n_src}, n_tgt={n_tgt})"
+        )
+
+    # Estimate velocity: change from t-1 to t+1, divided by 2 time steps
+    # velocity = (X_tplus1 - X_tminus1) / (2 * dt)
+    # Since dt=1, velocity = (X_projected_tplus1 - X_tminus1) / 2
+    velocity = (X_projected_tplus1 - X_tminus1) / 2.0
+
+    # Take ONE Euler step from t-1 to t
+    # x_t = x_(t-1) + velocity * dt (dt=1 for one time step)
+    X_pred_t = X_tminus1 + velocity
+
+    return X_pred_t  # (genes × n_cells)
+
 
 def barycentric_two_step(counts_all, Ts, t_star):
     """
@@ -516,7 +566,7 @@ def otvelo_loto_one_fold(counts_all, t_star, *, eps=1e-2, alpha=0.5, pca):
                                normalize_C=True)
 
     # predict via 2-step barycentric
-    X_pred = barycentric_two_step(counts_all, Ts, t_star)
+    X_pred = predict_via_velocity(counts_all, Ts, t_star)
     X_true = counts_all[t_star]                            
 
     # compare in PCA space
