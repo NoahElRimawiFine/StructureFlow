@@ -21,6 +21,8 @@ from functools import partial
 import  ot                                           
 from sklearn.metrics.pairwise import pairwise_kernels
 import math
+import ot as pot
+from ot.backend import get_backend
 
 from otvelo.utils_Velo import *
 
@@ -391,6 +393,15 @@ def mmd_squared(X, Y, kernel=rbf_kernel, sigma_list=None, **kernel_args):
     avg_mmd = torch.stack(mmd_values).mean().item()
     return avg_mmd
 
+def energy_distance(x, y, x_w = None, y_w = None):
+    nx = get_backend(x, y)
+    x_w = nx.full((x.shape[0], ), 1/x.shape[0]) if x_w is None else x_w / x_w.sum()
+    y_w = nx.full((y.shape[0], ), 1/y.shape[0]) if y_w is None else y_w / y_w.sum()
+    xy=nx.dot(x_w, pot.utils.euclidean_distances(x, y, squared=False) @ y_w)
+    xx=nx.dot(x_w, pot.utils.euclidean_distances(x, x, squared=False) @ x_w)
+    yy=nx.dot(y_w, pot.utils.euclidean_distances(y, y, squared=False) @ y_w)
+    return 2*xy-xx-yy
+
 def solve_prior_strict(counts, counts_pca, Nt, labels,
                        eps_samp, alpha=0.5, normalize_C=False):
     """
@@ -412,7 +423,7 @@ def solve_prior_strict(counts, counts_pca, Nt, labels,
         if len(idx_t) and len(idx_t1):
             X1 = counts[:, idx_t ].T
             X2 = counts[:, idx_t1].T
-            M  = ot.dist(counts_pca[:, idx_t ].T, counts_pca[:, idx_t1].T)
+            M  = ot.dist(counts[:, idx_t ].T, counts[:, idx_t1].T)
             if normalize_C: M /= M.max()
             # graph distances
             nnb = max(1, min(int(.2*X1.shape[0]), int(.2*X2.shape[0]), 50))
@@ -437,8 +448,8 @@ def solve_prior_strict(counts, counts_pca, Nt, labels,
                 idx_next = np.where(labels == t+1)[1]
                 X1 = counts[:, idx_prev].T
                 X2 = counts[:, idx_next].T
-                M  = ot.dist(counts_pca[:, idx_prev].T,
-                             counts_pca[:, idx_next].T)
+                M  = ot.dist(counts[:, idx_prev].T,
+                             counts[:, idx_next].T)
                 if normalize_C: M /= M.max()
                 nnb = max(1, min(int(.2*X1.shape[0]), int(.2*X2.shape[0]), 50))
                 D1 = compute_graph_distances(X1, nnb, metric="euclidean")
@@ -509,14 +520,17 @@ def otvelo_loto_one_fold(counts_all, t_star, *, eps=1e-2, alpha=0.5, pca):
     X_true = counts_all[t_star]                            
 
     # compare in PCA space
-    Xp = pca.transform(X_pred.T)
-    Xt = pca.transform(X_true.T)
+    # Xp = pca.transform(X_pred.T)
+    # Xt = pca.transform(X_true.T)
+    Xp = X_pred.T
+    Xt = X_true.T
     Xp = torch.from_numpy(Xp).float() 
     Xt = torch.from_numpy(Xt).float()
     w2  = wasserstein(Xp, Xt)
     _, gamma   = rbf_kernel(Xp, Xt)
     mmd = mmd_squared(Xp, Xt, gamma=gamma)
-    return w2, mmd
+    ed = energy_distance(Xp, Xt)
+    return w2, mmd, ed
 
 def save_adj_heat(mat, title, out_name, cmap="RdBu_r"):
         fig, ax = plt.subplots(figsize=(4, 4))
@@ -582,20 +596,21 @@ def main():
     
     counts_pca, pca = visualize_pca(counts, labels, group_labels, viz_opt="pca")
 
-    # folds = []
-    # for held_out_t in range(1, Nt-1):          # 0 & Nt not held out
-    #     print(f"\n===== OTVelo – hold-out t={held_out_t} =====")
+    folds = []
+    for held_out_t in range(1, Nt-1):          # 0 & Nt not held out
+        print(f"\n===== OTVelo – hold-out t={held_out_t} =====")
 
-    #     w2, mmd = otvelo_loto_one_fold(counts_all,
-    #                         held_out_t,
-    #                         eps=1e-2, alpha=0.5,
-    #                         pca=pca)
-    #     folds.append({"t": held_out_t, "w2": w2, "mmd2": mmd})
-    #     print(f"t={held_out_t}:  W₂={w2:.4f}   MMD²={mmd:.4e}")
+        w2, mmd, ed = otvelo_loto_one_fold(counts_all,
+                            held_out_t,
+                            eps=1e-2, alpha=0.5,
+                            pca=pca)
+        folds.append({"t": held_out_t, "w2": w2, "mmd2": mmd, "ed": ed})
+        print(f"t={held_out_t}:  W₂={w2:.4f}   MMD²={mmd:.4e}  ED={ed:.4f}")
 
-    # df = pd.DataFrame(folds)
-    # print("\nMean W₂  :", df.w2.mean())
-    # print("Mean MMD²:", df.mmd2.mean())
+    df = pd.DataFrame(folds)
+    print("\nMean W₂  :", df.w2.mean())
+    print("Mean MMD²:", df.mmd2.mean())
+    print("Mean ED  :", df.ed.mean())
 
 
     vel_all, vel_all_signed = solve_velocities(counts_all, Ts_prior,
