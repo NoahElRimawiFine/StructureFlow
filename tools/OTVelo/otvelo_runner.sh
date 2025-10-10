@@ -27,12 +27,12 @@ for ds in "${backbones[@]}"; do
   fi
 
   for seed in "${SEEDS[@]}"; do
-    echo "  • WT only (seed ${seed})"
+    echo "WT only (seed ${seed})"
     $PYTHON -u "$SCRIPT" --backbone "${ds}"               \
             --subset wt       \
             --seed "$seed"
 
-    echo "  • WT + KO pooled (seed ${seed})"
+    echo "WT + KO pooled (seed ${seed})"
     $PYTHON -u "$SCRIPT" --backbone "${ds}"               \
             --subset all       \
             --seed "$seed"
@@ -40,15 +40,15 @@ for ds in "${backbones[@]}"; do
 done
 
 if [[ -d "$HSC_PATH" ]]; then
-  echo -e "\n▸ DATASET: HSC (Curated)"
+  echo -e "\n DATASET: HSC (Curated)"
 
   for seed in "${SEEDS[@]}"; do
-    echo "  • WT only (seed ${seed})"
+    echo "WT only (seed ${seed})"
     $PYTHON "$SCRIPT" --backbone "HSC"          \
             --subset wt       \
             --seed "$seed"
 
-    echo "  • WT + KO pooled (seed ${seed})"
+    echo "WT + KO pooled (seed ${seed})"
     $PYTHON "$SCRIPT" --backbone "HSC"          \
             --subset all     \
             --seed "$seed"
@@ -57,4 +57,4 @@ else
   echo -e "\n[WARN] Curated HSC path not found ($HSC_PATH) — skipping"
 fi
 
-echo -e "\n✓ All datasets processed."
+echo -e "\ All datasets processed."
