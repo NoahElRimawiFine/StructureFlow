@@ -605,11 +605,14 @@ def main():
     vel_sign = np.hstack(vel_all_signed)
 
     Tv_corr, _ = OT_lagged_correlation(
-                    vel_all_signed, vel_sign, Ts_prior, stimulation=True, 
+                    vel_all_signed, vel_sign, Ts_prior, stimulation=False, 
                                  elastic_Net=False,tune=False,signed=True, return_slice=True)
+    
+    genes_panel = adatas[0].var.index if hasattr(adatas[0], "var") else [f"g{i}" for i in range(Tv_corr.shape[0])]
+
 
     Tv_corr -= np.diag(np.diag(Tv_corr))
-    save_adj_heat(Tv_corr, "OTVelo (Jacobian)", "OTvelo.pdf", cmap="RdBu_r")
+    print(Tv_corr)
 
     if args.dataset != "renge":
         true_mat -= np.diag(np.diag(true_mat))
@@ -620,10 +623,11 @@ def main():
         tfs = true_mat.index
         y_true = (true_mat.loc[tfs, genes_common] > 0).values.flatten()
 
-    Tv_Granger, Tv_Granger_slices = OT_lagged_correlation(vel_all_signed, vel_sign, Ts_prior, stimulation=True, 
+    Tv_Granger, Tv_Granger_slices = OT_lagged_correlation(vel_all_signed, vel_sign, Ts_prior, stimulation=False, 
                                  elastic_Net=True,l1_opt=0.1,tune=False,signed=True, return_slice=True )       
 
     Tv_Granger = Tv_Granger - np.diag( np.diag(Tv_Granger) )
+    print(Tv_Granger)
 
     from sklearn.metrics import average_precision_score, roc_auc_score
     if args.dataset != 'renge':
