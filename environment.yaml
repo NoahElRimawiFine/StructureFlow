@@ -55,3 +55,14 @@ dependencies:
       - hydra-optuna-sweeper
       - hydra-colorlog
       - rootutils
+      - clean-fid
+      - torchdiffeq
+      - absl-py
+      - scanpy
+      - pot
+      - umap-learn
+      - scprep
+      - tabulate
+      # custom forks made packageable
+      - git+https://github.com/NoahElRimawiFine/OT-Velocity@v0.2.2
+      - git+https://github.com/NoahElRimawiFine/TIGON@v0.1.3
