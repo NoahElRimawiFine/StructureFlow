@@ -38,3 +38,7 @@ rich            # beautiful text formatting in terminal
 pytest          # tests
 # sh            # for running bash commands in some tests (linux/macos only)
 tabulate        # for printing tables in terminal
+
+# custom forks made packageable
+git+https://github.com/NoahElRimawiFine/OT-Velocity@v0.2.2
+git+https://github.com/NoahElRimawiFine/TIGON@v0.1.3

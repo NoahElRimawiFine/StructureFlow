@@ -25,8 +25,8 @@ git clone https://github.com/NoahElRimawiFine/StructureFlow.git
 cd StructureFlow
 
 # [OPTIONAL] create conda environment
-conda create -n myenv python=3.12
-conda activate myenv
+conda create -n structflow python=3.12
+conda activate structflow
 
 # install pytorch according to instructions
 # https://pytorch.org/get-started/
@@ -135,6 +135,13 @@ You can override any parameter from command line like this
 python src/train.py trainer.max_epochs=20 data.batch_size=64
 ```
 
+## Running StructureFlow
+
+```bash
+python3 src/train.py
+```
+This will run StructureFlow on a BoolODE dataset (dyn-TF)
+
 ## Running Trajectory/Knockout Inference Experiments
 
 ### Trajectory Inference Experiments (runs Structure, SF2M, RF)
@@ -192,3 +199,15 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Contributions
+<div align="left">
+
+Have a question? Found a bug? Missing a specific feature? Feel free to file a new issue, discussion or PR with respective title and description.
+
+Before making an issue, please verify that:
+
+- The problem still exists on the current `main` branch.
+- Your python dependencies are updated to recent versions.
+
+Suggestions for improvements are always welcome!
