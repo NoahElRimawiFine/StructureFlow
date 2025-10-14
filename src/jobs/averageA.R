@@ -1,6 +1,6 @@
 args    <- commandArgs(trailingOnly = TRUE)
-out_dir <- args[1]                # e.g. "./results/output_scode"
-repnum  <- as.integer(args[2])    # number of SCODE replicates
+out_dir <- args[1]
+repnum  <- as.integer(args[2])
 
 # helper to load one A.csv as a numeric matrix
 load_A <- function(i) {
@@ -24,7 +24,6 @@ for (i in seq(2, repnum)) {
 # average
 meanA <- meanA / repnum
 
-# write it out
 out_file <- file.path(out_dir, "meanA.csv")
 write.csv(
   meanA,
