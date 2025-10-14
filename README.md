@@ -192,3 +192,15 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Contributions
+<div align="left">
+
+Have a question? Found a bug? Missing a specific feature? Feel free to file a new issue, discussion or PR with respective title and description.
+
+Before making an issue, please verify that:
+
+- The problem still exists on the current `main` branch.
+- Your python dependencies are updated to recent versions.
+
+Suggestions for improvements are always welcome!
