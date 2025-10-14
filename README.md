@@ -135,6 +135,13 @@ You can override any parameter from command line like this
 python src/train.py trainer.max_epochs=20 data.batch_size=64
 ```
 
+## Running StructureFlow
+
+```bash
+python3 src/train.py
+```
+This will run StructureFlow on a BoolODE dataset (dyn-TF)
+
 ## Running Trajectory/Knockout Inference Experiments
 
 ### Trajectory Inference Experiments (runs Structure, SF2M, RF)
