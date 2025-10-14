@@ -12,7 +12,7 @@ import umap
 # --- Project Specific Imports ---
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.rf_module import ReferenceFittingModule
-from src.models.sf2m_module import SF2MLitModule
+from src.models.StructureFlow_module import StructureFlowModule
 from src.models.components.solver import simulate_trajectory, wasserstein, mmd_squared
 from src.models.components.plotting import (
     compute_global_jacobian,
@@ -709,7 +709,7 @@ def main(args):
             use_correction = USE_CORRECTION_MLP and not use_mlp
 
             # Create a modified SF2M model that leaves out the specified knockout during training
-            model = SF2MLitModule(
+            model = StructureFlowModule(
                 datamodule=datamodule,
                 T=T_times,
                 sigma=SIGMA,

@@ -40,7 +40,7 @@ from .components.schedule import ConstantNoiseScheduler, NoiseScheduler
 from .components.solver import TrajectorySolver, simulate_trajectory, wasserstein
 
 
-class SF2MLitModule(LightningModule):
+class StructureFlowModule(LightningModule):
     def __init__(
         self,
         datamodule,

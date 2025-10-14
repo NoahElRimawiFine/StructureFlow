@@ -15,7 +15,7 @@ from src.models.components.plotting import (
     plot_auprs,
     plot_comparison_heatmaps,
 )
-from src.models.sf2m_module import SF2MLitModule
+from src.models.StructureFlow_module import StructureFlowModule
 from src.utils import RankedLogger
 
 log = RankedLogger(__name__, rank_zero_only=True)
@@ -51,7 +51,7 @@ def load_model_from_checkpoint(checkpoint_path, config_path=None):
     model_config = {k: v for k, v in cfg.model.items() if k != "datamodule"}
     
     # Load the model from checkpoint
-    model = SF2MLitModule.load_from_checkpoint(
+    model = StructureFlowModule.load_from_checkpoint(
         checkpoint_path,
         datamodule=datamodule,
         **model_config

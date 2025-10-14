@@ -25,7 +25,7 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
-from src.models.sf2m_module import SF2MLitModule
+from src.models.StructureFlow_module import StructureFlowModule
 
 from src.models.components.base import MLPODEF
 from src.models.components.cond_mlp import MLP as CONDMLP

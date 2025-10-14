@@ -21,7 +21,7 @@ from src.models.components.plotting import (
     plot_auprs,
 )
 from src.models.rf_module import ReferenceFittingModule
-from src.models.sf2m_module import SF2MLitModule
+from src.models.StructureFlow_module import StructureFlowModule
 from src.models.components.solver import simulate_trajectory, wasserstein, mmd_squared
 
 # Default configuration values (will be overridden by command line arguments)
@@ -758,7 +758,7 @@ def main(args):
             use_mlp = MODEL_TYPE == "mlp_baseline"
             use_correction = USE_CORRECTION_MLP and not use_mlp
 
-            model = SF2MLitModule(
+            model = StructureFlowModule(
                 datamodule=datamodule,
                 T=T_times,
                 sigma=SIGMA,
