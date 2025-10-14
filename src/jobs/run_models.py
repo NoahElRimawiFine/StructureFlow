@@ -1,23 +1,7 @@
-#!/usr/bin/env python
-# infer_perturb.py
 """
-Run dynGENIE3, GLASSO, SINCERITIES, SCODE on a perturb-seq dataset and write:
-
-results/
-└── <dataset>/                        # dataset folder  (dyn-TF-1000-1, HSC-…)
-    ├── output_scode_<dataset>/      # full SCODE raw outputs
-    ├── A_dyngenie3_*.csv            # one CSV per model …    } duplicated
-    ├── A_glasso_*.csv               # … both here and in …   }   inside
-    ├── A_sincerities_*.csv          #                       regime sub-dir
-    ├── A_scode_*.csv                #                       (wt / full)
-    ├── metrics_*.csv                # concatenated AP scores
-    ├── wt/                          # WT-only run
-    │   └── <all PNG/CSV from WT>    #  ─┐
-    └── full/                        # full (concatenated)   ─┘ identical layout
+Run dynGENIE3, GLASSO, SINCERITIES, SCODE on a perturb-seq dataset
 """
 
-# ░░░ Imports
-# ----------------------------------------------------------------
 import argparse
 import os
 import shutil
@@ -46,8 +30,6 @@ import random
 
 matplotlib.use("Agg")
 
-# ░░░ CLI
-# ----------------------------------------------------------------
 parser = argparse.ArgumentParser()
 parser.add_argument("path", type=str,
                     help="Path to the WT replicate folder (dyn-TF-… or curated)")
@@ -61,8 +43,7 @@ parser.add_argument("--seed", type=int, default=None,
                     help="Random seed for reproducibility (default: None)")
 args = parser.parse_args()
 
-# ░░░ Run-level tags & folders
-# ----------------------------------------------------------------
+
 script_dir   = Path(__file__).resolve().parent
 dataset_name = Path(args.path).name                    # dyn-TF-1000-1
 regime_tag   = "full" if args.concat_all else "wt"     # wt | full
@@ -72,7 +53,6 @@ results_dir  = dataset_root / regime_tag               # <dataset>/wt or /full
 results_dir.mkdir(parents=True, exist_ok=True)
 random.seed(args.seed)
 
-# helper ─ save_csv -----------------------------------------------------------
 def save_csv(df: pd.DataFrame, stem: str, **to_csv_kwargs) -> Path:
     """
     Write <stem>_<regime>_<dataset>.csv BOTH in
@@ -91,8 +71,6 @@ def save_csv(df: pd.DataFrame, stem: str, **to_csv_kwargs) -> Path:
     return run_path
 
 
-# ░░░  Utility functions (unchanged)
-# ----------------------------------------------------------------
 def discover_replicates(backbone_dir: str) -> list[Path]:
     bb = Path(backbone_dir).resolve()
     backbone = bb.name
@@ -127,18 +105,7 @@ def plot_grns(grns: dict[str, np.ndarray],
               true_grn: np.ndarray | None = None,
               cmap="RdBu_r",
               clamp=20.0) -> plt.Figure:
-    """
-    Plot each GRN adjacency matrix with:
-      • its own min/max (unless |val| > clamp, then we clamp)
-      • 0 always white (via TwoSlopeNorm)
-      • negative→blue, positive→red (RdBu_r)
 
-    Args:
-      grns:     dict of name→adjacency matrix
-      true_grn: optional “True” matrix to append
-      cmap:     diverging colormap
-      clamp:    maximum absolute value allowed (per panel)
-    """
     # collect names/mats
     names = list(grns)
     mats  = [maskdiag(grns[n]) for n in names]
@@ -174,9 +141,6 @@ def plot_grns(grns: dict[str, np.ndarray],
 
     return fig
 
-
-# ░░░  Data loading
-# ----------------------------------------------------------------
 backbone = (
     Path(args.path).name.split("-")[0]
     if args.curated else Path(args.path).name.split("-")[1]
@@ -186,7 +150,6 @@ print(f"[INFO] backbone = {backbone}")
 paths   = discover_replicates(args.path)
 adatas  = [load_adata(p) for p in paths]
 
-# truth matrix ----------------------------------------------------
 df_truth = pd.read_csv(Path(paths[0]).parent / "refNetwork.csv")
 n_genes  = adatas[0].n_vars
 true_matrix = pd.DataFrame(
@@ -197,7 +160,6 @@ for _, row in df_truth.iterrows():
     tgt, src, sign = row[1], row[0], {"+": 1, "-": -1}[row[2]]
     true_matrix.loc[tgt, src] = sign
 
-# pseudo-time bins ------------------------------------------------
 t_bins = np.linspace(0, 1, args.T+1)[:-1]
 for adata in adatas: bin_timepoints(adata, t_bins)
 
@@ -205,8 +167,7 @@ adata = (ad.concat(adatas, axis=0, join="inner", label="source",
                    keys=[p.name for p in paths], index_unique=None)
          if args.concat_all else adatas[0])
 
-# ░░░  Inference models
-# ----------------------------------------------------------------
+
 from dynGENIE3 import dynGENIE3
 
 # dynGENIE3 -------------------------------------------------------
@@ -272,8 +233,7 @@ subprocess.run([
 A_scode = pd.read_csv(scode_out / "meanA.csv")
 save_csv(A_scode, "A_scode", header=False, index=False)
 
-# ░░░  Diagnostics & metrics
-# ----------------------------------------------------------------
+
 methods = {
     "dynGENIE3":  A_dyngenie3,
     "GLASSO":     A_glasso,
@@ -287,7 +247,6 @@ fig.savefig(results_dir / f"comparison_T{args.T}_{regime_tag}_{dataset_name}_see
 
 y_true = np.abs(maskdiag(true_matrix.values)).astype(int).flatten()
 
- # ---------------- PR + ROC curves ----------------
 curves_pr  = {}
 curves_roc = {}
 for name, A in methods.items():
@@ -303,7 +262,6 @@ for name, A in methods.items():
     fpr, tpr, _ = roc_curve(y_true, y_score)
     curves_roc[name] = (fpr, tpr, roc_auc_score(y_true, y_score))
 
-# ---- PR figure (unchanged) ----
 fig_pr, ax_pr = plt.subplots(figsize=(5, 4))
 for name, (rec, prec, ap, aupr) in curves_pr.items():
     ax_pr.step(rec, prec, where="post",
@@ -316,7 +274,6 @@ fig_pr.savefig(results_dir / f"pr_{regime_tag}_{dataset_name}_seed{args.seed}.pd
                dpi=300)
 plt.close(fig_pr)
 
-# ---- ROC figure ----
 fig_roc, ax_roc = plt.subplots(figsize=(5, 4))
 for name, (fpr, tpr, auc) in curves_roc.items():
     ax_roc.plot(fpr, tpr, label=f"{name} (AUC={auc:.2f})")
@@ -327,7 +284,7 @@ fig_roc.savefig(results_dir / f"roc_{regime_tag}_{dataset_name}_seed{args.seed}.
                 dpi=300, bbox_inches="tight")
 plt.close(fig_roc)
 
-# ---------------- CSV ----------------
+
 metric_rows = []
 for m in methods:
     metric_rows.append({
