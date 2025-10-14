@@ -13,7 +13,6 @@
 
 ## Description
 
-What it does
 
 ## Installation
 
