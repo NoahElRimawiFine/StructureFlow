@@ -21,7 +21,7 @@ channels:
 # compatibility is usually guaranteed
 
 dependencies:
-  - python=3.10
+  - python=3.12
   - pytorch=2.*
   - torchvision=0.*
   - lightning=2.*
@@ -30,6 +30,18 @@ dependencies:
   - rich=13.*
   - pre-commit=3.*
   - pytest=7.*
+  - numpy=1.26.4
+  - pandas
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - scipy
+  - anndata
+  - scanpy
+  - h5py
+  - networkx
+  - jupyter
+  - pip>=23
 
   # --------- loggers --------- #
   # - wandb
