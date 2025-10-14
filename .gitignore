@@ -27,6 +27,10 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*.pdf
+*.png
+*.csv
+*.npy
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -177,3 +181,13 @@ referencefitting/notebooks/renge_scCRISPR/chip_1kb
 referencefitting/notebooks/renge_scCRISPR/*.csv
 referencefitting/notebooks/*.h5ad
 referencefitting/notebooks/renge_scCRISPR/W_v_matrices
+
+# TIGON
+tools/TIGON/*.pdf
+tools/TIGON/*.csv
+tools/TIGON/*.png
+
+#OTVelo
+tools/OTVelo/*.pdf
+tools/OTVelo/*.csv
+tools/OTVelo/*.png
