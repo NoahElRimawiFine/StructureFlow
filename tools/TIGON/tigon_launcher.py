@@ -21,6 +21,6 @@ for bb, sub in itertools.product(backbones, subsets):
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError as e:
-        print(f"[ERROR] {cmd} → exit {e.returncode}")
+        print(f"[ERROR] {cmd} -> exit {e.returncode}")
         print(e.stderr)
         continue

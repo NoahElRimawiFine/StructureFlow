@@ -26,7 +26,7 @@ FAILS=()
 
 for BACKBONE in "${BACKBONES[@]}"; do
     DIR="${DATA_ROOT}/${BACKBONE}"
-    echo -e "\n▸ DATASET: ${BACKBONE}"
+    echo -e "\n DATASET: ${BACKBONE}"
 
     if [[ ! -d "$DIR" ]]; then
         echo "  [WARN] path not found -> $DIR (skipping)"; continue
@@ -75,7 +75,7 @@ else
 fi
 
 # Aggregate results across seeds
-echo -e "\n▸ Aggregating results across seeds..."
+echo -e "\n Aggregating results across seeds..."
 if command -v python3 &> /dev/null; then
     python3 aggregate_seeds.py
 else
@@ -90,5 +90,5 @@ if [[ ${#FAILS[@]} -ne 0 ]]; then
     done
     exit 1
 else
-    echo -e "\n✓ All datasets processed successfully."
+    echo -e "\n All datasets processed successfully."
 fi
