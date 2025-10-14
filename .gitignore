@@ -153,6 +153,8 @@ src/jobs/heatmaps
 notebooks/*.h5ad
 src/jobs/*.csv
 src/jobs/generate_heatmaps.py
+src/jobs/pdf_maker.sh
+src/jobs/dataset_reader.sh
 
 
 
