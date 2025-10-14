@@ -25,8 +25,8 @@ git clone https://github.com/NoahElRimawiFine/StructureFlow.git
 cd StructureFlow
 
 # [OPTIONAL] create conda environment
-conda create -n myenv python=3.12
-conda activate myenv
+conda create -n structflow python=3.12
+conda activate structflow
 
 # install pytorch according to instructions
 # https://pytorch.org/get-started/
