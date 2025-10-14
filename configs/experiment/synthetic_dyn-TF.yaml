@@ -1,0 +1,39 @@
+# @package _global_
+
+defaults:
+  - override /model: StructureFlow.yaml      
+  - override /data: boolode.yaml  
+  - override /logger:
+      - tensorboard
+
+seed: 0
+tags: ["synthetic", "dyn-TF", "StructureFlow"]
+
+datamodule:
+  dataset: "dyn-TF"              
+  dataset_type: "Synthetic"
+  batch_size: 64
+  num_workers: 4
+  train_val_test_split: [0.8, 0.1, 0.1]
+
+
+model:
+  T: 5
+  sigma: 1.0
+  dt: 0.2
+  alpha: 0.1
+  reg: 5e-6
+  correction_reg_strength: 0.0
+  n_steps: 15000
+  lr: 3e-3
+  GL_reg: 0.04
+  knockout_hidden: 100
+  score_hidden: [100, 100]
+  correction_hidden: [64, 64]
+  optimizer:
+    lr: 3e-3
+    weight_decay: 1e-2
+
+logger:
+  tensorboard:
+    save_dir: "logs/sf2m_dyn_tf"

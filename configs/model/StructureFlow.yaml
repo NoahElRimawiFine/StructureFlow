@@ -1,4 +1,4 @@
-_target_: src.models.sf2m_module.StructureFlowModule
+_target_: src.models.StructureFlow_module.StructureFlowModule
 _partial_: true
 
 datamodule: ${data}
