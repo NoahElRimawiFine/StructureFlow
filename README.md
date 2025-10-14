@@ -1,6 +1,6 @@
 <div align="center">
 
-# StructureFlow: Simulation-free Structure Learningfor Stochastic Dynamics
+# StructureFlow: Simulation-free Structure Learning for Stochastic Dynamics
 
 <a href="https://pytorch.org/get-started/locally/"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-ee4c2c?logo=pytorch&logoColor=white"></a>
 <a href="https://pytorchlightning.ai/"><img alt="Lightning" src="https://img.shields.io/badge/-Lightning-792ee5?logo=pytorchlightning&logoColor=white"></a>
@@ -21,8 +21,8 @@ What it does
 
 ```bash
 # clone project
-git clone [https://github.com/NoahElRimawiFine/sf2m-grn-hydra](https://github.com/NoahElRimawiFine/structureflow.git)
-cd structureflow
+git clone https://github.com/NoahElRimawiFine/StructureFlow.git
+cd StructureFlow
 
 # [OPTIONAL] create conda environment
 conda create -n myenv python=3.12
@@ -39,8 +39,8 @@ pip install -r requirements.txt
 
 ```bash
 # clone project
-git clone https://github.com/YourGithubName/your-repo-name
-cd your-repo-name
+git clone https://github.com/NoahElRimawiFine/StructureFlow.git
+cd StructureFlow
 
 # create conda environment and install dependencies
 conda env create -f environment.yaml -n myenv
