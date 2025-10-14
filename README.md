@@ -138,7 +138,7 @@ python src/train.py trainer.max_epochs=20 data.batch_size=64
 ## Running StructureFlow
 
 ```bash
-python3 src/train.py
+python3 src/train.py experiment=synthetic_dyn-TF.yaml
 ```
 This will run StructureFlow on a BoolODE dataset (dyn-TF)
 
