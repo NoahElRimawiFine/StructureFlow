@@ -69,17 +69,9 @@ def mix_rbf_mmd2_and_ratio(X, Y, sigma_list, biased=True):
     # return _mmd2_and_ratio(K_XX, K_XY, K_YY, const_diagonal=d, biased=biased)
     return _mmd2_and_ratio(K_XX, K_XY, K_YY, const_diagonal=False, biased=biased)
 
-
-################################################################################
-# Helper functions to compute variances based on kernel matrices
-################################################################################
-
-
 def _mmd2(K_XX, K_XY, K_YY, const_diagonal=False, biased=False):
     m = K_XX.size(0)  # assume X, Y are same shape
 
-    # Get the various sums of kernels that we'll use
-    # Kts drop the diagonal, but we don't need to compute them explicitly
     if const_diagonal is not False:
         diag_X = diag_Y = const_diagonal
         sum_diag_X = sum_diag_Y = m * const_diagonal
@@ -120,8 +112,6 @@ def _mmd2_and_ratio(K_XX, K_XY, K_YY, const_diagonal=False, biased=False):
 def _mmd2_and_variance(K_XX, K_XY, K_YY, const_diagonal=False, biased=False):
     m = K_XX.size(0)  # assume X, Y are same shape
 
-    # Get the various sums of kernels that we'll use
-    # Kts drop the diagonal, but we don't need to compute them explicitly
     if const_diagonal is not False:
         diag_X = diag_Y = const_diagonal
         sum_diag_X = sum_diag_Y = m * const_diagonal

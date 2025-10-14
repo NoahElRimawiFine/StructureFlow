@@ -40,7 +40,6 @@ class NGMNodeModule(LightningModule):
         self.plot = plot
         self.nice_name = nice_name
 
-        # Placeholders to be initialized in on_fit_start.
         self.adatas_list = None  # List of data objects
         self.num_time_bins = None  # Total time bins (t)
         self.num_transitions = None  # t - 1
@@ -49,8 +48,7 @@ class NGMNodeModule(LightningModule):
         self.sinkhorn_loss = None  # Sinkhorn loss function instance
 
     def on_fit_start(self):
-        """Called once when training starts.
-
+        """
         Retrieves the data from the datamodule and sets up necessary variables.
         """
         # Assume datamodule has been set up with attributes: adatas_list and t.
@@ -74,8 +72,8 @@ class NGMNodeModule(LightningModule):
 
         Args:
             adata: An AnnData-like object with:
-                   • adata.X (numpy array of expression data)
-                   • adata.obs["t"] (time bin info)
+                   adata.X (numpy array of expression data)
+                   adata.obs["t"] (time bin info)
             t_start (int): Starting time bin index.
             batch_size (int): Number of samples in the batch.
 
@@ -107,47 +105,35 @@ class NGMNodeModule(LightningModule):
           3. Unsqueeze x0 to add a time dimension.
           4. Solve the ODE from x0 over the transition times using odeint.
           5. Compute the Sinkhorn loss between the final state and target state x1.
-          6. Add L₂ and L₁ regularization from the network's custom methods.
+          6. Add L2 and L1 regularization from the network's custom methods.
           7. Log the loss and optionally print it.
         """
-        # (1) Randomly select a transition and dataset.
         t_start = np.random.randint(0, self.num_transitions)
         ds_idx = np.random.randint(0, len(self.adatas_list))
         adata = self.adatas_list[ds_idx]
 
-        # (2) Create batch: x0, transition_times, x1.
         x0, t_tensor, x1 = self.create_batch_for_transition(adata, t_start, self.batch_size)
-        # (3) Add a time dimension to x0: now shape [batch_size, 1, num_variables].
         x0 = x0.unsqueeze(1)
         z0 = x0
 
-        # (4) Solve the ODE using the neural ODE function (self.net).
-        #    odeint returns a tensor of shape [num_time_points, batch_size, 1, num_variables].
         z_pred = odeint(self.net, z0, t_tensor)
-        # Take the final time output and remove the extra dimension.
         z_pred = z_pred[-1].squeeze(1)  # shape: [batch_size, num_variables]
 
-        # (5) Compute the loss as Sinkhorn loss between prediction and target.
         loss = self.sinkhorn_loss(z_pred, x1)
-        # (6) Add L₂ regularization if specified.
         if self.l2_reg != 0:
             loss += self.l2_reg * self.net.l2_reg()
-        # (7) Add L₁ regularization if specified.
         if self.l1_reg != 0:
             loss += self.l1_reg * self.net.fc1_reg()
 
-        # (8) Log the loss.
         self.log("train/loss", loss, on_step=True, on_epoch=True)
         if self.plot and (self.global_step % self.plot_freq == 0):
             self.print(f"Step {self.global_step}: loss = {loss.item():.4f}")
         return loss
 
     def validation_step(self, batch, batch_idx):
-        # Return or log your validation losses
         return {}
 
     def test_step(self, batch, batch_idx):
-        """Evaluate on test data (e.g. held-out time, etc.)."""
         return {}
 
     def on_train_epoch_end(self):
@@ -164,7 +150,6 @@ class NGMNodeModule(LightningModule):
         def maskdiag(A):
             return A * (1 - np.eye(A.shape[0]))  # Shape should match dim
 
-        # 3. Create the plot
         fig, ax = plt.subplots(figsize=(6, 5))
         cax = ax.imshow(maskdiag(W_v), cmap="Reds")
         ax.invert_yaxis()
@@ -177,17 +162,12 @@ class NGMNodeModule(LightningModule):
         else:
             plt.show()
 
-        # Log a dummy metric for tracking visualization steps
         self.log("epoch/plot_causal_graph", 1)
 
     def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure):
         """Overrides the default optimizer step.
-
-        Calls the provided optimizer_closure to re-run the forward and backward passes, then steps
-        the optimizer and applies a proximal update.
         """
         optimizer.step(closure=optimizer_closure)
-        # Apply proximal update to the first fully connected layer of the network.
         self.proximal(self.net.fc1.weight, self.net.dims, lam=self.net.GL_reg, eta=0.01)
 
     def proximal(self, w, dims, lam=0.1, eta=0.1):
@@ -195,7 +175,7 @@ class NGMNodeModule(LightningModule):
 
         Args:
             w: Weight tensor (flattened shape) from the network's fc1 layer.
-            dims: A list/tuple, e.g. [d, hidden, d] representing dimensions.
+            dims: [d, hidden_1,...,hidden_n, d] representing dimensions.
             lam: Regularization parameter (lambda).
             eta: Scaling parameter.
         """
@@ -209,13 +189,11 @@ class NGMNodeModule(LightningModule):
             w.copy_(v_.view(-1, d))
 
     def configure_optimizers(self):
-        """Configure and return the optimizer and learning rate scheduler.
-
-        Uses AdamW and a StepLR scheduler that steps every training step.
+        """
+        Configure and return the optimizer and learning rate scheduler.
         """
         optimizer = torch.optim.AdamW(self.net.parameters(), lr=self.lr)
         scheduler = StepLR(optimizer, step_size=2000, gamma=0.5)
-        # Use "step" interval so the scheduler updates after every training step.
         return {
             "optimizer": optimizer,
             "lr_scheduler": {"scheduler": scheduler, "interval": "step"},

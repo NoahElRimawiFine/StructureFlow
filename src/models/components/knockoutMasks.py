@@ -5,6 +5,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 import torch
+from src.datamodules.components import sc_dataset as util
 
 
 def build_knockout_mask(dim: int, ko_idx: int):
@@ -16,9 +17,8 @@ def build_knockout_mask(dim: int, ko_idx: int):
 
 
 class KnockoutMaskProvider:
-    """A callable provider that computes knockout masks from a given data path.
-
-    You can extend this to load a datamodule or AnnData objects as needed.
+    """
+    A callable provider that computes knockout masks from a given data path.
     """
 
     def __init__(
@@ -29,9 +29,6 @@ class KnockoutMaskProvider:
         self.dataset_type = dataset_type
 
     def __call__(self):
-        # Load your data using your preferred logic.
-        # Here we use glob to load paths and then a helper (e.g. util.load_adata)
-        # Assume util.load_adata is a function that returns an AnnData object.
         paths = []
         if self.dataset_type == "Synthetic":
             paths = glob.glob(
@@ -43,7 +40,7 @@ class KnockoutMaskProvider:
             raise ValueError(f"Unknown dataset type: {self.dataset_type}")
 
         from src.datamodules.components import (
-            sc_dataset as util,  # adjust import as needed
+            sc_dataset as util
         )
 
         adatas = [util.load_adata(p) for p in paths]
@@ -65,7 +62,6 @@ class KnockoutMaskProvider:
                 self.ko_indices.append(self.gene_to_index[ko])
 
         knockout_masks = []
-        # Use the first dataset to determine data dimension.
         dim = adatas[0].X.shape[1]
         for i, ko_idx in enumerate(self.ko_indices):
             mask_i = build_knockout_mask(dim, ko_idx)

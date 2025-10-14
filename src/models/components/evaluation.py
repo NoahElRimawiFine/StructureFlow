@@ -6,13 +6,10 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 
 def compare_graphs(true_graph, estimated_graph):
-    """Compute performance measures on (binary) adjacency matrix.
-
-    Input:
-     - true_graph: (dxd) np.array, the true adjacency matrix
-     - estimated graph: (dxd) np.array, the estimated adjacency matrix (weighted or unweighted)
     """
-    # Handle new case where we encode information in the negative numbers
+    Compute performance measures on (binary) adjacency matrix.
+    """
+
     true_graph = np.maximum(0, true_graph)
 
     # mask the diagonal of our matrices

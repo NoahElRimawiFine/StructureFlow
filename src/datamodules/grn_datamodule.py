@@ -25,12 +25,12 @@ class AnnDataDataset(Dataset):
         """
         self.adata = adata
         self.source_id = source_id
-        # If the data matrix is sparse, convert it to dense (or you can use .toarray())
+        # If the data matrix is sparse, convert it to dense
         if hasattr(adata.X, "toarray"):
             self.X = torch.tensor(adata.X.toarray(), dtype=torch.float32)
         else:
             self.X = torch.tensor(adata.X, dtype=torch.float32)
-        # Assume pseudo-time is stored in adata.obs["t"]
+  
         self.t = torch.tensor(adata.obs["t"].values, dtype=torch.long)
 
     def __len__(self):
@@ -92,14 +92,14 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
     def prepare_data(self):
         """
         - Called once on 1 GPU/CPU in a distributed environment.
-        - Here download/untar data if needed.
+        - Here download/untar data
         """
         pass
 
     def setup(self, stage=None):
         """
         - Called on every GPU/CPU in a distributed environment.
-        - This is where we typically load data from disk,
+        - This is where we load data from disk,
           build/transform Datasets, and split them.
         """
         if stage == "fit" or stage is None:
@@ -126,7 +126,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
 
     def _setup_synthetic_or_curated_data(self):
         """Load Synthetic or Curated data from disk."""
-        # We'll load everything once
+        
         paths = []
         if self.dataset_type == "Synthetic":
             paths = glob.glob(
@@ -184,7 +184,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         x_renge_path = os.path.join(self.data_path, "X_renge_d2_80.csv")
         e_renge_path = os.path.join(self.data_path, "E_renge_d2_80.csv")
 
-        # Load the reference network if available
+        # Load the reference network
         ref_network_path = os.path.join(self.data_path, "A_ref_thresh_0.csv")
         try:
             ref_network = pd.read_csv(ref_network_path, index_col=0)
@@ -198,8 +198,6 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         
         # Create the reference network matrix
         if has_ref_network:
-            # Handle the non-square reference network
-            # Get all unique genes from both rows and columns of ref_network
             all_genes = list(set(list(ref_network.index) + list(ref_network.columns)))
             
             # Create a square matrix from the non-square reference
@@ -209,7 +207,6 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                 columns=all_genes,
             )
             
-            # Fill in the values from the reference network
             for i in ref_network.index:
                 for j in ref_network.columns:
                     if i in square_matrix.index and j in square_matrix.columns:
@@ -223,27 +220,23 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                 index=gene_names,
                 columns=gene_names,
             )
-        
-        # Extract time column from X_RENGE
+
         time_column = x_renge.pop('t').values
         
         # Get gene names (all columns except the last one from X_RENGE, and first one is cell IDs)
         gene_names = x_renge.columns.tolist()[1:]
         self.dim = len(gene_names)
-        
-        # Create a dictionary to group cells by knockout gene
-        # e.g., ko_groups = {'gene1': [cell1, cell2], 'gene2': [cell3, cell4]}
+
         ko_groups = {}
         
-        # For each row, determine the knockout gene (if any)
+        # For each row, determine the knockout gene
         for idx, row in x_renge.iterrows():
             ko_gene = None
             for gene in gene_names:
                 if row[gene] == 1.0:
                     ko_gene = gene 
                     break
-            
-            # Add to appropriate group (None for wildtype)
+
             if ko_gene not in ko_groups:
                 ko_groups[ko_gene] = []
             ko_groups[ko_gene].append(idx)
@@ -257,11 +250,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         self.gene_to_index = {gene: idx for idx, gene in enumerate(gene_names)}
         
         for ko_gene, cell_indices in ko_groups.items():
-            # Extract expression data for these cells
-            # e.g., subset_expr = pd.DataFrame([[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]], index=[cell1, cell3])
             subset_expr = e_renge.loc[cell_indices]
-            # Extract time data for these cells
-            # e.g., subset_time = pd.Series([0.1, 0.2, 0.3, 0.4], index=[cell1, cell3, cell4, cell7])
             subset_time = pd.Series(time_column[np.where(np.isin(x_renge.index, cell_indices))[0]], 
                                    index=cell_indices)
             
@@ -296,7 +285,6 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             hipsc.var_names = pd.Index(gene_symbols)
             hipsc.var.index = hipsc.var_names
 
-        # Load the reference network if available
         ref_network_path = os.path.join(self.data_path, "A_ref_thresh_0.csv")
         try:
             ref_network = pd.read_csv(ref_network_path, index_col=0)
@@ -372,12 +360,9 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         # Get the global indices of the selected cells from the ConcatDataset.
         indices = subset.indices  # This is a list of integers.
 
-        # Compute the cumulative lengths for each wrapped AnnDataDataset.
-        # For example, if we have 3 datasets with lengths L1, L2, L3, then:
-        # cum_lengths = [0, L1, L1+L2, L1+L2+L3]
         cum_lengths = np.cumsum(
             [0] + self._dataset_lengths
-        )  # self._dataset_lengths was computed in setup().
+        ) 
 
         # Create a dictionary to accumulate local indices for each original AnnData.
         indices_by_file = {i: [] for i in range(len(self.adatas))}
@@ -394,7 +379,6 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         subset_adatas = []
         for i, adata in enumerate(self.adatas):
             if indices_by_file[i]:
-                # AnnData supports advanced indexing: adata[indices, :] returns a new AnnData with those cells.
                 subset_adatas.append(adata[indices_by_file[i], :])
 
         return subset_adatas
@@ -458,9 +442,6 @@ class DummyInfiniteDataset(IterableDataset):
         while True:
             if self.length is not None and count >= self.length:
                 return # Stop iteration
-            # Yield a dummy tensor (content doesn't matter)
-            # Ensure it's on the correct device type (CPU in this case) if needed,
-            # though Lightning usually handles placement.
             yield torch.zeros(self.data_shape)
             count += 1
 

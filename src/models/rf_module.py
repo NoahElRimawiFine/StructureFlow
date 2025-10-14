@@ -31,11 +31,10 @@ class ReferenceFittingModule(pl.LightningModule):
         self.dummy_param = torch.nn.Parameter(torch.tensor(0.0))
 
     def fit_model(self, adatas, kos, also_wt=False):
-        """Fits the reference model using both knockout and wild-type data.
-
-        This method replicates your original 'train' method.
         """
-        # Determine indices for knockouts (all) and wild-type (where ko is None).
+        Fits the reference model using both knockout and wild-type data.
+        """
+
         ko_idx = list(range(len(kos)))  # all indices
         wt_idx = [i for i, ko in enumerate(kos) if ko is None]
 
@@ -64,10 +63,9 @@ class ReferenceFittingModule(pl.LightningModule):
             )
 
     def fit_model_with_holdout(self, adatas, kos, left_out_time, also_wt=False):
-        """Fits the reference model using both knockout and wild-type data, taking into account a
+        """
+        Fits the reference model using both knockout and wild-type data, taking into account a
         hold-out time.
-
-        Replicates your original 'train_with_holdout' method.
         """
         all_idx = list(range(len(kos)))  # all indices
         wt_idx = [i for i, ko in enumerate(kos) if ko is None]
@@ -127,7 +125,7 @@ class ReferenceFittingModule(pl.LightningModule):
         return x1
 
     def training_step(self, batch, batch_idx):
-        """In our Lightning training_step we assume that the datamodule (e.g. grn_datamodule)
+        """In our Lightning training_step we assume that the datamodule
         provides a batch with keys "adatas" and "kos".
 
         On the first training_step we call fit_model to run the estimator fitting. Subsequent calls
@@ -181,7 +179,6 @@ class ReferenceFittingModule(pl.LightningModule):
         else:
             plt.show()
 
-        # Log a dummy metric for tracking visualization steps
         self.log("epoch/plot_causal_graph", 1)
 
     def configure_optimizers(self):

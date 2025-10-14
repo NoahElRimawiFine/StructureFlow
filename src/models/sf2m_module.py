@@ -164,7 +164,6 @@ class SF2MLitModule(LightningModule):
             device=device,
         )
 
-        # Create correction network only if enabled
         if self.use_correction_mlp:
             self.v_correction = MLP(
                 d=self.n_genes, hidden_sizes=correction_hidden, time_varying=True
@@ -324,7 +323,6 @@ class SF2MLitModule(LightningModule):
                 )[:actual_batch_size]
                 all_cond_vectors.append(cond_expanded.to(self.device))
 
-            # Combine all samples using vstack
             _x = torch.vstack(all_x)
             _s = torch.vstack(all_s)
             _u = torch.vstack(all_u)
@@ -415,7 +413,6 @@ class SF2MLitModule(LightningModule):
             "train/reg_loss", L_reg.item(), on_step=True, on_epoch=True, prog_bar=True
         )
 
-        # Backprop and update
         self.manual_backward(L)
         optimizer.step()
 
@@ -432,39 +429,29 @@ class SF2MLitModule(LightningModule):
         if not self.enable_epoch_end_hook:
             return
 
-        # Import pandas at the beginning of the method
-        import pandas as pd
-
-        # Get all gene names from the model
         model_gene_names = self.data_loader.adatas[0].var_names
 
-        # Compute the full Jacobian (estimated causal graph)
         with torch.no_grad():
             A_estim = compute_global_jacobian(
                 self.func_v, self.adatas, dt=1 / self.T, device=torch.device("cpu")
             )
 
-        # Get the directly extracted causal graph from the model
         W_v = self.func_v.causal_graph(w_threshold=0.0).T
 
-        # Different handling for DataFrame (Renge) vs. numpy array (synthetic)
         if isinstance(self.data_loader.true_matrix, pd.DataFrame):
             # For Renge dataset: extract the exact subset that matches the reference network
             ref_network = self.data_loader.true_matrix
             ref_rows = ref_network.index
             ref_cols = ref_network.columns
 
-            # Create DataFrames for the estimated graphs with all genes
             A_estim_df = pd.DataFrame(
                 A_estim, index=model_gene_names, columns=model_gene_names
             )
             W_v_df = pd.DataFrame(W_v, index=model_gene_names, columns=model_gene_names)
 
-            # Extract the exact subset that corresponds to the reference network dimensions
             A_estim_subset = A_estim_df.loc[ref_rows, ref_cols]
             W_v_subset = W_v_df.loc[ref_rows, ref_cols]
 
-            # Convert to numpy arrays for evaluation
             A_estim_np = A_estim_subset.values
             W_v_np = W_v_subset.values
             A_true_np = ref_network.values
@@ -539,10 +526,8 @@ class SF2MLitModule(LightningModule):
 
             self.train_results.extend(results)
 
-            # Flatten results if multiple batches
             all_results = self.train_results
 
-            # Sort results by time and log the table
             all_results = sorted(all_results, key=lambda r: r["Time"])
             df = pd.DataFrame(all_results)
             table_str = df.to_markdown(index=False)
@@ -552,7 +537,6 @@ class SF2MLitModule(LightningModule):
                     table_str,
                     global_step=self.global_step,
                 )
-            # Optionally also log individual metrics:
             for row in all_results:
                 self.log(
                     f"train/w_dist_ode_time_{row['Time']}",
@@ -573,57 +557,45 @@ class SF2MLitModule(LightningModule):
         if not self.enable_epoch_end_hook:
             return
 
-        # Get validation adatas
         val_adatas = self.data_loader.get_subset_adatas("val")
 
-        # Get all gene names from the model
         model_gene_names = self.data_loader.adatas[0].var_names
 
-        # Compute the full Jacobian (estimated causal graph)
         with torch.no_grad():
             A_estim = compute_global_jacobian(
                 self.func_v, val_adatas, dt=1 / self.T, device=torch.device("cpu")
             )
 
-        # Get the directly extracted causal graph from the model
         W_v = self.func_v.causal_graph(w_threshold=0.0).T
 
-        # Different handling for DataFrame (Renge) vs. numpy array (synthetic)
         if isinstance(self.data_loader.true_matrix, pd.DataFrame):
-            # For Renge dataset: extract the exact subset that matches the reference network
             ref_network = self.data_loader.true_matrix
             ref_rows = ref_network.index
             ref_cols = ref_network.columns
 
-            # Create DataFrames for the estimated graphs with all genes
             A_estim_df = pd.DataFrame(
                 A_estim, index=model_gene_names, columns=model_gene_names
             )
             W_v_df = pd.DataFrame(W_v, index=model_gene_names, columns=model_gene_names)
 
-            # Extract the exact subset that corresponds to the reference network dimensions
             A_estim_subset = A_estim_df.loc[ref_rows, ref_cols]
             W_v_subset = W_v_df.loc[ref_rows, ref_cols]
 
-            # Convert to numpy arrays for evaluation
             A_estim_np = A_estim_subset.values
             W_v_np = W_v_subset.values
             A_true_np = ref_network.values
 
-            # Plot with the subset matrices
             plot_auprs(W_v_np, A_estim_np, A_true_np, self.logger, self.global_step)
             log_causal_graph_matrices(
                 A_estim_np, W_v_np, A_true_np, self.logger, self.global_step
             )
         else:
-            # Standard handling for synthetic data
             A_true = self.true_matrix
             plot_auprs(W_v, A_estim, A_true, self.logger, self.global_step)
             log_causal_graph_matrices(
                 A_estim, W_v, A_true, self.logger, self.global_step
             )
 
-        # Continue with the standard Wasserstein distance evaluation
         results = []
 
         for time in range(1, self.T):
@@ -650,7 +622,6 @@ class SF2MLitModule(LightningModule):
                     cond_vector=cond_vector,
                 )
 
-                # You might also compute the SDE metric similarly
                 traj_sde = simulate_trajectory(
                     self.func_v,
                     self.v_correction,
@@ -679,10 +650,8 @@ class SF2MLitModule(LightningModule):
         self.val_results.extend(results)
 
     def on_validation_epoch_end(self):
-        # Flatten results if multiple batches
         all_results = self.val_results
 
-        # Sort results by time and log the table
         all_results = sorted(all_results, key=lambda r: r["Time"])
         df = pd.DataFrame(all_results)
         table_str = df.to_markdown(index=False)
@@ -692,7 +661,6 @@ class SF2MLitModule(LightningModule):
                 table_str,
                 global_step=self.global_step,
             )
-        # Optionally also log individual metrics:
         for row in all_results:
             self.log(
                 f"val/w_dist_ode_time_{row['Time']}", row["Avg ODE"], prog_bar=True
@@ -712,7 +680,6 @@ class SF2MLitModule(LightningModule):
             self.score_net.parameters()
         )
 
-        # Only include correction network parameters if we're using it
         if self.use_correction_mlp:
             params_to_optimize += list(self.v_correction.parameters())
 

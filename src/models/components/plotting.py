@@ -202,65 +202,6 @@ def plot_comparison_heatmaps(
     invert_yaxis=True,
     mask_diagonal=True,
 ):
-    """Plots a row of heatmaps, one for each (title, matrix) pair in `matrices_and_titles`.
-
-    Args:
-        matrices_and_titles (list of (str, 2D array-like)):
-            A list of tuples: (title, matrix). The matrix can be a numpy array or something convertible to DataFrame.
-
-        row_gene_names (list of str, optional):
-            If provided, used for row labels in the DataFrame.
-
-        col_gene_names (list of str, optional):
-            If provided, used for column labels in the DataFrame.
-
-        gene_names (list of str, optional):
-            If provided and row_gene_names/col_gene_names are not provided, used for both row/col labels in the DataFrame.
-            Kept for backward compatibility.
-
-        main_title (str):
-            A main title displayed above all subplots.
-
-        default_vrange (tuple):
-            The default (vmin, vmax) for the heatmap's color scale.
-
-        special_titles_for_range (set or list, optional):
-            Some titles might need a different color scale.
-            For example, if you want "SF2M" or "True" to have a smaller range.
-            If so, you can supply titles here, and they will use `special_vrange`.
-
-        special_vrange (tuple):
-            (vmin, vmax) for special titles. By default, e.g. (-1, 1).
-
-        cmap (str):
-            Name of the matplotlib/seaborn colormap.
-
-        figsize_per_plot (tuple):
-            Each subplot's (width, height) in inches. The overall figure will be len(matrices_and_titles) * width.
-
-        invert_yaxis (bool):
-            If True, calls `plt.gca().invert_yaxis()` for each subplot.
-            
-        mask_diagonal (bool):
-            If True, masks the diagonal of each matrix before plotting.
-
-    Example:
-        plot_comparison_heatmaps(
-            matrices_and_titles=[
-                ("Model A KO", matrixA_ko),
-                ("Model A", matrixA_wt),
-                ("Model B KO", matrixB_ko),
-                ("Model B", matrixB_wt),
-                ("True", true_matrix),
-            ],
-            row_gene_names=row_genes,
-            col_gene_names=col_genes,
-            main_title="Comparison of Gene Interactions",
-            default_vrange=(-2.5, 2.5),
-            special_titles_for_range={"Model B KO", "Model B", "True"},
-            special_vrange=(-1.0, 1.0),
-        )
-    """
     if special_titles_for_range is None:
         special_titles_for_range = set()
 
@@ -314,10 +255,9 @@ def maskdiag(A):
     Returns:
         numpy array with diagonal elements zeroed out
     """
-    # Create a copy to avoid modifying the original
+
     A_masked = A.copy()
     
-    # Zero out the diagonal elements (only where they exist)
     min_dim = min(A.shape[0], A.shape[1])
     for i in range(min_dim):
         A_masked[i, i] = 0
@@ -364,8 +304,6 @@ def plot_aupr_curve(A_true, W_v, prefix="val"):
 
 
 def get_weights_hist(model):
-    """Extracts all weight parameters (from parameters whose names contain 'weight' and that
-    require gradients) and concatenates them into a single 1D numpy array."""
     weights = []
     for name, param in model.named_parameters():
         # Check that the parameter is a weight and is trainable
@@ -379,13 +317,6 @@ def get_weights_hist(model):
 
 
 def plot_histograms(model_before, model_after, bins=50):
-    """Plots side-by-side histograms of the weight values for two models.
-
-    Parameters:
-        model_before: The original NN model (before integration into Lightning).
-        model_after: The NN model after being incorporated into the Lightning module.
-        bins: Number of bins for the histogram.
-    """
     weights_before = get_weights_hist(model_before)
     weights_after = get_weights_hist(model_after)
 
@@ -435,7 +366,6 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
         t_input = t.unsqueeze(0).unsqueeze(0)
         return v(t_input, x_input).squeeze(0).squeeze(0)
 
-    # Move the function to device context to ensure all intermediates stay on device
     Ju = torch.func.jacrev(get_flow, argnums=1)
 
     Js = []
@@ -459,7 +389,6 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
     J_final = torch.stack(Js, dim=0).mean(dim=0)
     A_est = J_final
 
-    # Only move to CPU at the very end
     return A_est.detach().cpu().numpy().T
 
 
