@@ -12,7 +12,7 @@
 </div>
 
 ## Description
-
+StructureFlow is a simulation-free framework for jointly learning structure and stochastic population dynamics of complex dynamical systems from noisy and partial measurements. Our method builds on advances in score and flow matching and entropy regularized optimal transport, and frames the joint inference task as a multi-marginal schr\"odinger Bridge problem. StructureFlow learns a probability flow ODE that models continuous population evolution while directly encoding the directional dependencies among system variables. There are four key components: (1) the Neural Graphical Model (NGM) that is an autonomous vector field that captures stationary structure, (2) a time-dependent score function that models stochastic population dynamics, (3) the ability to model conditional dynamics (models interventional and observational data), and (4) avoids costly trajectory simulations common in high-dimensional biological systems by training in a simulation-free manner.
 
 ## Installation
 
