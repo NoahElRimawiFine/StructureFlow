@@ -137,7 +137,7 @@ python src/train.py trainer.max_epochs=20 data.batch_size=64
 ## Running StructureFlow
 
 ```bash
-python3 src/train.py experiment=synthetic_dyn-TF.yaml
+python src/train.py experiment=synthetic_dyn-TF.yaml
 ```
 This will run StructureFlow on a BoolODE dataset (dyn-TF)
 
@@ -146,13 +146,13 @@ This will run StructureFlow on a BoolODE dataset (dyn-TF)
 ### Trajectory Inference Experiments (runs Structure, SF2M, RF)
 
 ```bash
-python3 trajectory_inference_experiments.py
+python trajectory_inference_experiments.py
 ```
 
 ### Knockout Inference Experiments (runs Structure, SF2M, RF)
 
 ```bash
-python3 ko_inference_experiments.py
+python ko_inference_experiments.py
 ```
 
 ### Trajectory Inference Experiments (OTVelo + TIGON)
@@ -171,7 +171,7 @@ bash tigon_runner.sh
 
 ```bash
 cd scaling_experiment
-python3 scaling_experiment.py
+python scaling_experiment.py
 ```
 
 
