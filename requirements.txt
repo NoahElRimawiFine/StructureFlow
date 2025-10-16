@@ -7,7 +7,7 @@ lightning-bolts
 
 # --------- others -------- #
 matplotlib
-numpy==1.26.4
+numpy==2.3.4
 scipy
 scikit-learn
 scprep
