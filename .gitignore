@@ -173,3 +173,5 @@ referencefitting/notebooks/renge_scCRISPR/chip_1kb
 referencefitting/notebooks/renge_scCRISPR/*.csv
 referencefitting/notebooks/*.h5ad
 referencefitting/notebooks/renge_scCRISPR/W_v_matrices
+ablation_results
+nonuniform_time_results

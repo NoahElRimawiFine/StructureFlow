@@ -29,6 +29,7 @@ from src.models.components.simple_mlp import MLP
 from .components.optimal_transport import EntropicOTFM
 from .components.plotting import (
     compute_global_jacobian,
+    compute_grn_metrics,
     log_causal_graph_matrices,
     plot_auprs,
     plot_paths,
@@ -135,7 +136,6 @@ class SF2MLitModule(LightningModule):
 
         self.automatic_optimization = False
 
-
         self.dims = [self.n_genes, knockout_hidden, 1]
 
         if self.use_mlp_baseline:
@@ -180,12 +180,17 @@ class SF2MLitModule(LightningModule):
 
             self.v_correction = ZeroModule()
 
+        self.dt_values = getattr(datamodule, "dt_values", None)
+        self.time_values = getattr(datamodule, "time_values", None)
+
         self.otfms = self.build_entropic_otfms(
             self.adatas,
             T=self.T,
             sigma=self.sigma,
             dt=self.dt,
             held_out_time=self.held_out_time,
+            dt_values=self.dt_values,
+            time_values=self.time_values,
         )
 
         self.optimizer = optimizer
@@ -209,7 +214,9 @@ class SF2MLitModule(LightningModule):
             mask[g, g] = 1.0
             return mask
 
-    def build_entropic_otfms(self, adatas, T, sigma, dt, held_out_time=None):
+    def build_entropic_otfms(
+        self, adatas, T, sigma, dt, held_out_time=None, dt_values=None, time_values=None
+    ):
         """Returns a list of EntropicOTFM objects, one per dataset."""
         otfms = []
         for i, adata in enumerate(adatas):
@@ -225,6 +232,8 @@ class SF2MLitModule(LightningModule):
                 device=self.device,
                 held_out_time=held_out_time,
                 normalize_C=False,
+                dt_values=dt_values,
+                time_values=time_values,
             )
             otfms.append(model)
 
@@ -264,8 +273,7 @@ class SF2MLitModule(LightningModule):
             model = self.otfms[ds_idx]
             cond_vector = self.conditionals[ds_idx].to(self.device)
 
-            # Sample bridging flows
-            _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
+            _x, _s, _u, _t, _t_orig, _dt = model.sample_bridges_flows(
                 batch_size=self.batch_size, skip_time=self.held_out_time
             )
             _x = _x.to(self.device)
@@ -273,6 +281,7 @@ class SF2MLitModule(LightningModule):
             _u = _u.to(self.device)
             _t = _t.to(self.device)
             _t_orig = _t_orig.to(self.device)
+            _dt = _dt.to(self.device)
 
             B = _x.shape[0]
 
@@ -281,35 +290,28 @@ class SF2MLitModule(LightningModule):
             cond_expanded = cond_expanded.to(self.device)
 
         else:
-            # Instead of picking one dataset, sample from each dataset
-            all_x, all_s, all_u, all_t, all_t_orig = [], [], [], [], []
+            all_x, all_s, all_u, all_t, all_t_orig, all_dt = [], [], [], [], [], []
             all_cond_vectors = []
 
-            # Determine equal batch sizes for each dataset
             n_datasets = len(self.adatas)
             base_batch_size = self.batch_size // n_datasets
             remainder = self.batch_size % n_datasets
 
-            # Create batch sizes list with equal distribution
             batch_sizes = [base_batch_size] * n_datasets
 
-            # Distribute remainder randomly
             if remainder > 0:
                 indices = torch.randperm(n_datasets)[:remainder]
                 for idx in indices:
                     batch_sizes[idx] += 1
 
-            # Sample from each dataset
             for ds_idx in range(n_datasets):
                 model = self.otfms[ds_idx]
                 cond_vector = self.conditionals[ds_idx].to(self.device)
 
-                # Sample bridges flows with dataset-specific batch size
-                x, s, u, t, t_orig = model.sample_bridges_flows(
+                x, s, u, t, t_orig, dt_sample = model.sample_bridges_flows(
                     batch_size=batch_sizes[ds_idx], skip_time=self.held_out_time
                 )
 
-                # The actual data size returned is larger than requested batch_size due to timepoints
                 actual_batch_size = x.shape[0]
 
                 all_x.append(x.to(self.device))
@@ -317,19 +319,19 @@ class SF2MLitModule(LightningModule):
                 all_u.append(u.to(self.device))
                 all_t.append(t.to(self.device))
                 all_t_orig.append(t_orig.to(self.device))
+                all_dt.append(dt_sample.to(self.device))
 
-                # Expand conditional vectors to match the actual data size returned
                 cond_expanded = cond_vector.repeat(
                     actual_batch_size // cond_vector.shape[0] + 1, 1
                 )[:actual_batch_size]
                 all_cond_vectors.append(cond_expanded.to(self.device))
 
-            # Combine all samples using vstack
             _x = torch.vstack(all_x)
             _s = torch.vstack(all_s)
             _u = torch.vstack(all_u)
             _t = torch.vstack(all_t)
             _t_orig = torch.vstack(all_t_orig)
+            _dt = torch.vstack(all_dt)
             cond_expanded = torch.vstack(all_cond_vectors)
 
             B = _x.shape[0]
@@ -362,13 +364,9 @@ class SF2MLitModule(LightningModule):
                 _t.to(self.device), _x.to(self.device), cond_expanded
             )
 
-        # Losses
         L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
 
-        # Use the dt from the first model
-        dt_value = self.dt
-
-        L_flow = torch.mean((_t_orig * (1 - _t_orig)) * (v_fit * dt_value - _u) ** 2)
+        L_flow = torch.mean((_t_orig * (1 - _t_orig)) * (v_fit * _dt - _u) ** 2)
         L_reg = self.func_v.l2_reg() + self.func_v.fc1_reg()
 
         # Only apply correction regularization if we're using the correction network
@@ -474,6 +472,9 @@ class SF2MLitModule(LightningModule):
             log_causal_graph_matrices(
                 A_estim_np, W_v_np, A_true_np, self.logger, self.global_step
             )
+            grn_metrics = compute_grn_metrics(
+                W_v_np, A_estim_np, A_true_np, mask_diagonal=False
+            )
         else:
             # Standard handling for synthetic data
             A_true = self.true_matrix
@@ -481,6 +482,12 @@ class SF2MLitModule(LightningModule):
             log_causal_graph_matrices(
                 A_estim, W_v, A_true, self.logger, self.global_step
             )
+            grn_metrics = compute_grn_metrics(W_v, A_estim, A_true, mask_diagonal=True)
+
+        self.log("grn/jacobian_ap", grn_metrics["jacobian_ap"], prog_bar=True)
+        self.log("grn/jacobian_auroc", grn_metrics["jacobian_auroc"], prog_bar=True)
+        self.log("grn/graph_ap", grn_metrics["graph_ap"], prog_bar=True)
+        self.log("grn/graph_auroc", grn_metrics["graph_auroc"], prog_bar=True)
 
         table_rows = []
 
@@ -510,6 +517,8 @@ class SF2MLitModule(LightningModule):
                         end_time=time,
                         n_times=min(len(x0), len(true_dist)),
                         cond_vector=cond_vector,
+                        T=self.T,
+                        time_values=self.time_values,
                     )
 
                     traj_sde = simulate_trajectory(
@@ -523,6 +532,8 @@ class SF2MLitModule(LightningModule):
                         n_times=min(len(x0), len(true_dist)),
                         cond_vector=cond_vector,
                         use_sde=True,
+                        T=self.T,
+                        time_values=self.time_values,
                     )
 
                     w_dist_ode = wasserstein(traj_ode[-1], true_dist)
@@ -648,9 +659,10 @@ class SF2MLitModule(LightningModule):
                     end_time=time,
                     n_times=min(len(x0), len(true_dist)),
                     cond_vector=cond_vector,
+                    T=self.T,
+                    time_values=self.time_values,
                 )
 
-                # You might also compute the SDE metric similarly
                 traj_sde = simulate_trajectory(
                     self.func_v,
                     self.v_correction,
@@ -662,6 +674,8 @@ class SF2MLitModule(LightningModule):
                     n_times=min(len(x0), len(true_dist)),
                     cond_vector=cond_vector,
                     use_sde=True,
+                    T=self.T,
+                    time_values=self.time_values,
                 )
 
                 w_dist_ode = wasserstein(traj_ode[-1], true_dist)

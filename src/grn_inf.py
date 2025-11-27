@@ -33,16 +33,55 @@ DEFAULT_SCORE_HIDDEN = [100, 100]
 DEFAULT_CORRECTION_HIDDEN = [64, 64]
 DEFAULT_SIGMA = 1.0
 DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
-DEFAULT_SEED = 1
+DEFAULT_SEED = 3
 DEFAULT_RESULTS_DIR = "results"
 DEFAULT_USE_CORRECTION_MLP = True
+DEFAULT_USE_NONUNIFORM_TIME = False
+DEFAULT_TIME_JITTER = 0.2
+DEFAULT_TIME_SEED = None
 
 # --- Renge Specific Parameters ---
-DEFAULT_N_STEPS = 10000
-DEFAULT_LR = 0.0002
-DEFAULT_REG = 5e-8
-DEFAULT_ALPHA = 0.1
-DEFAULT_GL_REG = 0.02
+# DEFAULT_N_STEPS = 10000
+# DEFAULT_LR = 0.0002
+# DEFAULT_REG = 5e-8
+# DEFAULT_ALPHA = 0.1
+# DEFAULT_GL_REG = 0.02
+
+
+def compute_grn_metrics(estimated_graph, true_graph, mask_diagonal=True):
+    """Compute AP and AUROC metrics for GRN evaluation."""
+    from sklearn.metrics import average_precision_score, roc_auc_score
+
+    if hasattr(true_graph, "values"):
+        true_graph = true_graph.values
+
+    if mask_diagonal:
+        n = min(true_graph.shape[0], estimated_graph.shape[0])
+        true_graph_masked = true_graph.copy()
+        estimated_graph_masked = estimated_graph.copy()
+        for i in range(n):
+            if i < true_graph_masked.shape[0] and i < true_graph_masked.shape[1]:
+                true_graph_masked[i, i] = 0
+            if (
+                i < estimated_graph_masked.shape[0]
+                and i < estimated_graph_masked.shape[1]
+            ):
+                estimated_graph_masked[i, i] = 0
+    else:
+        true_graph_masked = true_graph
+        estimated_graph_masked = estimated_graph
+
+    y_true = np.abs(np.sign(true_graph_masked)).astype(int).flatten()
+    y_pred = np.abs(estimated_graph_masked).flatten()
+
+    if len(np.unique(y_true)) > 1:
+        ap_score = average_precision_score(y_true, y_pred)
+        auroc_score = roc_auc_score(y_true, y_pred)
+    else:
+        ap_score = np.nan
+        auroc_score = np.nan
+
+    return {"ap": ap_score, "auroc": auroc_score}
 
 
 def main(args):
@@ -65,24 +104,37 @@ def main(args):
     RESULTS_DIR = args.results_dir
     MODEL_TYPE = args.model_type
     USE_CORRECTION_MLP = args.use_correction_mlp
+    USE_NONUNIFORM_TIME = args.use_nonuniform_time
+    TIME_JITTER = args.time_jitter
+    TIME_SEED = args.time_seed
+    DATASET = args.dataset
 
-    # Create results directory with model type and seed info
-    RESULTS_DIR = os.path.join(RESULTS_DIR, f"{DATASET_TYPE}_{MODEL_TYPE}_seed{SEED}")
+    dataset_suffix = f"_{DATASET}" if DATASET_TYPE == "Synthetic" and DATASET else ""
+    RESULTS_DIR = os.path.join(
+        RESULTS_DIR, f"{DATASET_TYPE}_{MODEL_TYPE}{dataset_suffix}_seed{SEED}"
+    )
 
     seed_everything(SEED, workers=True)
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     # --- 1. Load Data ---
     print("Loading dataset...")
-    datamodule = TrajectoryStructureDataModule(
-        data_path=DATA_PATH,
-        dataset_type=DATASET_TYPE,
-        batch_size=BATCH_SIZE,
-        use_dummy_train_loader=True,
-        dummy_loader_steps=N_STEPS,
-        num_workers=20,
-        train_val_test_split=(1, 0, 0),
-    )
+    datamodule_kwargs = {
+        "data_path": DATA_PATH,
+        "dataset_type": DATASET_TYPE,
+        "batch_size": BATCH_SIZE,
+        "use_dummy_train_loader": True,
+        "dummy_loader_steps": N_STEPS,
+        "num_workers": 20,
+        "train_val_test_split": (1, 0, 0),
+        "use_nonuniform_time": USE_NONUNIFORM_TIME,
+        "time_jitter": TIME_JITTER,
+        "time_seed": TIME_SEED,
+    }
+    if DATASET_TYPE == "Synthetic" and DATASET:
+        datamodule_kwargs["dataset"] = DATASET
+
+    datamodule = TrajectoryStructureDataModule(**datamodule_kwargs)
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
 
@@ -104,14 +156,20 @@ def main(args):
 
     if MODEL_TYPE == "rf":
         print("Using Reference Fitting model...")
-        # Initialize RF model
-        model = ReferenceFittingModule(use_cuda=(DEVICE == "cuda"))
+        model = ReferenceFittingModule(
+            use_cuda=(DEVICE == "cuda"),
+            dt_values=datamodule.dt_values,
+            time_values=datamodule.time_values,
+        )
 
-        # Fit the model
         print("Fitting RF model...")
-        model.fit_model(full_adatas, datamodule.kos)
+        model.fit_model(
+            full_adatas,
+            datamodule.kos,
+            dt_values=datamodule.dt_values,
+            time_values=datamodule.time_values,
+        )
 
-        # No Lightning Trainer used for RF
         print("RF model fitting complete.")
 
     else:  # "sf2m" or "mlp_baseline"
@@ -205,12 +263,37 @@ def main(args):
         # For synthetic data, use matrices directly
         A_true = true_matrix.values
 
-    plot_auprs(
-        W_v, A_estim, A_true, mask_diagonal=True if DATASET_TYPE != "Renge" else False
+    mask_diag = DATASET_TYPE != "Renge"
+
+    jacobian_metrics = compute_grn_metrics(A_estim, A_true, mask_diagonal=mask_diag)
+    graph_metrics = compute_grn_metrics(W_v, A_true, mask_diagonal=mask_diag)
+
+    results = {
+        "model_type": MODEL_TYPE,
+        "dataset_type": DATASET_TYPE,
+        "dataset": DATASET if DATASET_TYPE == "Synthetic" else "",
+        "seed": SEED,
+        "use_nonuniform_time": USE_NONUNIFORM_TIME,
+        "time_jitter": TIME_JITTER if USE_NONUNIFORM_TIME else 0.0,
+        "jacobian_ap": jacobian_metrics["ap"],
+        "jacobian_auroc": jacobian_metrics["auroc"],
+        "graph_ap": graph_metrics["ap"],
+        "graph_auroc": graph_metrics["auroc"],
+    }
+
+    results_df = pd.DataFrame([results])
+    results_path = os.path.join(RESULTS_DIR, "grn_metrics.csv")
+    results_df.to_csv(results_path, index=False)
+
+    print(f"\nGRN Inference Results:")
+    print(
+        f"  Jacobian AP: {jacobian_metrics['ap']:.4f}, AUROC: {jacobian_metrics['auroc']:.4f}"
     )
-    log_causal_graph_matrices(
-        A_estim, W_v, A_true, mask_diagonal=True if DATASET_TYPE != "Renge" else False
-    )
+    print(f"  Graph AP: {graph_metrics['ap']:.4f}, AUROC: {graph_metrics['auroc']:.4f}")
+    print(f"  Results saved to: {results_path}")
+
+    plot_auprs(W_v, A_estim, A_true, mask_diagonal=mask_diag)
+    log_causal_graph_matrices(A_estim, W_v, A_true, mask_diagonal=mask_diag)
 
 
 if __name__ == "__main__":
@@ -229,6 +312,12 @@ if __name__ == "__main__":
         default=DEFAULT_DATASET_TYPE,
         choices=["Synthetic", "Curated", "Renge"],
         help="Type of dataset to use",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="dyn-TF",
+        help="Dataset name (for Synthetic type)",
     )
 
     # Model parameters
@@ -315,6 +404,24 @@ if __name__ == "__main__":
         type=str,
         default=DEFAULT_RESULTS_DIR,
         help="Directory to save results",
+    )
+    parser.add_argument(
+        "--use_nonuniform_time",
+        action="store_true",
+        default=DEFAULT_USE_NONUNIFORM_TIME,
+        help="Use non-uniform time bins",
+    )
+    parser.add_argument(
+        "--time_jitter",
+        type=float,
+        default=DEFAULT_TIME_JITTER,
+        help="Amount of randomness for non-uniform bins (0.0-1.0)",
+    )
+    parser.add_argument(
+        "--time_seed",
+        type=int,
+        default=DEFAULT_TIME_SEED,
+        help="Random seed for non-uniform time bins",
     )
 
     args = parser.parse_args()

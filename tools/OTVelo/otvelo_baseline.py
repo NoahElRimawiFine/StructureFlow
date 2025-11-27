@@ -16,24 +16,25 @@ import os
 import scipy.sparse as sp
 from sklearn.model_selection import LeaveOneOut
 from sklearn.metrics import mean_squared_error
-from sklearn.decomposition import PCA
 from scipy.stats import wasserstein_distance
 from functools import partial
 import ot
 from sklearn.metrics.pairwise import pairwise_kernels
 import math
+import ot as pot
+from ot.backend import get_backend
 
 from otvelo.utils_Velo import *
 
 from otvelo.utils import *
 import scipy
 import matplotlib.pyplot as plt
+import umap
+from sklearn.decomposition import PCA
 
 import warnings
 
 warnings.filterwarnings("ignore")
-import umap
-
 parser = argparse.ArgumentParser(description="OTVelo baseline script")
 
 parser.add_argument(
@@ -74,7 +75,7 @@ random.seed(seed)
 sklearn.utils.check_random_state(seed)
 
 
-if args.backbone not in ["dyn-BF", "dyn-TF", "dyn-SW", "dyn-CY", "dyn-LL"]:
+if args.backbone not in ["dyn-BF", "dyn-TF", "dyn-SW", "dyn-CY", "dyn-LL", "dyn-LI"]:
     ROOT_SYN = Path(__file__).resolve().parents[2] / "data" / "Curated"
 else:
     ROOT_SYN = Path(__file__).resolve().parents[2] / "data" / "Synthetic"
@@ -159,6 +160,8 @@ def to_otvelo_arrays(adata: ad.AnnData):
             raise ValueError(f"slice at t={tb} is not 2-D, got shape {X.shape}")
 
         X = X.T
+        print(type(X))
+        print(X.shape)
         counts_all.append(X)
         labels_vec.extend([tb] * X.shape[1])
 
@@ -438,6 +441,16 @@ def mmd_squared(X, Y, kernel=rbf_kernel, sigma_list=None, **kernel_args):
     return avg_mmd
 
 
+def energy_distance(x, y, x_w=None, y_w=None):
+    nx = get_backend(x, y)
+    x_w = nx.full((x.shape[0],), 1 / x.shape[0]) if x_w is None else x_w / x_w.sum()
+    y_w = nx.full((y.shape[0],), 1 / y.shape[0]) if y_w is None else y_w / y_w.sum()
+    xy = nx.dot(x_w, pot.utils.euclidean_distances(x, y, squared=False) @ y_w)
+    xx = nx.dot(x_w, pot.utils.euclidean_distances(x, x, squared=False) @ x_w)
+    yy = nx.dot(y_w, pot.utils.euclidean_distances(y, y, squared=False) @ y_w)
+    return 2 * xy - xx - yy
+
+
 def solve_prior_strict(
     counts, counts_pca, Nt, labels, eps_samp, alpha=0.5, normalize_C=False
 ):
@@ -460,7 +473,7 @@ def solve_prior_strict(
         if len(idx_t) and len(idx_t1):
             X1 = counts[:, idx_t].T
             X2 = counts[:, idx_t1].T
-            M = ot.dist(counts_pca[:, idx_t].T, counts_pca[:, idx_t1].T)
+            M = ot.dist(counts[:, idx_t].T, counts[:, idx_t1].T)
             if normalize_C:
                 M /= M.max()
             # graph distances
@@ -492,7 +505,7 @@ def solve_prior_strict(
                 idx_next = np.where(labels == t + 1)[1]
                 X1 = counts[:, idx_prev].T
                 X2 = counts[:, idx_next].T
-                M = ot.dist(counts_pca[:, idx_prev].T, counts_pca[:, idx_next].T)
+                M = ot.dist(counts[:, idx_prev].T, counts[:, idx_next].T)
                 if normalize_C:
                     M /= M.max()
                 nnb = max(1, min(int(0.2 * X1.shape[0]), int(0.2 * X2.shape[0]), 50))
@@ -566,7 +579,36 @@ def predict_via_velocity(counts_all, Ts, t_star):
     return X_pred_t  # (genes × n_cells)
 
 
-def otvelo_loto_one_fold(counts_all, adatas, t_star, *, eps=1e-2, alpha=0.5, pca):
+def barycentric_two_step(counts_all, Ts, t_star):
+    """
+    Bridge from t*-1 → t*+1 without ever using t* cells in training.
+    Automatically handles coupling orientation.
+    """
+    T_next = Ts[t_star]
+    if T_next is None:
+        raise RuntimeError(f"No bridge coupling for t*={t_star}")
+
+    counts_src = counts_all[t_star - 1]  # genes × n_src
+    counts_tgt = counts_all[t_star + 1]  # genes × n_tgt
+    n_src = counts_src.shape[1]
+    n_tgt = counts_tgt.shape[1]
+
+    # Case A: rows = src, cols = tgt
+    if T_next.shape == (n_src, n_tgt):
+        X_pred = T_next @ counts_tgt.T  # → (n_src × genes)
+    # Case B: rows = tgt, cols = src
+    elif T_next.shape == (n_tgt, n_src):
+        X_pred = T_next.T @ counts_tgt.T  # → (n_src × genes)
+    else:
+        raise ValueError(
+            f"Coupling shape {T_next.shape} doesn't match "
+            f"(n_src={n_src}, n_tgt={n_tgt})"
+        )
+
+    return X_pred.T  # → (genes × n_src)
+
+
+def otvelo_loto_one_fold(counts_all, t_star, *, eps=1e-2, alpha=0.5, pca):
     Nt = len(counts_all)
 
     # drop held-out t* cells for training
@@ -590,48 +632,33 @@ def otvelo_loto_one_fold(counts_all, adatas, t_star, *, eps=1e-2, alpha=0.5, pca
         normalize_C=True,
     )
 
-    # predict via velocity-based one-step prediction
+    # predict via 2-step barycentric
     X_pred = predict_via_velocity(counts_all, Ts, t_star)
     X_true = counts_all[t_star]
 
-    # compute per-dataset metrics
-    cell_counts = [adata[adata.obs.t == t_star].shape[0] for adata in adatas]
+    # compare in PCA space
+    # Xp = pca.transform(X_pred.T)
+    # Xt = pca.transform(X_true.T)
+    Xp = X_pred.T
+    Xt = X_true.T
+    Xp = torch.from_numpy(Xp).float()
+    Xt = torch.from_numpy(Xt).float()
+    w2 = wasserstein(Xp, Xt)
+    _, gamma = rbf_kernel(Xp, Xt)
+    mmd = mmd_squared(Xp, Xt, gamma=gamma)
+    ed = energy_distance(Xp, Xt)
+    return w2, mmd, ed, X_pred.T
 
-    per_dataset_metrics = []
-    start_idx = 0
 
-    for i, cell_count in enumerate(cell_counts):
-        end_idx = start_idx + cell_count
-
-        X_pred_i = X_pred[:, start_idx:end_idx]
-        X_true_i = X_true[:, start_idx:end_idx]
-
-        Xp_i = pca.transform(X_pred_i.T)
-        Xt_i = pca.transform(X_true_i.T)
-        Xp_i = torch.from_numpy(Xp_i).float()
-        Xt_i = torch.from_numpy(Xt_i).float()
-
-        w2_i = wasserstein(Xp_i, Xt_i)
-        _, gamma_i = rbf_kernel(Xp_i, Xt_i)
-        mmd_i = mmd_squared(Xp_i, Xt_i, gamma=gamma_i)
-
-        per_dataset_metrics.append(
-            {
-                "dataset_idx": i,
-                "w2": w2_i,
-                "mmd2": mmd_i,
-            }
-        )
-
-        print(f"  Dataset {i}: W₂={w2_i:.4f}, MMD²={mmd_i:.4e}")
-
-        start_idx = end_idx
-
-    # Average metrics across datasets
-    avg_w2 = np.mean([m["w2"] for m in per_dataset_metrics])
-    avg_mmd = np.mean([m["mmd2"] for m in per_dataset_metrics])
-
-    return avg_w2, avg_mmd, X_pred, per_dataset_metrics
+def save_adj_heat(mat, title, out_name, cmap="RdBu_r"):
+    fig, ax = plt.subplots(figsize=(4, 4))
+    im = ax.imshow(mat, cmap=cmap, vmin=-1, vmax=1)
+    ax.set_title(title)
+    ax.invert_yaxis()
+    fig.colorbar(im, ax=ax, shrink=0.8)
+    fig.tight_layout()
+    fig.savefig(f"{out_name}.pdf", dpi=300)
+    plt.close(fig)
 
 
 def create_multi_ko_pca_plot_wgrey(
@@ -700,13 +727,18 @@ def create_multi_ko_pca_plot_wgrey(
         adata = full_adatas[ko_idx]
         ko_name = ko_names[ko_idx]
 
-        # Clean up knockout name for display (extract just "gX" from "dyn-TF_ko_gX")
-        is_knockout = ko_name and "_ko_" in ko_name
-        if is_knockout:
-            # Extract the gene identifier after "_ko_"
-            ko_display_name = ko_name.split("_ko_")[-1]
+        if i == 0:
+            ko_display_name = "Observational"
+            is_knockout = False
         else:
-            ko_display_name = ko_name
+            is_knockout = ko_name is not None
+            if is_knockout:
+                if "_ko_" in str(ko_name):
+                    ko_display_name = ko_name.split("_ko_")[-1]
+                else:
+                    ko_display_name = ko_name
+            else:
+                ko_display_name = "WT"
 
         times = adata.obs["t"].values
         if dataset_type == "Renge":
@@ -751,10 +783,10 @@ def create_multi_ko_pca_plot_wgrey(
                         temp_data_reduced[t_mask, 0],
                         temp_data_reduced[t_mask, 1],
                         c=gray_color,
-                        s=20,
+                        s=60,
                         alpha=0.6,
                         label=(
-                            f"All data t={t}"
+                            f"t={t}"
                             if i == 0 and adata_idx == 0 and t == min(temp_times)
                             else None
                         ),
@@ -768,19 +800,17 @@ def create_multi_ko_pca_plot_wgrey(
                     ko_data_reduced[is_held_out, 0],
                     ko_data_reduced[is_held_out, 1],
                     c=highlight_color,
-                    s=120,
-                    edgecolors="black",
-                    linewidth=1,
-                    label=f"KO {ko_display_name} t={held_out_time}" if i == 0 else None,
+                    s=80,
+                    label=f"t={held_out_time} (held out)" if i == 0 else None,
                 )
 
             ax.scatter(
                 pred_reduced[:, 0],
                 pred_reduced[:, 1],
                 c=prediction_color,
-                s=120,
+                s=100,
                 marker="x",
-                linewidth=3,
+                linewidth=2,
                 label="Predictions" if i == 0 else None,
             )
 
@@ -837,14 +867,19 @@ def create_multi_ko_pca_plot_wgrey(
         for spine in ax.spines.values():
             spine.set_visible(True)
 
-    for ax in axes:
-        ax.set_xlim(x_min - 0.1 * (x_max - x_min), x_max + 0.1 * (x_max - x_min))
-        ax.set_ylim(y_min - 0.1 * (y_max - y_min), y_max + 0.1 * (y_max - y_min))
+        ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
 
+    for ax in axes:
+        ax.set_xlim(-1.5, 2)
+        ax.set_ylim(-1.5, 2)
+
+    # First, apply tight layout to get good spacing for the plots
     plt.tight_layout()
 
+    # Move the plots up significantly to make room for the legend at the bottom
     plt.subplots_adjust(bottom=0.35)
 
+    # Add legend positioned well below the plots with increased font size
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(
         handles=handles,
@@ -903,58 +938,6 @@ def main():
 
         counts_pca, pca = visualize_pca(counts, labels, group_labels, viz_opt="pca")
 
-        output_dir = f"otvelo_results/{backbone}_{args.subset}_seed{seed}"
-        os.makedirs(output_dir, exist_ok=True)
-        pca_folder = os.path.join(output_dir, "pca_plots")
-        os.makedirs(pca_folder, exist_ok=True)
-
-        folds = []
-        predictions_dict = {}
-        for held_out_t in range(1, Nt - 1):
-            print(f"\n===== OTVelo – hold-out t={held_out_t} =====")
-
-            w2, mmd, X_pred, per_dataset_metrics = otvelo_loto_one_fold(
-                counts_all, adatas, held_out_t, eps=1e-2, alpha=0.5, pca=pca
-            )
-            folds.append({"t": held_out_t, "w2": w2, "mmd2": mmd})
-            print(f"t={held_out_t}:  W₂={w2:.4f}   MMD²={mmd:.4e}")
-
-            if held_out_t == Nt - 2:
-                # Split X_pred back into individual dataset predictions
-                # X_pred is (genes × total_cells_at_t), we need to split by dataset
-                cell_counts = [
-                    adata[adata.obs.t == held_out_t].shape[0] for adata in adatas
-                ]
-
-                start_idx = 0
-                for i in range(len(adatas)):
-                    end_idx = start_idx + cell_counts[i]
-                    # X_pred is (genes × cells), so we slice along axis 1
-                    dataset_pred = X_pred[:, start_idx:end_idx].T  # Now (cells × genes)
-                    predictions_dict[i] = dataset_pred
-                    start_idx = end_idx
-
-        if predictions_dict and len(adatas) >= 3:
-            ko_names = [p.name for p in paths]
-            create_multi_ko_pca_plot_wgrey(
-                adatas,
-                predictions_dict,
-                ko_names,
-                Nt - 2,
-                pca_folder,
-                "otvelo",
-                "Synthetic",
-            )
-            print(f"Multi-KO comparison plots saved to: {pca_folder}")
-
-        df = pd.DataFrame(folds)
-        print("\nMean W₂  :", df.w2.mean())
-        print("Mean MMD²:", df.mmd2.mean())
-
-        df.to_csv(
-            os.path.join(output_dir, "trajectory_inference_results.csv"), index=False
-        )
-
     elif args.dataset == "renge":
         ds = load_renge_dataset()
         ds = copy.deepcopy(ds)
@@ -963,7 +946,6 @@ def main():
         labels = ds["labels"]
         Nt = ds["Nt"]
         true_mat = ds["ref_network"]
-        adata_tf = ds["adata"]
 
         cells_per_bin = [X.shape[1] for X in counts_all]
         old_to_new = {old: new for new, old in enumerate(sorted(np.unique(labels)))}
@@ -971,13 +953,67 @@ def main():
         labels = np.vectorize(old_to_new.get)(labels)
         Nt = len(old_to_new)
         assert labels.min() == 0 and labels.max() == Nt - 1
-
-        output_dir = f"otvelo_results/Renge_seed{seed}"
-        os.makedirs(output_dir, exist_ok=True)
     else:
         raise ValueError("--dataset must be 'synthetic' or 'renge'")
 
     Ts_prior, _ = solve_prior(counts, counts, Nt, labels, eps_samp=1e-2, alpha=0.5)
+
+    group_labels = [str(i) for i in range(Nt)]
+
+    counts_pca, pca = visualize_pca(counts, labels, group_labels, viz_opt="pca")
+
+    folds = []
+    predictions_dict = {}
+    for held_out_t in [3]:  # Only run t=3 for quick testing
+        print(f"\n===== OTVelo – hold-out t={held_out_t} =====")
+
+        w2, mmd, ed, X_pred = otvelo_loto_one_fold(
+            counts_all, held_out_t, eps=1e-2, alpha=0.5, pca=pca
+        )
+        folds.append({"t": held_out_t, "w2": w2, "mmd2": mmd, "ed": ed})
+        print(f"t={held_out_t}:  W₂={w2:.4f}   MMD²={mmd:.4e}  ED={ed:.4f}")
+
+        if held_out_t == 3:
+            if args.dataset == "synthetic":
+                cell_idx = 0
+                for idx, adata in enumerate(adatas):
+                    n_cells_t3 = (adata.obs["t"] == 3).sum()
+                    predictions_dict[idx] = X_pred[cell_idx : cell_idx + n_cells_t3, :]
+                    cell_idx += n_cells_t3
+            else:
+                predictions_dict[0] = X_pred
+
+    df = pd.DataFrame(folds)
+    print("\nMean W₂  :", df.w2.mean())
+    print("Mean MMD²:", df.mmd2.mean())
+    print("Mean ED  :", df.ed.mean())
+
+    if 3 in [fold["t"] for fold in folds]:
+        output_folder = Path(__file__).resolve().parent / "otvelo_plots"
+        output_folder.mkdir(exist_ok=True)
+
+        if args.dataset == "synthetic":
+            ko_names = [p.name for p in paths]
+            create_multi_ko_pca_plot_wgrey(
+                full_adatas=adatas,
+                predictions_dict=predictions_dict,
+                ko_names=ko_names,
+                held_out_time=3,
+                folder_path=str(output_folder),
+                model_type="OTVelo",
+                dataset_type="Synthetic",
+            )
+        else:
+            create_multi_ko_pca_plot_wgrey(
+                full_adatas=[ds["adata"]],
+                predictions_dict=predictions_dict,
+                ko_names=["Renge"],
+                held_out_time=3,
+                folder_path=str(output_folder),
+                model_type="OTVelo",
+                dataset_type="Renge",
+            )
+        print(f"\nPlot saved to {output_folder}")
 
     vel_all, vel_all_signed = solve_velocities(
         counts_all, Ts_prior, order=1, stimulation=False
@@ -998,6 +1034,7 @@ def main():
     )
 
     Tv_corr -= np.diag(np.diag(Tv_corr))
+    save_adj_heat(Tv_corr, "OTVelo (Jacobian)", "OTvelo.pdf", cmap="RdBu_r")
 
     if args.dataset != "renge":
         true_mat -= np.diag(np.diag(true_mat))
@@ -1045,20 +1082,6 @@ def main():
     auroc_granger = roc_auc_score(y_true, y_score_granger)
     print(f"AUROC OT_Granger (unsigned edges) : {auroc_granger:.4f}")
     print(f"AUPR OT_Granger (unsigned edges) : {aupr_granger:.4f}")
-
-    results_df = pd.DataFrame(
-        {
-            "method": ["OT_corr", "OT_Granger"],
-            "auroc": [auroc, auroc_granger],
-            "aupr": [aupr, aupr_granger],
-            "dataset": [args.dataset, args.dataset],
-            "seed": [seed, seed],
-        }
-    )
-    results_df.to_csv(
-        os.path.join(output_dir, "grn_inference_results.csv"), index=False
-    )
-    print(f"\nResults saved to: {output_dir}")
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ _parser.add_argument(
 _parser.add_argument(
     "--subset",
     choices=["wt", "ko", "all"],
-    default="wt",
+    default="all",
     help="replicate subset to use",
 )
 # training hyper‑params
@@ -159,23 +159,34 @@ def to_tigon_coords(adata: ad.AnnData):
         coords_all.append(X)
     return coords_all
 
+
 def load_renge_dataset():
     PLT_CELL = 3.5
-    adata = sc.read_h5ad('../hipsc.h5ad')
+    adata = sc.read_h5ad("../hipsc.h5ad")
 
-    X = pd.read_csv('../../tools/renge/examples/data/X_renge_d2_80.csv', index_col=0)
-    E = pd.read_csv('../../tools/renge/examples/data/E_renge_d2_80.csv', index_col=0)
+    X = pd.read_csv("../../tools/renge/examples/data/X_renge_d2_80.csv", index_col=0)
+    E = pd.read_csv("../../tools/renge/examples/data/E_renge_d2_80.csv", index_col=0)
 
     adata_ = ad.AnnData(E)
     adata_.obs["condition"] = None
     adata_.obs.loc[X.index[X.iloc[:, :-1].T.sum(0) == 0], "condition"] = "wt"
     idx_ko = X.index[X.iloc[:, :-1].T.sum(0) == 1]
-    adata_.obs.loc[idx_ko, "condition"] = X.columns[np.argmax(X.loc[idx_ko, :].iloc[:, :-1], -1)]
+    adata_.obs.loc[idx_ko, "condition"] = X.columns[
+        np.argmax(X.loc[idx_ko, :].iloc[:, :-1], -1)
+    ]
     sc.pp.pca(adata_)
     sc.pp.neighbors(adata_)
     adata_.obs["t"] = X.t
 
-    dists_ko = pd.Series({k : dcor.energy_distance(adata.obsm["X_pca"][adata.obs.ko == "WT", :], adata.obsm["X_pca"][adata.obs.ko == k, :]) for k in adata.obs.ko.unique()})
+    dists_ko = pd.Series(
+        {
+            k: dcor.energy_distance(
+                adata.obsm["X_pca"][adata.obs.ko == "WT", :],
+                adata.obsm["X_pca"][adata.obs.ko == k, :],
+            )
+            for k in adata.obs.ko.unique()
+        }
+    )
     adata_tf = adata.copy()
     mask = adata_tf.var["gene"].isin(E.columns).values
     adata_tf = adata_tf[:, mask].copy()
@@ -183,14 +194,12 @@ def load_renge_dataset():
 
     _kos = list(dists_ko.sort_values()[::-1][range(8)].index)
 
-
     _adata = adata[adata.obs.ko.isin(_kos), :]
-
 
     _adatas = []
     for k in _kos:
         _adatas.append(adata_tf[adata_tf.obs.ko == k, :].copy())
-        _adatas[-1].X = np.asarray(_adatas[-1].X.todense(), dtype = np.float64)
+        _adatas[-1].X = np.asarray(_adatas[-1].X.todense(), dtype=np.float64)
         _adatas[-1].obs.t -= 2
         _adatas[-1].var.index = _adatas[-1].var.gene
     if _kos[0] == "WT":
@@ -200,11 +209,14 @@ def load_renge_dataset():
     refs = {}
     for f in glob.glob("chip_1kb/*.tsv"):
         gene = os.path.splitext(os.path.basename(f))[0].split(".")[0]
-        df = pd.read_csv(f, sep = "\t")
+        df = pd.read_csv(f, sep="\t")
         df.index = df.Target_genes
         # if len(df.columns[df.columns.str.contains("iPS_cells|ES_cells")]) == 0:
         #     print(pd.unique(df.columns.str.split("|").str[1]))
-        y = pd.Series(df.loc[:, df.columns.str.contains("iPS_cells")].values.mean(-1), index = df.index)
+        y = pd.Series(
+            df.loc[:, df.columns.str.contains("iPS_cells")].values.mean(-1),
+            index=df.index,
+        )
         # y = pd.Series(df.iloc[:, 2:].values.mean(-1), index = df.index)
         # y = pd.Series(df.iloc[:, 1], index = df.index)
         refs[gene] = y
@@ -216,7 +228,6 @@ def load_renge_dataset():
     tfs_no_ko = [i for i in tfs if i not in _kos]
     tfs_ko = [i for i in tfs if i in _kos]
 
-
     A_renge = pd.read_csv("A_renge_output.csv", index_col=0)
 
     batch_size = 64
@@ -225,7 +236,7 @@ def load_renge_dataset():
 
     _tfs = tfs
     _thresh = 0
-    
+
 
 def load_synth_dataset(name: str, n_bins: int = 5) -> Dict[str, Any]:
     """
@@ -349,6 +360,23 @@ def mmd_squared(X, Y, kernel=rbf_kernel, sigma_list=None, **kernel_args):
     return avg_mmd
 
 
+def energy_distance(x, y, x_w=None, y_w=None):
+    if not isinstance(x, np.ndarray):
+        x = x if isinstance(x, np.ndarray) else x.numpy()
+    if not isinstance(y, np.ndarray):
+        y = y if isinstance(y, np.ndarray) else y.numpy()
+    x_w = np.full((x.shape[0],), 1 / x.shape[0]) if x_w is None else x_w / x_w.sum()
+    y_w = np.full((y.shape[0],), 1 / y.shape[0]) if y_w is None else y_w / y_w.sum()
+
+    def euclidean_distances(a, b):
+        return np.sqrt(((a[:, np.newaxis, :] - b[np.newaxis, :, :]) ** 2).sum(axis=2))
+
+    xy = np.dot(x_w, euclidean_distances(x, y) @ y_w)
+    xx = np.dot(x_w, euclidean_distances(x, x) @ x_w)
+    yy = np.dot(y_w, euclidean_distances(y, y) @ y_w)
+    return 2 * xy - xx - yy
+
+
 def validate_one_bin(
     func,
     data_all,  # full list (len=Nt) of tensors
@@ -435,16 +463,20 @@ def validate_one_bin(
 
         wd_i = wasserstein(z_pred_i.detach(), z_true_i.detach())
         mmd_i = mmd_squared(z_pred_i.detach(), z_true_i.detach())
+        ed_i = energy_distance(
+            z_pred_i.detach().cpu().numpy(), z_true_i.detach().cpu().numpy()
+        )
 
         per_dataset_metrics.append(
             {
                 "dataset_idx": i,
                 "WD2": wd_i,
                 "MMD": mmd_i,
+                "ED": ed_i,
             }
         )
 
-        print(f"  Dataset {i}: WD2={wd_i:.4f}, MMD={mmd_i:.4f}")
+        print(f"  Dataset {i}: WD2={wd_i:.4f}, MMD={mmd_i:.4f}, ED={ed_i:.4f}")
 
         all_predictions.append(z_pred_i.detach().cpu().numpy())
         pred_idx += n_i
@@ -452,12 +484,14 @@ def validate_one_bin(
     # Average metrics across datasets
     avg_wd = np.mean([m["WD2"] for m in per_dataset_metrics])
     avg_mmd = np.mean([m["MMD"] for m in per_dataset_metrics])
+    avg_ed = np.mean([m["ED"] for m in per_dataset_metrics])
 
     return {
         "t_star": t_star,
         "src": src,
         "WD2": avg_wd,
         "MMD": avg_mmd,
+        "ED": avg_ed,
         "per_dataset_metrics": per_dataset_metrics,
         "predictions": all_predictions,
     }
@@ -472,6 +506,19 @@ def create_multi_ko_pca_plot_wgrey(
     model_type,
     dataset_type="Synthetic",
 ):
+    """
+    Create and save a dimensionality reduction plot showing multiple KO trajectories with predictions in subplots.
+    Uses UMAP for Renge data and PCA for other datasets.
+
+    Args:
+        full_adatas: List of AnnData objects containing the full trajectory data
+        predictions_dict: Dictionary mapping dataset_idx to predicted final states
+        ko_names: List of knockout names
+        held_out_time: The held-out timepoint
+        folder_path: Path to save the plot
+        model_type: Type of model used ("rf", "sf2m", etc.)
+        dataset_type: Type of dataset ("Renge", "Synthetic", "Curated")
+    """
     os.makedirs(folder_path, exist_ok=True)
 
     if len(ko_names) < 3:
@@ -482,42 +529,52 @@ def create_multi_ko_pca_plot_wgrey(
 
     ko_indices_to_plot = list(range(min(3, len(ko_names))))
 
+    # Create figure with plots - even more extra space for legend
     fig, axes = plt.subplots(1, 3, figsize=(18, 9))
 
     all_data = np.vstack([adata.X for adata in full_adatas])
 
+    # Choose dimensionality reduction method based on dataset type
     if dataset_type == "Renge":
+        # For Renge, compute UMAP fresh so predictions and data are in same space
+        # Use PCA first then UMAP (matching scanpy's approach)
         print("Computing UMAP for Renge data (need to project predictions)")
 
+        # First reduce to PCA space (using 50 components like scanpy default)
         pca_reducer = PCA(n_components=min(50, all_data.shape[0], all_data.shape[1]))
         all_data_pca = pca_reducer.fit_transform(all_data)
 
+        # Then run UMAP on PCA space
         reducer = umap.UMAP(
             n_components=2, random_state=42, n_neighbors=15, min_dist=0.1
         )
         reducer.fit(all_data_pca)
         reduction_method = "UMAP"
 
+        # Store PCA reducer for transforming new data
         reducer.pca_reducer = pca_reducer
     else:
         reducer = PCA(n_components=2)
         reducer.fit(all_data)
         reduction_method = "PCA"
 
+    # Increase font sizes by approximately 20%
     plt.rcParams.update(
         {
-            "font.size": 38,
-            "axes.titlesize": 44,
-            "axes.labelsize": 44,
-            "xtick.labelsize": 38,
-            "ytick.labelsize": 38,
-            "legend.fontsize": 38,
+            "font.size": 38,  # ~20% increase from 32
+            "axes.titlesize": 44,  # ~20% increase from 36
+            "axes.labelsize": 44,  # ~20% increase from 36
+            "xtick.labelsize": 38,  # ~20% increase from 32
+            "ytick.labelsize": 38,  # ~20% increase from 32
+            "legend.fontsize": 38,  # ~20% increase from 32
         }
     )
 
-    highlight_color = "#E41A1C"
-    prediction_color = "#377EB8"
+    # Define colors
+    highlight_color = "#E41A1C"  # Bright red for the held_out_time
+    prediction_color = "#377EB8"  # Blue for predictions
 
+    # Transform all data for consistent plotting bounds
     if dataset_type == "Renge":
         all_data_reduced = reducer.transform(reducer.pca_reducer.transform(all_data))
     else:
@@ -529,13 +586,18 @@ def create_multi_ko_pca_plot_wgrey(
         adata = full_adatas[ko_idx]
         ko_name = ko_names[ko_idx]
 
-        # Clean up knockout name for display (extract just "gX" from "dyn-TF_ko_gX")
-        is_knockout = ko_name and "_ko_" in ko_name
-        if is_knockout:
-            # Extract the gene identifier after "_ko_"
-            ko_display_name = ko_name.split("_ko_")[-1]
+        if i == 0:
+            ko_display_name = "Observational"
+            is_knockout = False
         else:
-            ko_display_name = ko_name
+            is_knockout = ko_name is not None
+            if is_knockout:
+                if "_ko_" in str(ko_name):
+                    ko_display_name = ko_name.split("_ko_")[-1]
+                else:
+                    ko_display_name = ko_name
+            else:
+                ko_display_name = "WT"
 
         times = adata.obs["t"].values
         if dataset_type == "Renge":
@@ -559,6 +621,9 @@ def create_multi_ko_pca_plot_wgrey(
             continue
 
         if dataset_type == "Renge":
+            # For Renge: Plot ALL data in grayscale background, then highlight specific condition
+
+            # First plot all data in grayscale with time-based shading
             data_start_idx = 0
             max_time_global = max(
                 max(adata_temp.obs["t"].values) for adata_temp in full_adatas
@@ -571,19 +636,22 @@ def create_multi_ko_pca_plot_wgrey(
                     data_start_idx : data_start_idx + temp_data_size
                 ]
 
+                # Plot all conditions in grayscale
                 for t in sorted(set(temp_times)):
                     t_mask = temp_times == t
-                    shade = 0.3 + 0.4 * (t / max_time_global)
-                    gray_color = str(1 - shade)
+                    shade = 0.3 + 0.4 * (
+                        t / max_time_global
+                    )  # Map to darkness between 0.3-0.7
+                    gray_color = str(1 - shade)  # Grayscale as string
 
                     ax.scatter(
                         temp_data_reduced[t_mask, 0],
                         temp_data_reduced[t_mask, 1],
                         c=gray_color,
-                        s=20,
+                        s=60,
                         alpha=0.6,
                         label=(
-                            f"All data t={t}"
+                            f"t={t}"
                             if i == 0 and adata_idx == 0 and t == min(temp_times)
                             else None
                         ),
@@ -591,47 +659,8 @@ def create_multi_ko_pca_plot_wgrey(
 
                 data_start_idx += temp_data_size
 
+            # Now highlight the specific knockout condition at held_out_time
             is_held_out = times == held_out_time
-            if any(is_held_out):
-                ax.scatter(
-                    ko_data_reduced[is_held_out, 0],
-                    ko_data_reduced[is_held_out, 1],
-                    c=highlight_color,
-                    s=120,
-                    edgecolors="black",
-                    linewidth=1,
-                    label=f"KO {ko_display_name} t={held_out_time}" if i == 0 else None,
-                )
-
-            ax.scatter(
-                pred_reduced[:, 0],
-                pred_reduced[:, 1],
-                c=prediction_color,
-                s=120,
-                marker="x",
-                linewidth=3,
-                label="Predictions" if i == 0 else None,
-            )
-
-        else:
-            is_held_out = times == held_out_time
-
-            for t in sorted(set(times)):
-                if t == held_out_time:
-                    continue
-
-                t_mask = times == t
-                shade = 0.3 + 0.5 * (t / max(times))
-                gray_color = str(1 - shade)
-
-                ax.scatter(
-                    ko_data_reduced[t_mask, 0],
-                    ko_data_reduced[t_mask, 1],
-                    c=gray_color,
-                    s=60,
-                    label=f"t={t}" if i == 0 and t == min(times) else None,
-                )
-
             if any(is_held_out):
                 ax.scatter(
                     ko_data_reduced[is_held_out, 0],
@@ -641,6 +670,7 @@ def create_multi_ko_pca_plot_wgrey(
                     label=f"t={held_out_time} (held out)" if i == 0 else None,
                 )
 
+            # Plot predictions
             ax.scatter(
                 pred_reduced[:, 0],
                 pred_reduced[:, 1],
@@ -651,6 +681,50 @@ def create_multi_ko_pca_plot_wgrey(
                 label="Predictions" if i == 0 else None,
             )
 
+        else:
+            # Original logic for non-Renge datasets
+            # Create mask for different time points
+            is_held_out = times == held_out_time
+
+            # Plot non-held-out times in grayscale with darker shades for later times
+            for t in sorted(set(times)):
+                if t == held_out_time:
+                    continue
+
+                t_mask = times == t
+                shade = 0.3 + 0.5 * (t / max(times))  # Map to darkness between 0.3-0.8
+                gray_color = str(1 - shade)  # Grayscale as string: '0.2' to '0.7'
+
+                ax.scatter(
+                    ko_data_reduced[t_mask, 0],
+                    ko_data_reduced[t_mask, 1],
+                    c=gray_color,
+                    s=60,
+                    label=f"t={t}" if i == 0 and t == min(times) else None,
+                )
+
+            # Plot held-out time in highlight color
+            if any(is_held_out):
+                ax.scatter(
+                    ko_data_reduced[is_held_out, 0],
+                    ko_data_reduced[is_held_out, 1],
+                    c=highlight_color,
+                    s=80,
+                    label=f"t={held_out_time} (held out)" if i == 0 else None,
+                )
+
+            # Plot predictions
+            ax.scatter(
+                pred_reduced[:, 0],
+                pred_reduced[:, 1],
+                c=prediction_color,
+                s=100,
+                marker="x",
+                linewidth=2,
+                label="Predictions" if i == 0 else None,
+            )
+
+        # Use appropriate axis labels based on reduction method
         component1_label = "UMAP1" if reduction_method == "UMAP" else "PC1"
         component2_label = "UMAP2" if reduction_method == "UMAP" else "PC2"
 
@@ -661,19 +735,25 @@ def create_multi_ko_pca_plot_wgrey(
         ko_label = f"Knockout {ko_display_name}" if is_knockout else "Observational"
         ax.set_title(ko_label, pad=15, fontsize=44)
 
+        # Keep original grid
         ax.grid(True, alpha=0.3, linestyle="--")
 
         for spine in ax.spines.values():
             spine.set_visible(True)
 
-    for ax in axes:
-        ax.set_xlim(x_min - 0.1 * (x_max - x_min), x_max + 0.1 * (x_max - x_min))
-        ax.set_ylim(y_min - 0.1 * (y_max - y_min), y_max + 0.1 * (y_max - y_min))
+        ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
 
+    for ax in axes:
+        ax.set_xlim(-1.5, 2)
+        ax.set_ylim(-1.5, 2)
+
+    # First, apply tight layout to get good spacing for the plots
     plt.tight_layout()
 
+    # Move the plots up significantly to make room for the legend at the bottom
     plt.subplots_adjust(bottom=0.35)
 
+    # Add legend positioned well below the plots with increased font size
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(
         handles=handles,
@@ -684,9 +764,10 @@ def create_multi_ko_pca_plot_wgrey(
         frameon=True,
         framealpha=0.9,
         edgecolor="black",
-        fontsize=38,
+        fontsize=38,  # Increased by ~20% from 32
     )
 
+    # Save the figure
     filename_base = f"multi_ko_comparison_{model_type}_holdout_{held_out_time}"
     plt.savefig(os.path.join(folder_path, f"{filename_base}.pdf"), bbox_inches="tight")
     plt.savefig(
@@ -732,7 +813,7 @@ def main():
 
     predictions_dict = {}
 
-    for t_star in range(1, 4):
+    for t_star in [3]:  # Only run t=3 for quick testing
         # configure training options
         options = {}
         options.update({"method": "Dopri5"})
@@ -801,7 +882,7 @@ def main():
         )
         all_metrics.append(metric_dict)
         print(
-            f"bin {t_star}: WD2={metric_dict['WD2']:.4f} | MMD={metric_dict['MMD']:.4f}"
+            f"bin {t_star}: WD2={metric_dict['WD2']:.4f} | MMD={metric_dict['MMD']:.4f} | ED={metric_dict['ED']:.4f}"
         )
 
         if t_star == 3:
@@ -822,6 +903,7 @@ def main():
     )
     print(f"\nMean WD2: {results_df['WD2'].mean():.4f}")
     print(f"Mean MMD: {results_df['MMD'].mean():.4f}")
+    print(f"Mean ED: {results_df['ED'].mean():.4f}")
     print(f"\nResults saved to: {output_dir}")
 
     # data_train = [torch.tensor(c, dtype=torch.float32, device='cuda' if torch.cuda.is_available() else 'cpu') for c in coords_all]

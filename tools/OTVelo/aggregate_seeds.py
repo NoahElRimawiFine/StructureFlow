@@ -89,11 +89,19 @@ def aggregate_results(results_dir="otvelo_results"):
     # Combine all results
     all_results = pd.concat(results, ignore_index=True)
 
-    # Group by backbone, subset, and t to compute statistics
-    grouped = all_results.groupby(["backbone", "subset", "t"])
+    # Group by backbone and subset (averaging over timepoints)
+    grouped = all_results.groupby(["backbone", "subset", "seed"])
 
-    aggregated = grouped.agg(
-        {"w2": ["mean", "std", "count"], "mmd2": ["mean", "std"]}
+    # First compute mean over timepoints for each seed
+    seed_averages = grouped.agg(
+        {"w2": "mean", "mmd2": "mean", "ed": "mean"}
+    ).reset_index()
+
+    # Then compute statistics across seeds
+    final_grouped = seed_averages.groupby(["backbone", "subset"])
+
+    aggregated = final_grouped.agg(
+        {"w2": ["mean", "std", "count"], "mmd2": ["mean", "std"], "ed": ["mean", "std"]}
     ).reset_index()
 
     # Flatten multi-level column names
@@ -109,17 +117,16 @@ def aggregate_results(results_dir="otvelo_results"):
 
     # Print summary
     print("\n" + "=" * 80)
-    print("Summary of aggregated results:")
+    print("Summary of aggregated results (averaged over timepoints):")
     print("=" * 80)
-    for (backbone, subset), group in aggregated.groupby(["backbone", "subset"]):
+    for _, row in aggregated.iterrows():
+        backbone = row["backbone"]
+        subset = row["subset"]
         print(f"\n{backbone} ({subset}):")
-        print(
-            f"  Mean W₂: {group['w2_mean'].mean():.4f} ± {group['w2_std'].mean():.4f}"
-        )
-        print(
-            f"  Mean MMD²: {group['mmd2_mean'].mean():.4e} ± {group['mmd2_std'].mean():.4e}"
-        )
-        print(f"  Seeds: {int(group['w2_count'].iloc[0])}")
+        print(f"  Mean W₂: {row['w2_mean']:.4f} ± {row['w2_std']:.4f}")
+        print(f"  Mean MMD²: {row['mmd2_mean']:.4e} ± {row['mmd2_std']:.4e}")
+        print(f"  Mean ED: {row['ed_mean']:.4f} ± {row['ed_std']:.4f}")
+        print(f"  Seeds: {int(row['w2_count'])}")
 
     return aggregated
 

@@ -13,7 +13,7 @@
 
 ## Description
 
-What it does
+StructureFlow is a method for inferring gene regulatory networks from time-series single-cell data without requiring simulation during training. The approach combines flow matching and score matching to learn continuous-time stochastic dynamics directly from observed cellular trajectories. By integrating structure learning through group lasso regularization, the method recovers sparse causal graphs that capture regulatory relationships between genes. We validate StructureFlow on synthetic systems, curated biological networks, and real single-cell RNA-seq data, demonstrating competitive performance on trajectory inference and the ability to predict cellular responses to genetic perturbations. The codebase is built on PyTorch Lightning and Hydra to support flexible experimentation, hyperparameter optimization, and comparison with existing methods including random forests, neural ODE baselines, and other trajectory inference approaches.
 
 ## Installation
 

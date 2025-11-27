@@ -22,13 +22,18 @@ from src.models.components.plotting import (
 )
 from src.models.rf_module import ReferenceFittingModule
 from src.models.sf2m_module import SF2MLitModule
-from src.models.components.solver import simulate_trajectory, wasserstein, mmd_squared
+from src.models.components.solver import (
+    simulate_trajectory,
+    wasserstein,
+    mmd_squared,
+    energy_distance,
+)
 
 # Default configuration values (will be overridden by command line arguments)
 DEFAULT_DATA_PATH = "data/"
 DEFAULT_DATASET_TYPE = "Synthetic"
 DEFAULT_DATASET = "dyn-TF"
-DEFAULT_MODEL_TYPE = "sf2m"
+DEFAULT_MODEL_TYPE = "rf"
 DEFAULT_N_STEPS_PER_FOLD = 15000
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_LR = 3e-3
@@ -45,6 +50,9 @@ DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 DEFAULT_SEED = 2
 DEFAULT_RESULTS_DIR = "loo_results"
 DEFAULT_USE_CORRECTION_MLP = True
+DEFAULT_USE_NONUNIFORM_TIME = False
+DEFAULT_TIME_JITTER = 0.2
+DEFAULT_TIME_SEED = None
 
 # --- Renge Specific Parameters ---
 # DEFAULT_N_STEPS_PER_FOLD = 10000
@@ -466,11 +474,18 @@ def create_multi_ko_pca_plot_wgrey(
         adata = full_adatas[ko_idx]
         ko_name = ko_names[ko_idx]
 
-        is_knockout = ko_name and "_ko_" in ko_name
-        if is_knockout:
-            ko_display_name = ko_name.split("_ko_")[-1]
+        if i == 0:
+            ko_display_name = "Observational"
+            is_knockout = False
         else:
-            ko_display_name = ko_name
+            is_knockout = ko_name is not None
+            if is_knockout:
+                if "_ko_" in str(ko_name):
+                    ko_display_name = ko_name.split("_ko_")[-1]
+                else:
+                    ko_display_name = ko_name
+            else:
+                ko_display_name = "Observational"
 
         times = adata.obs["t"].values
         if dataset_type == "Renge":
@@ -614,9 +629,15 @@ def create_multi_ko_pca_plot_wgrey(
         for spine in ax.spines.values():
             spine.set_visible(True)
 
+        ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+
     for ax in axes:
-        ax.set_xlim(x_min - 0.1 * (x_max - x_min), x_max + 0.1 * (x_max - x_min))
-        ax.set_ylim(y_min - 0.1 * (y_max - y_min), y_max + 0.1 * (y_max - y_min))
+        if model_type.lower() == "rf":
+            ax.set_xlim(-2, 2)
+            ax.set_ylim(-2, 2)
+        else:
+            ax.set_xlim(-1.5, 2)
+            ax.set_ylim(-1.5, 2)
 
     # First, apply tight layout to get good spacing for the plots
     plt.tight_layout()
@@ -635,7 +656,7 @@ def create_multi_ko_pca_plot_wgrey(
         frameon=True,
         framealpha=0.9,
         edgecolor="black",
-        fontsize=38,  # Increased by ~20% from 32
+        fontsize=38,
     )
 
     # Save the figure
@@ -672,6 +693,9 @@ def main(args):
     RESULTS_DIR = args.results_dir
     MODEL_TYPE = args.model_type
     USE_CORRECTION_MLP = args.use_correction_mlp
+    USE_NONUNIFORM_TIME = args.use_nonuniform_time
+    TIME_JITTER = args.time_jitter
+    TIME_SEED = args.time_seed
 
     # Create results directory with model type and seed info
     RESULTS_DIR = os.path.join(
@@ -682,7 +706,6 @@ def main(args):
     seed_everything(SEED, workers=True)
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # --- 1. Load Full Data Once ---
     print("Loading full dataset...")
     datamodule = TrajectoryStructureDataModule(
         data_path=DATA_PATH,
@@ -693,6 +716,9 @@ def main(args):
         train_val_test_split=(1, 0, 0),
         dummy_loader_steps=N_STEPS_PER_FOLD,
         num_workers=11,
+        use_nonuniform_time=USE_NONUNIFORM_TIME,
+        time_jitter=TIME_JITTER,
+        time_seed=TIME_SEED,
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
@@ -738,17 +764,22 @@ def main(args):
 
         if MODEL_TYPE == "rf":
             print("Using Reference Fitting model...")
-            # Initialize RF model
             model = ReferenceFittingModule(
                 use_cuda=(DEVICE == "cuda"),
                 iter=(5000 if DATASET_TYPE == "Renge" else 1000),
+                dt_values=datamodule.dt_values,
+                time_values=datamodule.time_values,
             )
 
-            # Fit the model with holdout time (RF handles data filtering internally)
             print(f"Fitting RF model with holdout time {held_out_time}...")
-            model.fit_model_with_holdout(fold_adatas, datamodule.kos, held_out_time)
+            model.fit_model_with_holdout(
+                fold_adatas,
+                datamodule.kos,
+                held_out_time,
+                dt_values=datamodule.dt_values,
+                time_values=datamodule.time_values,
+            )
 
-            # No Lightning Trainer used for RF
             print("RF model fitting complete.")
 
         else:  # "sf2m" or "mlp_baseline"
@@ -938,18 +969,16 @@ def main(args):
                 true_dist_cpu = torch.from_numpy(true_dist_np).float()
 
                 if MODEL_TYPE == "rf":
-                    # RF simulates differently than SF2M
-                    # Always use non-wildtype (full) model for RF simulation
-                    is_wildtype = False  # Always use the full model
+                    is_wildtype = False
 
-                    # Simulate trajectory using RF model
                     sort_indices = torch.argsort(x0[:, 0])
                     x0_sorted = x0[sort_indices]
                     traj_rf = model.simulate_trajectory(
                         x0_sorted,
-                        n_times=1,  # Simulate one time step
-                        use_wildtype=is_wildtype,  # Always use full model
+                        n_times=1,
+                        use_wildtype=is_wildtype,
                         n_points=N_TIMES_SIM,
+                        transition_idx=held_out_time - 1,
                     )
 
                     # RF simulation result
@@ -958,12 +987,15 @@ def main(args):
                     # Calculate metrics
                     w_dist_rf = wasserstein(traj_rf, true_dist_cpu)
                     mmd2_rf = mmd_squared(traj_rf, true_dist_cpu)
+                    ed_rf = energy_distance(traj_rf.numpy(), true_dist_cpu.numpy())
 
                     # Use same values for both ODE and SDE metrics for consistent formatting
                     w_dist_ode = w_dist_rf
                     w_dist_sde = w_dist_rf
                     mmd2_ode = mmd2_rf
                     mmd2_sde = mmd2_rf
+                    ed_ode = ed_rf
+                    ed_sde = ed_rf
 
                     # Store predictions for multi-KO plot
                     if held_out_time == T_max - 1:
@@ -1001,7 +1033,6 @@ def main(args):
                         else:
                             cond_vector = None
 
-                    # Common simulation arguments
                     common_sim_args = {
                         "flow_model": model.func_v,
                         "corr_model": model.v_correction,
@@ -1015,6 +1046,7 @@ def main(args):
                         "T": T_times,
                         "sigma": SIGMA,
                         "device": DEVICE,
+                        "time_values": datamodule.time_values,
                     }
 
                     # ODE Simulation
@@ -1030,6 +1062,12 @@ def main(args):
                     w_dist_sde = wasserstein(sim_sde_final, true_dist_cpu)
                     mmd2_ode = mmd_squared(sim_ode_final, true_dist_cpu)
                     mmd2_sde = mmd_squared(sim_sde_final, true_dist_cpu)
+                    ed_ode = energy_distance(
+                        sim_ode_final.numpy(), true_dist_cpu.numpy()
+                    )
+                    ed_sde = energy_distance(
+                        sim_sde_final.numpy(), true_dist_cpu.numpy()
+                    )
 
                     # Store predictions for multi-KO plot (using ODE predictions)
                     if held_out_time == T_max - 1:
@@ -1054,16 +1092,18 @@ def main(args):
                         "w_dist_sde": w_dist_sde,
                         "mmd2_ode": mmd2_ode,
                         "mmd2_sde": mmd2_sde,
+                        "ed_ode": ed_ode,
+                        "ed_sde": ed_sde,
                     }
                 )
 
                 # Log metrics
                 print(
-                    f"  Dataset {i} (KO: {ko_name}): W_dist(ODE)={w_dist_ode:.4f}, MMD2(ODE)={mmd2_ode:.4f}"
+                    f"  Dataset {i} (KO: {ko_name}): W_dist(ODE)={w_dist_ode:.4f}, MMD2(ODE)={mmd2_ode:.4f}, ED(ODE)={ed_ode:.4f}"
                 )
                 if MODEL_TYPE != "rf":
                     print(
-                        f"  Dataset {i} (KO: {ko_name}): W_dist(SDE)={w_dist_sde:.4f}, MMD2(SDE)={mmd2_sde:.4f}"
+                        f"  Dataset {i} (KO: {ko_name}): W_dist(SDE)={w_dist_sde:.4f}, MMD2(SDE)={mmd2_sde:.4f}, ED(SDE)={ed_sde:.4f}"
                     )
 
                 if held_out_time == T_max - 1:
@@ -1092,6 +1132,8 @@ def main(args):
             avg_sde_dist = fold_df["w_dist_sde"].mean()
             avg_mmd2_ode = fold_df["mmd2_ode"].mean()
             avg_mmd2_sde = fold_df["mmd2_sde"].mean()
+            avg_ed_ode = fold_df["ed_ode"].mean()
+            avg_ed_sde = fold_df["ed_sde"].mean()
 
             print(f"Fold {fold_name} Avg W_dist: ODE={avg_ode_dist:.4f}")
             if MODEL_TYPE != "rf":
@@ -1105,6 +1147,8 @@ def main(args):
                 "avg_sde_distance": avg_sde_dist,
                 "avg_mmd2_ode": avg_mmd2_ode,
                 "avg_mmd2_sde": avg_mmd2_sde,
+                "avg_ed_ode": avg_ed_ode,
+                "avg_ed_sde": avg_ed_sde,
             }
 
             # Add causal graph metrics
@@ -1128,6 +1172,8 @@ def main(args):
                 "avg_sde_distance": np.nan,
                 "avg_mmd2_ode": np.nan,
                 "avg_mmd2_sde": np.nan,
+                "avg_ed_ode": np.nan,
+                "avg_ed_sde": np.nan,
             }
             # Add causal graph metrics (will be NaN if not computed)
             fold_result.update(causal_metrics)
@@ -1161,11 +1207,15 @@ def main(args):
         final_avg_sde = summary_df["avg_sde_distance"].mean()
         final_avg_mmd2_ode = summary_df["avg_mmd2_ode"].mean()
         final_avg_mmd2_sde = summary_df["avg_mmd2_sde"].mean()
+        final_avg_ed_ode = summary_df["avg_ed_ode"].mean()
+        final_avg_ed_sde = summary_df["avg_ed_sde"].mean()
 
         final_std_ode = summary_df["avg_ode_distance"].std()
         final_std_sde = summary_df["avg_sde_distance"].std()
         final_std_mmd2_ode = summary_df["avg_mmd2_ode"].std()
         final_std_mmd2_sde = summary_df["avg_mmd2_sde"].std()
+        final_std_ed_ode = summary_df["avg_ed_ode"].std()
+        final_std_ed_sde = summary_df["avg_ed_sde"].std()
 
         print(
             f"\nOverall Average W-Distance (ODE): {final_avg_ode:.4f} +/- {final_std_ode:.4f}"
@@ -1178,6 +1228,12 @@ def main(args):
         )
         print(
             f"Overall Average MMD2 (SDE): {final_avg_mmd2_sde:.4f} +/- {final_std_mmd2_sde:.4f}"
+        )
+        print(
+            f"Overall Average ED (ODE): {final_avg_ed_ode:.4f} +/- {final_std_ed_ode:.4f}"
+        )
+        print(
+            f"Overall Average ED (SDE): {final_avg_ed_sde:.4f} +/- {final_std_ed_sde:.4f}"
         )
 
         # Calculate and report causal graph metrics if available
@@ -1354,6 +1410,24 @@ if __name__ == "__main__":
         type=str,
         default=DEFAULT_RESULTS_DIR,
         help="Directory to save results",
+    )
+    parser.add_argument(
+        "--use_nonuniform_time",
+        action="store_true",
+        default=DEFAULT_USE_NONUNIFORM_TIME,
+        help="Use non-uniform time bins",
+    )
+    parser.add_argument(
+        "--time_jitter",
+        type=float,
+        default=DEFAULT_TIME_JITTER,
+        help="Amount of randomness for non-uniform bins (0.0-1.0)",
+    )
+    parser.add_argument(
+        "--time_seed",
+        type=int,
+        default=DEFAULT_TIME_SEED,
+        help="Random seed for non-uniform time bins (for reproducibility)",
     )
 
     args = parser.parse_args()

@@ -34,7 +34,18 @@ class BridgeMatcher:
 
 class EntropicOTFM:
     def __init__(
-        self, x, t_idx, dt, sigma, T, dim, device, held_out_time=None, normalize_C=False
+        self,
+        x,
+        t_idx,
+        dt,
+        sigma,
+        T,
+        dim,
+        device,
+        held_out_time=None,
+        normalize_C=False,
+        dt_values=None,
+        time_values=None,
     ):
         def entropic_ot_plan(x0, x1, eps, normalize_C=False):
             C = pot.utils.euclidean_distances(x0, x1, squared=True) / 2
@@ -61,19 +72,32 @@ class EntropicOTFM:
         self.has_bridge_over_held_out = False
         self.normalize_C = normalize_C
 
-        # construct EOT plans
+        if dt_values is not None:
+            self.dt_values = dt_values
+        else:
+            self.dt_values = [dt] * (T - 1)
+
+        if time_values is not None:
+            self.time_values = time_values
+        else:
+            self.time_values = [i * dt for i in range(T)]
+
         for i in range(self.T - 1):
+            dt_i = self.dt_values[i] if i < len(self.dt_values) else self.dt
+
             if self.held_out_time is not None and (
                 i == self.held_out_time or i + 1 == self.held_out_time
             ):
                 self.Ts.append(None)
 
-                # Create a bridge over the held-out time if it's the first encounter
                 if i == self.held_out_time and not self.has_bridge_over_held_out:
+                    dt_bridge = dt_i
+                    if i > 0 and i < len(self.dt_values):
+                        dt_bridge = self.dt_values[i - 1] + self.dt_values[i]
                     self.bridge_over_held_out = entropic_ot_plan(
                         self.x[self.t_idx == i - 1, :],
                         self.x[self.t_idx == i + 1, :],
-                        2 * self.dt * self.sigma**2,
+                        dt_bridge * self.sigma**2,
                         self.normalize_C,
                     )
                     self.has_bridge_over_held_out = True
@@ -82,7 +106,7 @@ class EntropicOTFM:
                     entropic_ot_plan(
                         self.x[self.t_idx == i, :],
                         self.x[self.t_idx == i + 1, :],
-                        self.dt * self.sigma**2,
+                        dt_i * self.sigma**2,
                         self.normalize_C,
                     )
                 )
@@ -93,11 +117,14 @@ class EntropicOTFM:
         _t_orig = []
         _s = []
         _u = []
+        _dt = []
         i = 0
         while i < self.T - 1:
+            dt_i = self.dt_values[i] if i < len(self.dt_values) else self.dt
+            t_start = self.time_values[i] if i < len(self.time_values) else i * self.dt
+
             if skip_time is not None and (i == skip_time or i + 1 == skip_time):
                 if i == skip_time and self.has_bridge_over_held_out:
-                    # Use the bridge spanning the held-out timepoint
                     with torch.no_grad():
                         x0, x1 = self.bm.sample_plan(
                             self.x[self.t_idx == i - 1, :],
@@ -105,17 +132,25 @@ class EntropicOTFM:
                             self.bridge_over_held_out,
                             batch_size,
                         )
+                    dt_bridge = dt_i
+                    if i > 0 and i < len(self.dt_values):
+                        dt_bridge = self.dt_values[i - 1] + self.dt_values[i]
+                    t_bridge_start = (
+                        self.time_values[i - 1]
+                        if i > 0 and i - 1 < len(self.time_values)
+                        else (i - 1) * self.dt
+                    )
+
                     ts = torch.rand_like(x0[:, :1])
                     _, _, x, s, u = self.bm.sample_bridge_and_flow(
-                        x0, x1, ts, (2 * self.sigma**2 * self.dt) ** 0.5
+                        x0, x1, ts, (self.sigma**2 * dt_bridge) ** 0.5
                     )
                     _x.append(x)
                     _s.append(s)
-                    _t.append(
-                        (i - 1 + ts * 2) * self.dt
-                    )  # Scale ts to span 2 timesteps
+                    _t.append(t_bridge_start + ts * dt_bridge)
                     _t_orig.append(ts)
                     _u.append(u)
+                    _dt.append(torch.full_like(ts, dt_bridge))
                     i += 1
                 else:
                     i += 1
@@ -129,13 +164,14 @@ class EntropicOTFM:
                     )
                 ts = torch.rand_like(x0[:, :1])
                 _, _, x, s, u = self.bm.sample_bridge_and_flow(
-                    x0, x1, ts, (self.sigma**2 * self.dt) ** 0.5
+                    x0, x1, ts, (self.sigma**2 * dt_i) ** 0.5
                 )
                 _x.append(x)
                 _s.append(s)
-                _t.append((i + ts) * self.dt)
+                _t.append(t_start + ts * dt_i)
                 _t_orig.append(ts)
                 _u.append(u)
+                _dt.append(torch.full_like(ts, dt_i))
                 i += 1
         return (
             torch.vstack(_x),
@@ -143,6 +179,7 @@ class EntropicOTFM:
             torch.vstack(_u),
             torch.vstack(_t),
             torch.vstack(_t_orig),
+            torch.vstack(_dt),
         )
 
 

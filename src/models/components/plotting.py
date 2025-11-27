@@ -36,9 +36,9 @@ def plot_scatter_and_flow(obs, model, title="stream", wandb_logger=None):
     gridpoints = torch.tensor(
         np.stack([X.flatten(), Y.flatten()], axis=1), requires_grad=True, device=device
     ).type(torch.float32)
-    times = torch.tensor(T.flatten(), requires_grad=True, device=device).type(torch.float32)[
-        :, None
-    ]
+    times = torch.tensor(T.flatten(), requires_grad=True, device=device).type(
+        torch.float32
+    )[:, None]
     out = model(times, gridpoints)
     out = out.reshape([points_real, points_real, 7, dim])
     out = out.cpu().detach().numpy()
@@ -63,7 +63,9 @@ def plot_scatter_and_flow(obs, model, title="stream", wandb_logger=None):
         wandb_logger.log_image(key="flow", images=[f"figs/{title}.png"])
 
 
-def store_trajectories(obs: Union[torch.Tensor, list], model, title="trajs", start_time=0):
+def store_trajectories(
+    obs: Union[torch.Tensor, list], model, title="trajs", start_time=0
+):
     n = 2000
     if isinstance(obs, list):
         data, labels = [], []
@@ -119,7 +121,9 @@ def plot_trajectory(
         obs = obs.reshape(-1, dim).detach().cpu().numpy()
         tts = np.tile(np.arange(ts), batch_size)
         scprep.plot.scatter2d(obs, c=tts)
-    plt.scatter(traj[:, :n, 0], traj[:, :n, 1], s=0.3, alpha=0.2, c="black", label="Flow")
+    plt.scatter(
+        traj[:, :n, 0], traj[:, :n, 1], s=0.3, alpha=0.2, c="black", label="Flow"
+    )
     plt.scatter(traj[-1, :n, 0], traj[-1, :n, 1], s=6, alpha=1, c="purple", marker="x")
     for i in range(20):
         plt.plot(traj[:, i, 0], traj[:, i, 1], c="red", alpha=0.5)
@@ -161,10 +165,14 @@ def plot_paths(
 
     with torch.no_grad():
         node = NeuralODE(model)
-        traj = node.trajectory(start, t_span=torch.linspace(0, ts - 1, max(20 * ts, 100)))
+        traj = node.trajectory(
+            start, t_span=torch.linspace(0, ts - 1, max(20 * ts, 100))
+        )
         traj = traj.cpu().detach().numpy()
     # plt.scatter(traj[0, :n, 0], traj[0, :n, 1], s=10, alpha=0.8, c="black")
-    plt.scatter(traj[:, :n, 0], traj[:, :n, 1], s=0.3, alpha=0.2, c="black", label="Flow")
+    plt.scatter(
+        traj[:, :n, 0], traj[:, :n, 1], s=0.3, alpha=0.2, c="black", label="Flow"
+    )
     plt.scatter(traj[-1, :n, 0], traj[-1, :n, 1], s=6, alpha=1, c="purple", marker="x")
     # plt.legend(["Prior sample z(S)", "Flow", "z(0)"])
     os.makedirs("figs", exist_ok=True)
@@ -240,7 +248,7 @@ def plot_comparison_heatmaps(
 
         invert_yaxis (bool):
             If True, calls `plt.gca().invert_yaxis()` for each subplot.
-            
+
         mask_diagonal (bool):
             If True, masks the diagonal of each matrix before plotting.
 
@@ -277,13 +285,15 @@ def plot_comparison_heatmaps(
 
     for i, (title, matrix) in enumerate(matrices_and_titles, start=1):
         plt.subplot(1, n, i)
-        
+
         # Apply maskdiag if requested
         matrix_to_plot = maskdiag(matrix) if mask_diagonal else matrix
 
         # Build DataFrame for seaborn
         if row_gene_names is not None and col_gene_names is not None:
-            df = pd.DataFrame(matrix_to_plot, index=row_gene_names, columns=col_gene_names)
+            df = pd.DataFrame(
+                matrix_to_plot, index=row_gene_names, columns=col_gene_names
+            )
         else:
             df = pd.DataFrame(matrix_to_plot)
 
@@ -316,12 +326,12 @@ def maskdiag(A):
     """
     # Create a copy to avoid modifying the original
     A_masked = A.copy()
-    
+
     # Zero out the diagonal elements (only where they exist)
     min_dim = min(A.shape[0], A.shape[1])
     for i in range(min_dim):
         A_masked[i, i] = 0
-        
+
     return A_masked
 
 
@@ -413,7 +423,7 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
     """
     # Move model to the specified device if it's not already there
     v = v.to(device)
-    
+
     all_x_list = []
     for ds_idx, adata in enumerate(adatas):
         x0 = adata.X[adata.obs["t"] == 0]
@@ -440,13 +450,13 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
 
     Js = []
     batch_size = 256
-    
+
     # Using a context manager to ensure all operations happen on the specified device
     with torch.device(device):
         for start in range(0, X_all_torch.shape[0], batch_size):
             end = start + batch_size
             batch_x = X_all_torch[start:end]
-            
+
             # Using a lambda that ensures inputs stay on device
             J_local = torch.vmap(lambda x: Ju(t_val, x))(batch_x)
             J_avg = J_local.mean(dim=0)
@@ -454,7 +464,7 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
 
     if len(Js) == 0:
         return None
-        
+
     # Stack and compute mean, ensuring it stays on device
     J_final = torch.stack(Js, dim=0).mean(dim=0)
     A_est = J_final
@@ -463,7 +473,43 @@ def compute_global_jacobian(v, adatas, dt, device=torch.device("cpu")):
     return A_est.detach().cpu().numpy().T
 
 
-def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0, mask_diagonal=True):
+def compute_grn_metrics(causal_graph, jacobian, true_graph, mask_diagonal=True):
+    """Compute GRN metrics (AP, AUROC) for both Jacobian and graph-based methods."""
+    from sklearn.metrics import roc_auc_score
+
+    if mask_diagonal:
+        masked_true_graph = maskdiag(true_graph)
+        masked_jacobian = maskdiag(jacobian)
+        masked_causal_graph = maskdiag(causal_graph)
+    else:
+        masked_true_graph = true_graph
+        masked_jacobian = jacobian
+        masked_causal_graph = causal_graph
+
+    y_true = np.abs(np.sign(masked_true_graph).astype(int).flatten())
+
+    metrics = {}
+
+    y_pred_jac = np.abs(masked_jacobian.flatten())
+    metrics["jacobian_ap"] = average_precision_score(y_true, y_pred_jac)
+    if len(np.unique(y_true)) > 1:
+        metrics["jacobian_auroc"] = roc_auc_score(y_true, y_pred_jac)
+    else:
+        metrics["jacobian_auroc"] = float("nan")
+
+    y_pred_graph = np.abs(masked_causal_graph.flatten())
+    metrics["graph_ap"] = average_precision_score(y_true, y_pred_graph)
+    if len(np.unique(y_true)) > 1:
+        metrics["graph_auroc"] = roc_auc_score(y_true, y_pred_graph)
+    else:
+        metrics["graph_auroc"] = float("nan")
+
+    return metrics
+
+
+def plot_auprs(
+    causal_graph, jacobian, true_graph, logger=None, global_step=0, mask_diagonal=True
+):
     fig, axs = plt.subplots(1, 2, figsize=(12, 5))
 
     if mask_diagonal:
@@ -513,12 +559,14 @@ def plot_auprs(causal_graph, jacobian, true_graph, logger=None, global_step=0, m
         plt.close(fig)
     else:
         plt.show()
-    
+
     print("AP: ", avg_prec_mlp)
     print("AUPR ratio: ", avg_prec_mlp / np.mean(np.abs(masked_true_graph) > 0))
 
 
-def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0, mask_diagonal=True):
+def log_causal_graph_matrices(
+    A_estim, W_v, A_true, logger=None, global_step=0, mask_diagonal=True
+):
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
 
     # Apply masking based on parameter
@@ -547,7 +595,9 @@ def log_causal_graph_matrices(A_estim, W_v, A_true, logger=None, global_step=0, 
     fig.tight_layout()
 
     if logger is not None:
-        logger.experiment.add_figure("Causal_Graph_Matrices", fig, global_step=global_step)
+        logger.experiment.add_figure(
+            "Causal_Graph_Matrices", fig, global_step=global_step
+        )
         plt.close(fig)
     else:
         plt.show()

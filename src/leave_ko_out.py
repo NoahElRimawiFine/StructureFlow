@@ -13,7 +13,12 @@ import umap
 from src.datamodules.grn_datamodule import TrajectoryStructureDataModule
 from src.models.rf_module import ReferenceFittingModule
 from src.models.sf2m_module import SF2MLitModule
-from src.models.components.solver import simulate_trajectory, wasserstein, mmd_squared
+from src.models.components.solver import (
+    simulate_trajectory,
+    wasserstein,
+    mmd_squared,
+    energy_distance,
+)
 from src.models.components.plotting import (
     compute_global_jacobian,
     plot_auprs,
@@ -42,16 +47,19 @@ DEFAULT_DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 DEFAULT_SEED = 42
 DEFAULT_RESULTS_DIR = "lko_results"
 DEFAULT_USE_CORRECTION_MLP = True
+DEFAULT_USE_NONUNIFORM_TIME = False
+DEFAULT_TIME_JITTER = 0.2
+DEFAULT_TIME_SEED = None
 
 # Knockout indices to leave out for testing (will be set in main)
 LEAVE_OUT_KO_INDICES = [1, 2, 3]  # Default values, will be adjusted in main
 
 # --- Renge Specific Parameters ---
-# DEFAULT_N_STEPS_PER_FOLD = 10000
-# DEFAULT_LR = 0.0002
-# DEFAULT_REG = 5e-8
-# DEFAULT_ALPHA = 0.1
-# DEFAULT_GL_REG = 0.02
+DEFAULT_N_STEPS_PER_FOLD = 10000
+DEFAULT_LR = 0.0002
+DEFAULT_REG = 5e-8
+DEFAULT_ALPHA = 0.1
+DEFAULT_GL_REG = 0.02
 
 
 def create_trajectory_pca_plot(
@@ -595,6 +603,9 @@ def main(args):
     RESULTS_DIR = args.results_dir
     MODEL_TYPE = args.model_type
     USE_CORRECTION_MLP = args.use_correction_mlp
+    USE_NONUNIFORM_TIME = args.use_nonuniform_time
+    TIME_JITTER = args.time_jitter
+    TIME_SEED = args.time_seed
 
     # Create results directory with model type and seed info
     RESULTS_DIR = os.path.join(
@@ -605,7 +616,6 @@ def main(args):
     seed_everything(SEED, workers=True)
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # --- 1. Load Full Data Once ---
     print("Loading full dataset...")
     datamodule = TrajectoryStructureDataModule(
         data_path=DATA_PATH,
@@ -616,6 +626,9 @@ def main(args):
         train_val_test_split=(1, 0, 0),
         dummy_loader_steps=N_STEPS_PER_FOLD,
         num_workers=11,
+        use_nonuniform_time=USE_NONUNIFORM_TIME,
+        time_jitter=TIME_JITTER,
+        time_seed=TIME_SEED,
     )
     datamodule.prepare_data()
     datamodule.setup(stage="fit")
@@ -687,17 +700,22 @@ def main(args):
 
         if MODEL_TYPE == "rf":
             print("Using Reference Fitting model...")
-            # Initialize RF model
             model = ReferenceFittingModule(
                 use_cuda=(DEVICE == "cuda"),
                 iter=(5000 if DATASET_TYPE == "Renge" else 1000),
+                dt_values=datamodule.dt_values,
+                time_values=datamodule.time_values,
             )
 
-            # Fit the model with the filtered data (excluding the left-out knockout)
             print(f"Fitting RF model without knockout {ko_name}...")
             print(f"  Training KOs: {fold_kos}")
             print(f"  Total training datasets: {len(fold_adatas)}")
-            model.fit_model(fold_adatas, fold_kos)
+            model.fit_model(
+                fold_adatas,
+                fold_kos,
+                dt_values=datamodule.dt_values,
+                time_values=datamodule.time_values,
+            )
 
             print("RF model fitting complete.")
 
@@ -788,13 +806,13 @@ def main(args):
                 true_dist_cpu = torch.from_numpy(true_dist_np).float()
 
                 if MODEL_TYPE == "rf":
-                    # Simulate trajectory using RF model
                     traj_rf = model.simulate_trajectory(
                         x0,
-                        n_times=t + 1,  # Simulate for duration of 1 (from 0 to 1)
-                        use_wildtype=False,  # Use the full model
+                        n_times=t + 1,
+                        use_wildtype=False,
                         n_points=N_TIMES_SIM,
-                        ko_condition=ko_name,  # Specify which knockout to simulate
+                        ko_condition=ko_name,
+                        transition_idx=t,
                     )
 
                     # RF simulation result
@@ -803,12 +821,15 @@ def main(args):
                     # Calculate metrics
                     w_dist_rf = wasserstein(traj_rf, true_dist_cpu)
                     mmd2_rf = mmd_squared(traj_rf, true_dist_cpu)
+                    ed_rf = energy_distance(traj_rf.numpy(), true_dist_cpu.numpy())
 
                     # Use same values for both ODE and SDE metrics for consistent formatting
                     w_dist_ode = w_dist_rf
                     w_dist_sde = w_dist_rf
                     mmd2_ode = mmd2_rf
                     mmd2_sde = mmd2_rf
+                    ed_ode = ed_rf
+                    ed_sde = ed_rf
 
                     # Store predictions for multi-KO plot (using final time step predictions)
                     if t == T_max - 2:  # Last transition (t to t+1 where t+1 is final)
@@ -859,6 +880,7 @@ def main(args):
                         "T": T_times,
                         "sigma": SIGMA,
                         "device": DEVICE,
+                        "time_values": datamodule.time_values,
                     }
 
                     # ODE Simulation
@@ -874,6 +896,12 @@ def main(args):
                     w_dist_sde = wasserstein(sim_sde_final, true_dist_cpu)
                     mmd2_ode = mmd_squared(sim_ode_final, true_dist_cpu)
                     mmd2_sde = mmd_squared(sim_sde_final, true_dist_cpu)
+                    ed_ode = energy_distance(
+                        sim_ode_final.numpy(), true_dist_cpu.numpy()
+                    )
+                    ed_sde = energy_distance(
+                        sim_sde_final.numpy(), true_dist_cpu.numpy()
+                    )
 
                     # Store predictions for multi-KO plot (using final time step predictions)
                     if t == T_max - 2:  # Last transition (t to t+1 where t+1 is final)
@@ -898,16 +926,18 @@ def main(args):
                         "w_dist_sde": w_dist_sde,
                         "mmd2_ode": mmd2_ode,
                         "mmd2_sde": mmd2_sde,
+                        "ed_ode": ed_ode,
+                        "ed_sde": ed_sde,
                     }
                 )
 
                 # Log metrics
                 print(
-                    f"  Time {t} to {t+1}: W_dist(ODE)={w_dist_ode:.4f}, MMD2(ODE)={mmd2_ode:.4f}"
+                    f"  Time {t} to {t+1}: W_dist(ODE)={w_dist_ode:.4f}, MMD2(ODE)={mmd2_ode:.4f}, ED(ODE)={ed_ode:.4f}"
                 )
                 if MODEL_TYPE != "rf":
                     print(
-                        f"  Time {t} to {t+1}: W_dist(SDE)={w_dist_sde:.4f}, MMD2(SDE)={mmd2_sde:.4f}"
+                        f"  Time {t} to {t+1}: W_dist(SDE)={w_dist_sde:.4f}, MMD2(SDE)={mmd2_sde:.4f}, ED(SDE)={ed_sde:.4f}"
                     )
 
         # --- 2.4 Aggregate Results for this Knockout ---
@@ -917,11 +947,15 @@ def main(args):
             avg_sde_dist = ko_df["w_dist_sde"].mean()
             avg_mmd2_ode = ko_df["mmd2_ode"].mean()
             avg_mmd2_sde = ko_df["mmd2_sde"].mean()
+            avg_ed_ode = ko_df["ed_ode"].mean()
+            avg_ed_sde = ko_df["ed_sde"].mean()
 
             std_ode_dist = ko_df["w_dist_ode"].std()
             std_sde_dist = ko_df["w_dist_sde"].std()
             std_mmd2_ode = ko_df["mmd2_ode"].std()
             std_mmd2_sde = ko_df["mmd2_sde"].std()
+            std_ed_ode = ko_df["ed_ode"].std()
+            std_ed_sde = ko_df["ed_sde"].std()
 
             print(
                 f"Knockout {ko_name} Avg W_dist: ODE={avg_ode_dist:.4f} ± {std_ode_dist:.4f}"
@@ -936,6 +970,12 @@ def main(args):
                 print(
                     f"Knockout {ko_name} Avg MMD2: SDE={avg_mmd2_sde:.4f} ± {std_mmd2_sde:.4f}"
                 )
+                print(
+                    f"Knockout {ko_name} Avg ED: ODE={avg_ed_ode:.4f} ± {std_ed_ode:.4f}"
+                )
+                print(
+                    f"Knockout {ko_name} Avg ED: SDE={avg_ed_sde:.4f} ± {std_ed_sde:.4f}"
+                )
 
             results.append(
                 {
@@ -946,10 +986,14 @@ def main(args):
                     "avg_sde_distance": avg_sde_dist,
                     "avg_mmd2_ode": avg_mmd2_ode,
                     "avg_mmd2_sde": avg_mmd2_sde,
+                    "avg_ed_ode": avg_ed_ode,
+                    "avg_ed_sde": avg_ed_sde,
                     "std_ode_distance": std_ode_dist,
                     "std_sde_distance": std_sde_dist,
                     "std_mmd2_ode": std_mmd2_ode,
                     "std_mmd2_sde": std_mmd2_sde,
+                    "std_ed_ode": std_ed_ode,
+                    "std_ed_sde": std_ed_sde,
                 }
             )
 
@@ -983,10 +1027,14 @@ def main(args):
                     "avg_sde_distance": np.nan,
                     "avg_mmd2_ode": np.nan,
                     "avg_mmd2_sde": np.nan,
+                    "avg_ed_ode": np.nan,
+                    "avg_ed_sde": np.nan,
                     "std_ode_distance": np.nan,
                     "std_sde_distance": np.nan,
                     "std_mmd2_ode": np.nan,
                     "std_mmd2_sde": np.nan,
+                    "std_ed_ode": np.nan,
+                    "std_ed_sde": np.nan,
                 }
             )
 
@@ -1035,11 +1083,15 @@ def main(args):
         final_avg_sde = summary_df["avg_sde_distance"].mean()
         final_avg_mmd2_ode = summary_df["avg_mmd2_ode"].mean()
         final_avg_mmd2_sde = summary_df["avg_mmd2_sde"].mean()
+        final_avg_ed_ode = summary_df["avg_ed_ode"].mean()
+        final_avg_ed_sde = summary_df["avg_ed_sde"].mean()
 
         final_std_ode = np.sqrt(np.mean(summary_df["std_ode_distance"] ** 2))
         final_std_sde = np.sqrt(np.mean(summary_df["std_sde_distance"] ** 2))
         final_std_mmd2_ode = np.sqrt(np.mean(summary_df["std_mmd2_ode"] ** 2))
         final_std_mmd2_sde = np.sqrt(np.mean(summary_df["std_mmd2_sde"] ** 2))
+        final_std_ed_ode = np.sqrt(np.mean(summary_df["std_ed_ode"] ** 2))
+        final_std_ed_sde = np.sqrt(np.mean(summary_df["std_ed_sde"] ** 2))
 
         print(
             f"\nOverall Average W-Distance (ODE): {final_avg_ode:.4f} ± {final_std_ode:.4f}"
@@ -1052,6 +1104,12 @@ def main(args):
         )
         print(
             f"Overall Average MMD2 (SDE): {final_avg_mmd2_sde:.4f} ± {final_std_mmd2_sde:.4f}"
+        )
+        print(
+            f"Overall Average ED (ODE): {final_avg_ed_ode:.4f} ± {final_std_ed_ode:.4f}"
+        )
+        print(
+            f"Overall Average ED (SDE): {final_avg_ed_sde:.4f} ± {final_std_ed_sde:.4f}"
         )
 
         # Save summary results
@@ -1212,6 +1270,24 @@ if __name__ == "__main__":
         type=str,
         default=DEFAULT_RESULTS_DIR,
         help="Directory to save results",
+    )
+    parser.add_argument(
+        "--use_nonuniform_time",
+        action="store_true",
+        default=DEFAULT_USE_NONUNIFORM_TIME,
+        help="Use non-uniform time bins",
+    )
+    parser.add_argument(
+        "--time_jitter",
+        type=float,
+        default=DEFAULT_TIME_JITTER,
+        help="Amount of randomness for non-uniform bins (0.0-1.0)",
+    )
+    parser.add_argument(
+        "--time_seed",
+        type=int,
+        default=DEFAULT_TIME_SEED,
+        help="Random seed for non-uniform time bins (for reproducibility)",
     )
 
     args = parser.parse_args()

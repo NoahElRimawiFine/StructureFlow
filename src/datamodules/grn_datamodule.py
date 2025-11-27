@@ -1,6 +1,7 @@
 import glob
 import os
 import logging
+
 log = logging.getLogger(__name__)
 
 import anndata as ad
@@ -8,7 +9,13 @@ import lightning.pytorch as pl
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, Dataset, random_split, IterableDataset, ConcatDataset
+from torch.utils.data import (
+    DataLoader,
+    Dataset,
+    random_split,
+    IterableDataset,
+    ConcatDataset,
+)
 import scanpy as sc
 
 from .components import sc_dataset as util
@@ -57,6 +64,9 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         T: int = 5,
         use_dummy_train_loader: bool = False,
         dummy_loader_steps: int = 10000,
+        use_nonuniform_time: bool = False,
+        time_jitter: float = 0.2,
+        time_seed: int = None,
     ):
         """
         Args:
@@ -65,6 +75,11 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             batch_size: batch size for the DataLoader
             num_workers: how many workers for DataLoader
             train_val_test_split: ratio to split the entire dataset
+            T: number of time bins
+            use_nonuniform_time: if True, use non-uniformly spaced time bins
+            time_jitter: amount of randomness for non-uniform bins (0.0-1.0),
+                         as fraction of uniform bin width
+            time_seed: random seed for reproducible non-uniform time bins
         """
         super().__init__()
         self.use_dummy_train_loader = use_dummy_train_loader
@@ -76,8 +91,13 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.train_val_test_split = train_val_test_split
         self.T = T
+        self.use_nonuniform_time = use_nonuniform_time
+        self.time_jitter = time_jitter
+        self.time_seed = time_seed
 
-        # Will be filled in setup():
+        self.time_values = None
+        self.dt_values = None
+
         self.adatas = None
         self.kos = None
         self.ko_indices = None
@@ -110,7 +130,8 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
 
             # Create datasets from the loaded AnnData objects
             wrapped_datasets = [
-                AnnDataDataset(adata, source_id=i) for i, adata in enumerate(self.adatas)
+                AnnDataDataset(adata, source_id=i)
+                for i, adata in enumerate(self.adatas)
             ]
             self._dataset_lengths = [len(ds) for ds in wrapped_datasets]
             self._full_dataset = ConcatDataset(wrapped_datasets)
@@ -156,10 +177,7 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             _v = {"+": 1, "-": -1}[df.iloc[i, 2]]
             self.true_matrix.loc[_i, _j] = _v
 
-        # Bin timepoints
-        t_bins = np.linspace(0, 1, self.T + 1)[:-1]
-        for adata in self.adatas:
-            adata.obs["t"] = np.digitize(adata.obs.t_sim, t_bins) - 1
+        self._bin_timepoints()
 
         # Identify the knockouts
         self.kos = []
@@ -170,13 +188,54 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                 self.kos.append(None)
 
         # gene_to_index for knockouts
-        self.gene_to_index = {gene: idx for idx, gene in enumerate(self.adatas[0].var.index)}
+        self.gene_to_index = {
+            gene: idx for idx, gene in enumerate(self.adatas[0].var.index)
+        }
         self.ko_indices = []
         for ko in self.kos:
             if ko is None:
                 self.ko_indices.append(None)
             else:
                 self.ko_indices.append(self.gene_to_index[ko])
+
+    def _bin_timepoints(self):
+        """Bin continuous timepoints into discrete bins.
+
+        If use_nonuniform_time is True, creates non-uniformly spaced bins by adding
+        random jitter to the uniform bin edges.
+
+        Sets:
+            self.time_values: list of actual continuous time values for each bin
+            self.dt_values: list of time deltas between consecutive bins
+        """
+        uniform_dt = 1.0 / self.T
+
+        if self.use_nonuniform_time:
+            rng = np.random.RandomState(self.time_seed)
+            t_bins = np.linspace(0, 1, self.T + 1)[:-1]
+            max_jitter = uniform_dt * self.time_jitter
+            jitter = rng.uniform(-max_jitter, max_jitter, size=self.T)
+            jitter[0] = 0
+            t_bins = t_bins + jitter
+            t_bins = np.clip(t_bins, 0, 1 - 1e-6)
+            t_bins = np.sort(t_bins)
+
+            self.time_values = list(t_bins)
+            self.dt_values = [
+                self.time_values[i + 1] - self.time_values[i]
+                for i in range(len(self.time_values) - 1)
+            ]
+            self.dt_values.append(1.0 - self.time_values[-1])
+
+            print(f"Non-uniform time bins: {self.time_values}")
+            print(f"dt values: {self.dt_values}")
+        else:
+            t_bins = np.linspace(0, 1, self.T + 1)[:-1]
+            self.time_values = list(t_bins)
+            self.dt_values = [uniform_dt] * (self.T - 1)
+
+        for adata in self.adatas:
+            adata.obs["t"] = np.digitize(adata.obs.t_sim, t_bins) - 1
 
     def _setup_renge_data_old(self):
         """Load Renge data from disk and convert to AnnData objects."""
@@ -191,30 +250,30 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             has_ref_network = True
         except FileNotFoundError:
             has_ref_network = False
-        
+
         # Load the data
         x_renge = pd.read_csv(x_renge_path, index_col=0)
         e_renge = pd.read_csv(e_renge_path, index_col=0)
-        
+
         # Create the reference network matrix
         if has_ref_network:
             # Handle the non-square reference network
             # Get all unique genes from both rows and columns of ref_network
             all_genes = list(set(list(ref_network.index) + list(ref_network.columns)))
-            
+
             # Create a square matrix from the non-square reference
             square_matrix = pd.DataFrame(
                 np.zeros((len(all_genes), len(all_genes)), int),
                 index=all_genes,
                 columns=all_genes,
             )
-            
+
             # Fill in the values from the reference network
             for i in ref_network.index:
                 for j in ref_network.columns:
                     if i in square_matrix.index and j in square_matrix.columns:
                         square_matrix.loc[i, j] = ref_network.loc[i, j]
-            
+
             self.true_matrix = square_matrix
         else:
             # Create an empty matrix if no reference is available
@@ -223,61 +282,65 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
                 index=gene_names,
                 columns=gene_names,
             )
-        
+
         # Extract time column from X_RENGE
-        time_column = x_renge.pop('t').values
-        
+        time_column = x_renge.pop("t").values
+
         # Get gene names (all columns except the last one from X_RENGE, and first one is cell IDs)
         gene_names = x_renge.columns.tolist()[1:]
         self.dim = len(gene_names)
-        
+
         # Create a dictionary to group cells by knockout gene
         # e.g., ko_groups = {'gene1': [cell1, cell2], 'gene2': [cell3, cell4]}
         ko_groups = {}
-        
+
         # For each row, determine the knockout gene (if any)
         for idx, row in x_renge.iterrows():
             ko_gene = None
             for gene in gene_names:
                 if row[gene] == 1.0:
-                    ko_gene = gene 
+                    ko_gene = gene
                     break
-            
+
             # Add to appropriate group (None for wildtype)
             if ko_gene not in ko_groups:
                 ko_groups[ko_gene] = []
             ko_groups[ko_gene].append(idx)
-        
+
         # Create separate AnnData objects for each knockout condition
         self.adatas = []
         self.kos = []
         self.ko_indices = []
-        
+
         # gene_to_index mapping
         self.gene_to_index = {gene: idx for idx, gene in enumerate(gene_names)}
-        
+
         for ko_gene, cell_indices in ko_groups.items():
             # Extract expression data for these cells
             # e.g., subset_expr = pd.DataFrame([[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]], index=[cell1, cell3])
             subset_expr = e_renge.loc[cell_indices]
             # Extract time data for these cells
             # e.g., subset_time = pd.Series([0.1, 0.2, 0.3, 0.4], index=[cell1, cell3, cell4, cell7])
-            subset_time = pd.Series(time_column[np.where(np.isin(x_renge.index, cell_indices))[0]], 
-                                   index=cell_indices)
-            
+            subset_time = pd.Series(
+                time_column[np.where(np.isin(x_renge.index, cell_indices))[0]],
+                index=cell_indices,
+            )
+
             # Create AnnData object
             adata = ad.AnnData(X=subset_expr.values)
             adata.obs_names = subset_expr.index
             adata.var_names = e_renge.columns
-            
+
             # Store time in obs
             unique_times = np.unique(subset_time.values)
             time_mapping = {t: i for i, t in enumerate(sorted(unique_times))}
-            adata.obs['t'] = np.array([time_mapping[t] for t in subset_time.values])
+            adata.obs["t"] = np.array([time_mapping[t] for t in subset_time.values])
 
             self.adatas.append(adata)
             self.kos.append(ko_gene)
-            self.ko_indices.append(None if ko_gene is None else self.gene_to_index[ko_gene])
+            self.ko_indices.append(
+                None if ko_gene is None else self.gene_to_index[ko_gene]
+            )
 
     def _setup_renge_data(self):
         """Load Renge data from disk and use the hipsc AnnData object."""
@@ -285,12 +348,12 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
         hipsc_path = os.path.join(self.data_path, "hipsc.h5ad")
         hipsc = sc.read_h5ad(hipsc_path)
 
-        if 'gene' in hipsc.var:
+        if "gene" in hipsc.var:
             # Create a mapping from current IDs to gene symbols
-            gene_mapping = dict(zip(hipsc.var_names, hipsc.var['gene']))
+            gene_mapping = dict(zip(hipsc.var_names, hipsc.var["gene"]))
 
             # Create a new AnnData with gene symbols as variable names
-            gene_symbols = hipsc.var['gene'].tolist()
+            gene_symbols = hipsc.var["gene"].tolist()
 
             # Rename the variables using the gene symbols
             hipsc.var_names = pd.Index(gene_symbols)
@@ -320,15 +383,15 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             )
 
         # Shift timepoints to start from 0
-        min_t = hipsc.obs['t'].min()
-        hipsc.obs['t'] = hipsc.obs['t'] - min_t
+        min_t = hipsc.obs["t"].min()
+        hipsc.obs["t"] = hipsc.obs["t"] - min_t
 
         # Convert sparse matrix to dense if needed
-        if hasattr(hipsc.X, 'toarray'):
+        if hasattr(hipsc.X, "toarray"):
             hipsc.X = hipsc.X.toarray()
 
         # Create separate AnnData objects for each knockout condition
-        ko_groups = hipsc.obs.groupby('ko')
+        ko_groups = hipsc.obs.groupby("ko")
 
         self.adatas = []
         self.kos = []
@@ -342,12 +405,41 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             adata_subset = hipsc[indices].copy()
 
             # Handle the case where ko_gene might be NaN or a special value for wildtype
-            if pd.isna(ko_gene) or ko_gene == 'wt' or ko_gene == 'WT' or ko_gene == '':
+            if pd.isna(ko_gene) or ko_gene == "wt" or ko_gene == "WT" or ko_gene == "":
                 ko_gene = None
 
             self.adatas.append(adata_subset)
             self.kos.append(ko_gene)
-            self.ko_indices.append(None if ko_gene is None else self.gene_to_index.get(ko_gene))
+            self.ko_indices.append(
+                None if ko_gene is None else self.gene_to_index.get(ko_gene)
+            )
+
+        all_times = []
+        for adata in self.adatas:
+            all_times.extend(adata.obs["t"].values)
+        n_times = int(max(all_times)) + 1
+        self.T = n_times
+
+        uniform_dt = 1.0 / n_times
+        if self.use_nonuniform_time:
+            rng = np.random.RandomState(self.time_seed)
+            t_vals = np.linspace(0, 1, n_times + 1)[:-1]
+            max_jitter = uniform_dt * self.time_jitter
+            jitter = rng.uniform(-max_jitter, max_jitter, size=n_times)
+            jitter[0] = 0
+            t_vals = t_vals + jitter
+            t_vals = np.clip(t_vals, 0, 1 - 1e-6)
+            t_vals = np.sort(t_vals)
+            self.time_values = list(t_vals)
+            self.dt_values = [
+                self.time_values[i + 1] - self.time_values[i]
+                for i in range(len(self.time_values) - 1)
+            ]
+            print(f"Renge non-uniform time values: {self.time_values}")
+            print(f"Renge dt values: {self.dt_values}")
+        else:
+            self.time_values = list(np.linspace(0, 1, n_times + 1)[:-1])
+            self.dt_values = [uniform_dt] * (n_times - 1)
 
     def get_subset_adatas(self, split: str = "train"):
         """Returns a list of AnnData objects, each containing only the cells used in the specified
@@ -405,8 +497,12 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         if self.use_dummy_train_loader:
-            print(f"Using dummy infinite train dataloader for approx {self.dummy_loader_steps} steps.")
-            dummy_dataset = DummyInfiniteDataset(data_shape=(1,), length=self.dummy_loader_steps + 10) # Add buffer
+            print(
+                f"Using dummy infinite train dataloader for approx {self.dummy_loader_steps} steps."
+            )
+            dummy_dataset = DummyInfiniteDataset(
+                data_shape=(1,), length=self.dummy_loader_steps + 10
+            )  # Add buffer
             return DataLoader(dummy_dataset, batch_size=1, num_workers=0)
         else:
             return DataLoader(
@@ -422,9 +518,9 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             batch_size=self.dim,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=self._identity_collate
+            collate_fn=self._identity_collate,
         )
-        
+
     def identity_collate(self, batch):
         return batch
 
@@ -436,12 +532,14 @@ class TrajectoryStructureDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
         )
 
+
 class DummyInfiniteDataset(IterableDataset):
     """
     An IterableDataset that yields dummy tensors indefinitely or up to a specified length.
     Useful when the training step doesn't depend on the dataloader's output
     but needs to run for a fixed number of steps.
     """
+
     def __init__(self, data_shape=(1,), length=None):
         """
         Args:
@@ -457,7 +555,7 @@ class DummyInfiniteDataset(IterableDataset):
         count = 0
         while True:
             if self.length is not None and count >= self.length:
-                return # Stop iteration
+                return  # Stop iteration
             # Yield a dummy tensor (content doesn't matter)
             # Ensure it's on the correct device type (CPU in this case) if needed,
             # though Lightning usually handles placement.

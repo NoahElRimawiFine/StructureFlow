@@ -228,6 +228,8 @@ def aggregate_results(
                             "avg_sde_distance": ["mean", "std"],
                             "avg_mmd2_ode": ["mean", "std"],
                             "avg_mmd2_sde": ["mean", "std"],
+                            "avg_ed_ode": ["mean", "std"],
+                            "avg_ed_sde": ["mean", "std"],
                         }
                     )
                     .reset_index()
@@ -266,6 +268,8 @@ def aggregate_results(
                     "W-Dist (SDE)": f"{agg_summary['avg_sde_distance_mean'].mean():.12f} ± {agg_summary['avg_sde_distance_std'].mean():.12f}",
                     "MMD2 (ODE)": f"{agg_summary['avg_mmd2_ode_mean'].mean():.12f} ± {agg_summary['avg_mmd2_ode_std'].mean():.12f}",
                     "MMD2 (SDE)": f"{agg_summary['avg_mmd2_sde_mean'].mean():.12f} ± {agg_summary['avg_mmd2_sde_std'].mean():.12f}",
+                    "ED (ODE)": f"{agg_summary['avg_ed_ode_mean'].mean():.12f} ± {agg_summary['avg_ed_ode_std'].mean():.12f}",
+                    "ED (SDE)": f"{agg_summary['avg_ed_sde_mean'].mean():.12f} ± {agg_summary['avg_ed_sde_std'].mean():.12f}",
                 }
                 all_summary_rows.append(overall_avg)
 
@@ -285,6 +289,8 @@ def aggregate_results(
                             "W-Dist (SDE)": f"{row['avg_sde_distance_mean']:.12f} ± {row['avg_sde_distance_std']:.12f}",
                             "MMD2 (ODE)": f"{row['avg_mmd2_ode_mean']:.12f} ± {row['avg_mmd2_ode_std']:.12f}",
                             "MMD2 (SDE)": f"{row['avg_mmd2_sde_mean']:.12f} ± {row['avg_mmd2_sde_std']:.12f}",
+                            "ED (ODE)": f"{row['avg_ed_ode_mean']:.12f} ± {row['avg_ed_ode_std']:.12f}",
+                            "ED (SDE)": f"{row['avg_ed_sde_mean']:.12f} ± {row['avg_ed_sde_std']:.12f}",
                         }
                     )
 
@@ -377,6 +383,8 @@ def aggregate_results(
                                     "W-Dist (SDE)": model_data["W-Dist (SDE)"],
                                     "MMD2 (ODE)": model_data["MMD2 (ODE)"],
                                     "MMD2 (SDE)": model_data["MMD2 (SDE)"],
+                                    "ED (ODE)": model_data["ED (ODE)"],
+                                    "ED (SDE)": model_data["ED (SDE)"],
                                 }
                             )
 
@@ -425,11 +433,11 @@ def main():
     args = parser.parse_args()
 
     # Configuration
-    model_types = ["rf"]
+    model_types = ["sf2m", "rf", "mlp_baseline"]
     dataset_types = ["Synthetic", "Curated", "Renge"]
     synthetic_datasets = ["dyn-TF", "dyn-CY", "dyn-LL", "dyn-BF", "dyn-SW"]
     seeds = [1, 2, 3]
-    # dataset_types = ["Synthetic"]
+    # dataset_types = ["Renge"]
     # synthetic_datasets = ["dyn-TF"]
     # seeds = [42]
 

@@ -1,0 +1,2 @@
+model_type,dataset_type,dataset,seed,use_nonuniform_time,time_jitter,jacobian_ap,jacobian_auroc,graph_ap,graph_auroc
+sf2m,Synthetic,dyn-TF,3,False,0.0,0.7214707141597898,0.8335419274092616,0.8494482729487973,0.9317897371714643

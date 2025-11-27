@@ -36,6 +36,8 @@ class Estimator:
         device="cpu",
         optimizer=torch.optim.SGD,
         num_timepoints=None,
+        dt_values=None,
+        time_values=None,
     ):
         self.n_pca_components = n_pca_components
         self.device = device
@@ -57,6 +59,17 @@ class Estimator:
         self.norm = norm
         self.timepoints = sorted(self.adatas[0].obs[t_key].unique())
         self.T = len(self.timepoints) if num_timepoints is None else num_timepoints
+
+        if dt_values is not None:
+            self.dt_values = dt_values
+        else:
+            uniform_dt = 1.0 / self.T
+            self.dt_values = [uniform_dt] * (self.T - 1)
+
+        if time_values is not None:
+            self.time_values = time_values
+        else:
+            self.time_values = [i / self.T for i in range(self.T)]
         self.drift = drift
         if self.norm:
             self.scaler = sk.preprocessing.StandardScaler(
@@ -162,8 +175,6 @@ class Estimator:
         self.trace = []
         A = torch.tensor(self.A, requires_grad=True, dtype=torch.float64)
         b = torch.tensor(self.b, requires_grad=True, dtype=torch.float64)
-        # setup transport plans before first iteration
-        t = 1 / self.T
         print("Updating transport plans")
 
         def update_plans():
@@ -171,14 +182,16 @@ class Estimator:
             for i in range(len(self.kos)):
                 _Ts = []
                 for j in range(self.T - 1):
+                    dt_j = (
+                        self.dt_values[j] if j < len(self.dt_values) else 1.0 / self.T
+                    )
                     with torch.no_grad():
-                        P = torch.linalg.matrix_exp(t * A * self.Ms[i])
-                    # C = ot.utils.euclidean_distances((self.Xs[i][j] @ P) @ self.M_pca[i][:, :self.n_pca_components], self.Xs[i][j+1] @ self.M_pca[i][:, :self.n_pca_components], squared=True)
+                        P = torch.linalg.matrix_exp(dt_j * A * self.Ms[i])
                     C = ot.utils.euclidean_distances(
                         (
                             (
                                 (self.Xs[i][j] / self.std) @ P
-                                + t * (self.b * self.Ms[i][0, :])
+                                + dt_j * (self.b * self.Ms[i][0, :])
                             )
                             * self.std
                         )
@@ -203,19 +216,19 @@ class Estimator:
                                 torch.tensor(ot.utils.unif(self.Xs[i][j].shape[0])),
                                 torch.tensor(ot.utils.unif(self.Xs[i][j + 1].shape[0])),
                             )
-                        )  # independent coupling
+                        )
                 Ts.append(_Ts)
             return Ts
 
         Ts = update_plans()
 
-        def L_joint(A, b, Ts, Xs, us, vs, M_pca, scale):
-            P = torch.linalg.matrix_exp(t * A)
+        def L_joint(A, b, Ts, Xs, us, vs, M_pca, scale, dt_values):
             Ls = []
             for i in range(self.T - 1):
-                # C = ot.utils.euclidean_distances(Xs[i] @ P @ M_pca[:, :self.n_pca_components], Xs[i+1] @ M_pca[:, :self.n_pca_components], squared=True)
+                dt_i = dt_values[i] if i < len(dt_values) else 1.0 / self.T
+                P = torch.linalg.matrix_exp(dt_i * A)
                 C = ot.utils.euclidean_distances(
-                    (((Xs[i] / self.std) @ P + t * b) * self.std)
+                    (((Xs[i] / self.std) @ P + dt_i * b) * self.std)
                     @ M_pca[:, : self.n_pca_components],
                     Xs[i + 1] @ M_pca[:, : self.n_pca_components],
                     squared=True,
@@ -250,13 +263,13 @@ class Estimator:
                     Ls.append((C * T).sum() + eps * (T * torch.log(T)).sum())
             return sum(Ls) / len(Ls)
 
-        def L_fixed(A, b, Ts, Xs, mask, scale):
-            P = torch.linalg.matrix_exp(t * A)
+        def L_fixed(A, b, Ts, Xs, mask, scale, dt_values):
             Ls = []
             for i in range(self.T - 1):
-                # C = ot.utils.euclidean_distances(Xs[i] @ P @ self.M_pca, Xs[i+1] @ self.M_pca, squared=True)
+                dt_i = dt_values[i] if i < len(dt_values) else 1.0 / self.T
+                P = torch.linalg.matrix_exp(dt_i * A)
                 C = ot.utils.euclidean_distances(
-                    (((Xs[i] / self.std) @ P + t * b) * self.std) * mask[None, :],
+                    (((Xs[i] / self.std) @ P + dt_i * b) * self.std) * mask[None, :],
                     Xs[i + 1] * mask[None, :],
                     squared=True,
                 )
@@ -298,6 +311,7 @@ class Estimator:
                                 self.vs[i],
                                 self.M_pca[i],
                                 self.scale[i],
+                                self.dt_values,
                             )
                             for i in range(len(self.kos))
                         ]
@@ -316,6 +330,7 @@ class Estimator:
                                 self.Xs[i],
                                 self.Ms[i][0, :],
                                 self.scale[i],
+                                self.dt_values,
                             )
                             for i in range(len(self.kos))
                         ]

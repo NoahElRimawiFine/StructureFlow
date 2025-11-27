@@ -5,10 +5,10 @@ PYTHON="${PYTHON:-python3}"
 SCRIPT="${SCRIPT:-otvelo_baseline.py}"
 DATA_ROOT="${DATA_ROOT:-../../data/Synthetic}"       
 HSC_PATH="${HSC_PATH:-../../data/Curated}"        
-SEEDS=(1 2 3)                        
+SEEDS=(1)                        
 T_BINS=5                                         
 
-backbones=(dyn-SW dyn-BF dyn-CY dyn-TF)
+backbones=(dyn-SW dyn-BF dyn-CY dyn-TF dyn-LL)
 
 echo
 echo "Running OTVelo baseline"
@@ -29,6 +29,14 @@ for ds in "${backbones[@]}"; do
   fi
 
   for seed in "${SEEDS[@]}"; do
+    OUTPUT_DIR="otvelo_results/${ds}_all_seed${seed}"
+    RESULT_FILE="${OUTPUT_DIR}/trajectory_inference_results.csv"
+    
+    if [[ -f "$RESULT_FILE" ]]; then
+      echo "  • WT + KO pooled (seed ${seed}) - [SKIP: results exist]"
+      continue
+    fi
+    
     echo "  • WT + KO pooled (seed ${seed})"
     if ! $PYTHON -u "$SCRIPT" --backbone "${ds}" \
             --subset all       \
@@ -43,6 +51,14 @@ if [[ -d "$HSC_PATH/HSC" ]]; then
   echo -e "\n▸ DATASET: HSC (Curated)"
 
   for seed in "${SEEDS[@]}"; do
+    OUTPUT_DIR="otvelo_results/HSC_all_seed${seed}"
+    RESULT_FILE="${OUTPUT_DIR}/trajectory_inference_results.csv"
+    
+    if [[ -f "$RESULT_FILE" ]]; then
+      echo "  • WT + KO pooled (seed ${seed}) - [SKIP: results exist]"
+      continue
+    fi
+    
     echo "  • WT + KO pooled (seed ${seed})"
     if ! $PYTHON "$SCRIPT" --backbone "HSC"          \
             --subset all     \
@@ -53,6 +69,33 @@ if [[ -d "$HSC_PATH/HSC" ]]; then
   done
 else
   echo -e "\n[WARN] Curated HSC path not found ($HSC_PATH/HSC) — skipping"
+fi
+
+# Run Renge dataset
+RENGE_PATH="${RENGE_PATH:-../../data/Renge}"
+if [[ -f "$RENGE_PATH/X_renge_d2_80.csv" ]]; then
+  echo -e "\n▸ DATASET: Renge"
+
+  for seed in "${SEEDS[@]}"; do
+    OUTPUT_DIR="otvelo_results/Renge_all_seed${seed}"
+    RESULT_FILE="${OUTPUT_DIR}/trajectory_inference_results.csv"
+    
+    if [[ -f "$RESULT_FILE" ]]; then
+      echo "  • All conditions pooled (seed ${seed}) - [SKIP: results exist]"
+      continue
+    fi
+    
+    echo "  • All conditions pooled (seed ${seed})"
+    if ! $PYTHON "$SCRIPT" --backbone "Renge"          \
+            --dataset renge  \
+            --subset all     \
+            --seed "$seed"; then
+        echo "[ERROR] Renge seed ${seed} failed"
+        FAILS+=("Renge_seed${seed}")
+    fi
+  done
+else
+  echo -e "\n[WARN] Renge data not found ($RENGE_PATH/X_renge_d2_80.csv) — skipping"
 fi
 
 # Aggregate results across seeds
