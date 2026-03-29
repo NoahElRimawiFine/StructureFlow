@@ -25,13 +25,24 @@ T = 5
 
 
 class DataLoader:
-    def __init__(self, data_path="data", dataset_type="Synthetic", dataset="dyn-TF"):
+    def __init__(
+        self,
+        data_path="data",
+        dataset_type="Synthetic",
+        dataset="dyn-TF",
+        use_nonuniform_time=False,
+        time_jitter=0.3,
+        time_seed=None,
+    ):
         """
         Initialize DataLoader
 
         Args:
             data_path: Path to data directory
             dataset_type: Either "Synthetic" or "Curated"
+            use_nonuniform_time: Whether to use non-uniform time bins
+            time_jitter: Amount of randomness for non-uniform time bins (0 to 1)
+            time_seed: Random seed for reproducible non-uniform bin generation
         """
         self.data_path = os.path.join(data_path, dataset_type)
         self.dataset_type = dataset_type
@@ -39,9 +50,13 @@ class DataLoader:
         self.adatas = None
         self.kos = None
         self.true_matrix = None
+        self.use_nonuniform_time = use_nonuniform_time
+        self.time_jitter = time_jitter
+        self.time_seed = time_seed
+        self.time_values = None
+        self.dt_values = None
 
     def load_data(self):
-        # breakpoint()
         """Load and preprocess data"""
         if self.dataset_type == "Synthetic":
             paths = glob.glob(
@@ -63,26 +78,57 @@ class DataLoader:
 
         n_genes = self.adatas[0].n_vars
 
-        # Create empty matrix with gene names
         self.true_matrix = pd.DataFrame(
             np.zeros((n_genes, n_genes), int),
             index=self.adatas[0].var.index,
             columns=self.adatas[0].var.index,
         )
 
-        # Fill matrix with interaction values
         for i in range(df.shape[0]):
-            _i = df.iloc[i, 1]  # target gene
-            _j = df.iloc[i, 0]  # source gene
-            _v = {"+": 1, "-": -1}[df.iloc[i, 2]]  # interaction type
+            _i = df.iloc[i, 1]
+            _j = df.iloc[i, 0]
+            _v = {"+": 1, "-": -1}[df.iloc[i, 2]]
             self.true_matrix.loc[_i, _j] = _v
 
-        # Bin timepoints
+        # Calculate time bins (uniform or non-uniform)
         t_bins = np.linspace(0, 1, T + 1)[:-1]
+
+        if self.use_nonuniform_time:
+            if self.time_seed is not None:
+                rng = np.random.RandomState(self.time_seed)
+            else:
+                rng = np.random.RandomState()
+
+            uniform_dt = 1.0 / T
+            max_jitter = uniform_dt * self.time_jitter
+            jitter = rng.uniform(-max_jitter, max_jitter, size=T)
+            jitter[0] = 0
+
+            # Apply jitter to bin edges
+            t_bins = t_bins + jitter
+            t_bins = np.clip(t_bins, 0, 1 - 1e-6)
+            t_bins = np.sort(t_bins)
+
+            self.time_values = t_bins
+            # Correctly calculate dt_values using the next bin start or 1.0 for the last bin
+            self.dt_values = []
+            for i in range(len(self.time_values) - 1):
+                self.dt_values.append(self.time_values[i + 1] - self.time_values[i])
+            self.dt_values.append(1.0 - self.time_values[-1])
+            self.dt_values = np.array(self.dt_values)
+
+            print(f"Non-uniform time bins: {self.time_values}")
+            print(f"dt values: {self.dt_values}")
+        else:
+            self.time_values = t_bins
+            self.dt_values = np.ones(T - 1) * (
+                1.0 / T
+            )  # Make sure last dt is also handled if needed, but code usually uses T-1 transitions
+
+        # Apply binning to data
         for adata in self.adatas:
             adata.obs["t"] = np.digitize(adata.obs.t_sim, t_bins) - 1
 
-        # Get knockouts
         self.kos = []
         for p in paths:
             try:

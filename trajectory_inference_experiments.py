@@ -383,8 +383,8 @@ def main():
     args = parser.parse_args()
 
     # Configuration
-    # model_types = ["sf2m", "rf", "mlp_baseline"]
-    model_types = ["rf"]
+    model_types = ["sf2m", "rf", "mlp_baseline", "ngm_node", "flow_matching"]
+    # model_types = ["rf"]
     # dataset_types = ["Synthetic", "Curated", "Renge"]
     # synthetic_datasets = ["dyn-TF", "dyn-CY", "dyn-LL", "dyn-BF", "dyn-SW"]
     # seeds = [1, 2, 3]

@@ -20,8 +20,10 @@ from src.models.components.plotting import (
     log_causal_graph_matrices,
     plot_auprs,
 )
+from src.models.ngm_node_module import NGMNodeModule
 from src.models.rf_module import ReferenceFittingModule
 from src.models.sf2m_module import SF2MLitModule
+from src.models.vanilla_fm_module import VanillaFlowMatchingModule
 from src.models.components.solver import (
     simulate_trajectory,
     wasserstein,
@@ -747,6 +749,7 @@ def main(args):
     results = []
     all_fold_metrics = []
     timepoints_to_hold_out = range(1, T_times - 1)
+    # timepoints_to_hold_out = [1]
 
     for held_out_time in timepoints_to_hold_out:
         fold_name = f"{MODEL_TYPE}_holdout_{held_out_time}"
@@ -757,6 +760,7 @@ def main(args):
         fold_adatas = []
         for adata_orig in full_adatas:
             adata_filt = adata_orig[adata_orig.obs["t"] != held_out_time].copy()
+            # adata_filt = adata_orig.copy()
             fold_adatas.append(adata_filt)
 
         # --- 2.3 Instantiate and Train Model ---
@@ -782,10 +786,44 @@ def main(args):
 
             print("RF model fitting complete.")
 
-        else:  # "sf2m" or "mlp_baseline"
-            print(f"Using {'SF2M' if MODEL_TYPE=='sf2m' else 'MLP Baseline'} model...")
+        elif MODEL_TYPE == "ngm_node":
+            print("Using NGM-NODE model...")
+            model = NGMNodeModule(
+                adatas=full_adatas,
+                kos=datamodule.kos,
+                n_steps=N_STEPS_PER_FOLD,
+                lr=LR,
+                gl_reg=GL_REG,
+                hidden_dim=KNOCKOUT_HIDDEN,
+                batch_size=BATCH_SIZE,
+                device=DEVICE,
+            )
+            print(f"Fitting NGM-NODE model with holdout time {held_out_time}...")
+            model.fit_model_with_holdout(fold_adatas, datamodule.kos, held_out_time)
+            print("NGM-NODE model fitting complete.")
 
-            # Configure correct flags based on MODEL_TYPE
+        elif MODEL_TYPE == "flow_matching":
+            print("Using Vanilla Flow Matching model...")
+            model = VanillaFlowMatchingModule(
+                adatas=full_adatas,
+                kos=datamodule.kos,
+                n_steps=N_STEPS_PER_FOLD,
+                lr=LR,
+                hidden_sizes=(KNOCKOUT_HIDDEN, KNOCKOUT_HIDDEN),
+                batch_size=BATCH_SIZE,
+                device=DEVICE,
+            )
+            print(f"Fitting Vanilla FM model with holdout time {held_out_time}...")
+            model.fit_model_with_holdout(fold_adatas, datamodule.kos, held_out_time)
+            print("Vanilla FM model fitting complete.")
+
+        else:  # "sf2m" or "mlp_baseline"
+            model_label = {
+                "sf2m": "SF2M",
+                "mlp_baseline": "MLP Baseline",
+            }.get(MODEL_TYPE, MODEL_TYPE)
+            print(f"Using {model_label} model...")
+
             use_mlp = MODEL_TYPE == "mlp_baseline"
             use_correction = USE_CORRECTION_MLP and not use_mlp
 
@@ -813,7 +851,6 @@ def main(args):
 
             # Train the model with Lightning
             print("Setting up Trainer...")
-            # fold_logger = TensorBoardLogger(RESULTS_DIR, name=fold_name)
             trainer = Trainer(
                 max_epochs=-1,
                 max_steps=N_STEPS_PER_FOLD,
@@ -836,7 +873,7 @@ def main(args):
             f"Evaluating model on predicting t={held_out_time} from t={held_out_time-1}..."
         )
         model.eval()
-        if MODEL_TYPE != "rf":  # SF2M and MLP need explicit device placement
+        if MODEL_TYPE not in ("rf", "ngm_node", "flow_matching"):
             model.to(DEVICE)
 
         # --- 2.6.1 Compute Causal Graph Metrics ---
@@ -856,8 +893,8 @@ def main(args):
                     print("Warning: RF model has no interaction matrix")
                     W_v = None
                     A_estim = None
-            else:  # SF2M or MLP Baseline
-                # Compute the global Jacobian for SF2M models
+            else:  # SF2M, MLP Baseline, NGM-NODE, or Flow Matching
+                # All of these expose func_v for causal graph extraction
                 with torch.no_grad():
                     A_estim = compute_global_jacobian(
                         model.func_v, fold_adatas, dt=DT_data, device=DEVICE
@@ -981,9 +1018,6 @@ def main(args):
                         transition_idx=held_out_time - 1,
                     )
 
-                    # RF simulation result
-                    # traj_rf = traj_rf[-1].cpu()
-
                     # Calculate metrics
                     w_dist_rf = wasserstein(traj_rf, true_dist_cpu)
                     mmd2_rf = mmd_squared(traj_rf, true_dist_cpu)
@@ -1011,8 +1045,8 @@ def main(args):
                             "RF",
                         )
 
-                else:  # SF2M or MLP Baseline
-                    # Move tensors to the right device
+                else:  # SF2M, MLP Baseline, Flow Matching, or NGM-NODE
+                    # All have func_v, v_correction, score_net, conditionals
                     x0 = x0.to(DEVICE)
                     true_dist = true_dist_cpu.to(DEVICE)
 
@@ -1053,21 +1087,31 @@ def main(args):
                     traj_ode = simulate_trajectory(**common_sim_args, use_sde=False)
                     sim_ode_final = traj_ode[-1].cpu()
 
-                    # SDE Simulation
-                    traj_sde = simulate_trajectory(**common_sim_args, use_sde=True)
-                    sim_sde_final = traj_sde[-1].cpu()
+                    if MODEL_TYPE in ("ngm_node", "flow_matching"):
+                        # ODE-only models: report ODE result for both columns
+                        w_dist_ode = wasserstein(sim_ode_final, true_dist_cpu)
+                        mmd2_ode = mmd_squared(sim_ode_final, true_dist_cpu)
+                        ed_ode = energy_distance(
+                            sim_ode_final.numpy(), true_dist_cpu.numpy()
+                        )
+                        w_dist_sde = w_dist_ode
+                        mmd2_sde = mmd2_ode
+                        ed_sde = ed_ode
+                    else:
+                        # SDE Simulation for SF2M and MLP Baseline
+                        traj_sde = simulate_trajectory(**common_sim_args, use_sde=True)
+                        sim_sde_final = traj_sde[-1].cpu()
 
-                    # Compute metrics
-                    w_dist_ode = wasserstein(sim_ode_final, true_dist_cpu)
-                    w_dist_sde = wasserstein(sim_sde_final, true_dist_cpu)
-                    mmd2_ode = mmd_squared(sim_ode_final, true_dist_cpu)
-                    mmd2_sde = mmd_squared(sim_sde_final, true_dist_cpu)
-                    ed_ode = energy_distance(
-                        sim_ode_final.numpy(), true_dist_cpu.numpy()
-                    )
-                    ed_sde = energy_distance(
-                        sim_sde_final.numpy(), true_dist_cpu.numpy()
-                    )
+                        w_dist_ode = wasserstein(sim_ode_final, true_dist_cpu)
+                        w_dist_sde = wasserstein(sim_sde_final, true_dist_cpu)
+                        mmd2_ode = mmd_squared(sim_ode_final, true_dist_cpu)
+                        mmd2_sde = mmd_squared(sim_sde_final, true_dist_cpu)
+                        ed_ode = energy_distance(
+                            sim_ode_final.numpy(), true_dist_cpu.numpy()
+                        )
+                        ed_sde = energy_distance(
+                            sim_sde_final.numpy(), true_dist_cpu.numpy()
+                        )
 
                     # Store predictions for multi-KO plot (using ODE predictions)
                     if held_out_time == T_max - 1:
@@ -1101,7 +1145,7 @@ def main(args):
                 print(
                     f"  Dataset {i} (KO: {ko_name}): W_dist(ODE)={w_dist_ode:.4f}, MMD2(ODE)={mmd2_ode:.4f}, ED(ODE)={ed_ode:.4f}"
                 )
-                if MODEL_TYPE != "rf":
+                if MODEL_TYPE not in ("rf", "ngm_node", "flow_matching"):
                     print(
                         f"  Dataset {i} (KO: {ko_name}): W_dist(SDE)={w_dist_sde:.4f}, MMD2(SDE)={mmd2_sde:.4f}, ED(SDE)={ed_sde:.4f}"
                     )
@@ -1136,7 +1180,7 @@ def main(args):
             avg_ed_sde = fold_df["ed_sde"].mean()
 
             print(f"Fold {fold_name} Avg W_dist: ODE={avg_ode_dist:.4f}")
-            if MODEL_TYPE != "rf":
+            if MODEL_TYPE not in ("rf", "ngm_node", "flow_matching"):
                 print(f"Fold {fold_name} Avg W_dist: SDE={avg_sde_dist:.4f}")
 
             # Add causal graph metrics to the results
@@ -1322,7 +1366,7 @@ if __name__ == "__main__":
         "--model_type",
         type=str,
         default=DEFAULT_MODEL_TYPE,
-        choices=["sf2m", "rf", "mlp_baseline"],
+        choices=["sf2m", "rf", "mlp_baseline", "ngm_node", "flow_matching"],
         help="Type of model to use",
     )
     parser.add_argument(

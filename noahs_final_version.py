@@ -35,6 +35,34 @@ parser = argparse.ArgumentParser(
 )
 
 parser.add_argument("--seed", type=int, default=42, help="Single seed")
+parser.add_argument("--dataset", type=str, default="dyn-TF", help="Dataset name")
+parser.add_argument(
+    "--dataset_type",
+    type=str,
+    default="Synthetic",
+    help="Dataset type (Synthetic or Curated)",
+)
+parser.add_argument(
+    "--use_nonuniform_time", action="store_true", help="Use non-uniform time bins"
+)
+parser.add_argument(
+    "--time_jitter",
+    type=float,
+    default=0.3,
+    help="Amount of jitter for non-uniform time bins",
+)
+parser.add_argument(
+    "--time_seed",
+    type=int,
+    default=None,
+    help="Seed for non-uniform time bin generation",
+)
+parser.add_argument(
+    "--output_dir", type=str, default=None, help="Output directory for results"
+)
+parser.add_argument(
+    "--n_steps", type=int, default=15000, help="Number of training steps"
+)
 
 args = parser.parse_args()
 print = functools.partial(print, flush=True)
@@ -182,7 +210,7 @@ def build_knockout_mask(d, ko_idx, device="cpu"):
         return mask
 
 
-def build_entropic_otfms(adatas, T, sigma, dt):
+def build_entropic_otfms(adatas, T, sigma, dt, dt_values=None):
     """
     Returns a list of EntropicOTFM objects, one per dataset.
     """
@@ -202,6 +230,7 @@ def build_entropic_otfms(adatas, T, sigma, dt):
             device="cuda" if torch.cuda.is_available() else "cpu",
             model="eot",
             lamda=1,
+            dt_values=dt_values,
         )
         otfms.append(model)
     return otfms
@@ -409,7 +438,7 @@ def train_with_fmot_scorematching(
         model = otfms[ds_idx]
         cond_vector = cond_matrix[ds_idx]
 
-        _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
+        _x, _s, _u, _t, _t_orig, _dt = model.sample_bridges_flows(
             batch_size=batch_size, skip_time=skip_time
         )
         optim.zero_grad()
@@ -418,6 +447,7 @@ def train_with_fmot_scorematching(
         _u = _u.to(device)
         _t = _t.to(device)
         _t_orig = _t_orig.to(device)
+        _dt = _dt.to(device)
 
         # Reshape inputs for MLPODEF
         s_input = _x.unsqueeze(1)
@@ -441,7 +471,7 @@ def train_with_fmot_scorematching(
             v_fit = v_fit - model.sigma**2 / 2 * func_s(_t, _x, cond_expanded)
 
         L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
-        L_flow = torch.mean((v_fit * model.dt - _u) ** 2)
+        L_flow = torch.mean((v_fit * _dt - _u) ** 2)
 
         current_alpha = alpha
         if freeze_score is not None and i >= freeze_score:
@@ -551,7 +581,7 @@ def train_with_fmot(
         model = otfms[ds_idx]
         cond_vector = cond_matrix[ds_idx]
 
-        _x, _s, _u, _t, _t_orig = model.sample_bridges_flows(
+        _x, _s, _u, _t, _t_orig, _dt = model.sample_bridges_flows(
             batch_size=batch_size, skip_time=skip_time
         )
         optim.zero_grad()
@@ -560,6 +590,7 @@ def train_with_fmot(
         _u = _u.to(device)
         _t = _t.to(device)
         _t_orig = _t_orig.to(device)
+        _dt = _dt.to(device)
 
         # Reshape inputs for MLPODEF
         s_input = _x.unsqueeze(1)
@@ -578,7 +609,7 @@ def train_with_fmot(
                 _t, _x, cond_expanded
             )
 
-        L_flow = torch.mean((v_fit * model.dt - _u) ** 2)
+        L_flow = torch.mean((v_fit * _dt - _u) ** 2)
         L_score = torch.mean(
             (_t_orig * (1 - _t_orig)) * (func_s(_t, _x, cond_expanded) - _s) ** 2
         )
@@ -925,7 +956,15 @@ def train_and_evaluate_with_holdout(
 
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    data_loader = DataLoader("data", dataset_type="Synthetic", dataset="dyn-TF")
+
+    data_loader = DataLoader(
+        "data",
+        dataset_type=args.dataset_type,
+        dataset=args.dataset,
+        use_nonuniform_time=args.use_nonuniform_time,
+        time_jitter=args.time_jitter,
+        time_seed=args.time_seed if args.time_seed is not None else args.seed,
+    )
     data_loader.load_data()
     adatas, kos, ko_indices, true_matrix = (
         data_loader.adatas,
@@ -933,10 +972,11 @@ def main():
         data_loader.ko_indices,
         data_loader.true_matrix.values,
     )
+    dt_values = data_loader.dt_values
+
     batch_size = 164
     n = adatas[0].X.shape[1]
 
-    # want to create a [8, n, 8] matrix that is one hot encoded and will be selected depending on dataset idx
     conditionals = []
     for i, ad in enumerate(kos):
         cond_matrix = torch.zeros(batch_size, n).to(device)
@@ -960,8 +1000,6 @@ def main():
     func_v = models.MLPODEF1(
         dims=dims, GL_reg=0.04, bias=True, knockout_masks=knockout_masks
     ).to(device)
-    # func_v = fm.MLP(
-    #     d=n, hidden_sizes=[128], time_varying=False).to(device)
 
     score_net = MLP(
         d=n,
@@ -971,7 +1009,6 @@ def main():
         conditional_dim=n,
     ).to(device)
 
-    # count params
     def count_params(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -979,9 +1016,8 @@ def main():
     print(f"Score model params: {count_params(score_net)}")
 
     v_cor = fm.MLP(d=n, hidden_sizes=[128, 128], time_varying=True).to(device)
-    # score_net = fm.MLP(d=n, hidden_sizes = [64, 64], time_varying=True)
 
-    otfms = build_entropic_otfms(adatas, T, sigma=1.0, dt=1 / T)
+    otfms = build_entropic_otfms(adatas, T, sigma=1.0, dt=1 / T, dt_values=dt_values)
     (
         loss_history,
         score_loss_history,
@@ -1000,7 +1036,7 @@ def main():
         cond_matrix=conditionals,
         alpha=0.1,
         reg=5e-6,
-        n_steps=15000,
+        n_steps=args.n_steps,
         batch_size=batch_size,
         device="cuda" if torch.cuda.is_available() else "cpu",
         lr=3e-3,
@@ -1152,24 +1188,44 @@ def main():
     # plt.subplot(1, 2, 2)
     y_pred_mlp = np.abs(maskdiag(W_v).flatten())
     matrix = np.array(y_pred_mlp).reshape(n, n)
-    df_matrix = pd.DataFrame(matrix)
-    df_matrix.to_csv(f"StructFlow_wt_{seed}y.csv", index=False)
+
     prec, rec, thresh = precision_recall_curve(y_true, y_pred_mlp)
     avg_prec_mlp = average_precision_score(y_true, y_pred_mlp)
     auc_w_v = roc_auc_score(y_true, y_pred_mlp)
-    print(f"AUC for W_v: {auc_w_v:.4f}")
-    print(f"Average Precision for W_v: {avg_prec_mlp:.4f}")
 
-    # plt.plot(rec, prec, label=f"MLPODEF-based (AP = {avg_prec_mlp:.2f})")
-    # plt.xlabel("Recall")
-    # plt.ylabel("Precision")
-    # plt.title(
-    #     f"Precision-Recall Curve (MLPODEF)\nAUPR ratio = {avg_prec_mlp/np.mean(np.abs(A_true) > 0)}"
-    # )
-    # plt.legend()
-    # plt.grid(True)
-    # plt.tight_layout()
-    # plt.show()
+    avg_prec_jacobian = average_precision_score(y_true, y_pred)
+    auc_jacobian = roc_auc_score(y_true, y_pred)
+
+    print(f"Graph AP: {avg_prec_mlp:.4f}")
+    print(f"Graph AUROC: {auc_w_v:.4f}")
+    print(f"Jacobian AP: {avg_prec_jacobian:.4f}")
+    print(f"Jacobian AUROC: {auc_jacobian:.4f}")
+
+    results = {
+        "seed": seed,
+        "dataset": args.dataset,
+        "dataset_type": args.dataset_type,
+        "use_nonuniform_time": args.use_nonuniform_time,
+        "time_jitter": args.time_jitter if args.use_nonuniform_time else 0.0,
+        "graph_ap": avg_prec_mlp,
+        "graph_auroc": auc_w_v,
+        "jacobian_ap": avg_prec_jacobian,
+        "jacobian_auroc": auc_jacobian,
+    }
+
+    if args.output_dir:
+        os.makedirs(args.output_dir, exist_ok=True)
+        results_file = os.path.join(args.output_dir, "grn_metrics.csv")
+        pd.DataFrame([results]).to_csv(results_file, index=False)
+        print(f"Saved GRN metrics to {results_file}")
+
+        df_matrix = pd.DataFrame(matrix)
+        df_matrix.to_csv(
+            os.path.join(args.output_dir, f"StructFlow_wt_{seed}.csv"), index=False
+        )
+    else:
+        df_matrix = pd.DataFrame(matrix)
+        df_matrix.to_csv(f"StructFlow_wt_{seed}y.csv", index=False)
 
 
 def main_with_holdout(n_steps=1000):

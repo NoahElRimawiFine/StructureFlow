@@ -20,7 +20,7 @@ import glob
 RESULTS_BASE_DIR = "nonuniform_time_results"
 DATASET = "dyn-TF"
 DATASET_TYPE = "Synthetic"
-SEEDS = [1]  # TODO: Change to [1, 2, 3] for full experiment
+SEEDS = [1, 2, 3]  # TODO: Change to [1, 2, 3] for full experiment
 TIME_JITTER = 0.3
 MODEL_TYPES = ["sf2m", "rf"]
 
@@ -33,33 +33,23 @@ GL_REG = 0.04
 
 
 def run_grn_inference_sf2m(seed, results_dir):
-    """Run GRN inference using train.py for SF2M."""
+    """Run GRN inference using noahs_final_version.py for SF2M."""
+    output_dir = os.path.join(results_dir, f"sf2m_seed{seed}")
     cmd = [
         "python",
-        "src/train.py",
-        "data=boolode",
-        "model=sf2m",
-        f"seed={seed}",
-        f"data.dataset={DATASET}",
-        f"data.dataset_type={DATASET_TYPE}",
-        "+data.use_nonuniform_time=true",
-        f"+data.time_jitter={TIME_JITTER}",
-        f"+data.time_seed={seed}",
-        f"model.n_steps={N_STEPS}",
-        f"model.batch_size={BATCH_SIZE}",
-        f"model.lr={LR}",
-        f"model.alpha={ALPHA}",
-        f"model.reg={REG}",
-        f"model.GL_reg={GL_REG}",
-        "trainer.max_steps=" + str(N_STEPS),
-        "trainer.max_epochs=-1",
-        f"paths.output_dir={results_dir}/sf2m_seed{seed}",
-        "logger=csv",
-        "callbacks=none",
+        "noahs_final_version.py",
+        f"--seed={seed}",
+        f"--dataset={DATASET}",
+        f"--dataset_type={DATASET_TYPE}",
+        "--use_nonuniform_time",
+        f"--time_jitter={TIME_JITTER}",
+        f"--time_seed={seed}",
+        f"--n_steps={N_STEPS}",
+        f"--output_dir={output_dir}",
     ]
 
     print(f"\n{'='*60}")
-    print(f"Running GRN inference (train.py): sf2m, seed={seed}")
+    print(f"Running GRN inference (noahs_final_version.py): sf2m, seed={seed}")
     print(f"Command: {' '.join(cmd)}")
     print(f"{'='*60}\n")
 
@@ -68,26 +58,30 @@ def run_grn_inference_sf2m(seed, results_dir):
 
 
 def run_grn_inference_rf(seed, results_dir):
-    """Run GRN inference using train.py for RF."""
+    """Run GRN inference using src/grn_inf.py for RF."""
     cmd = [
         "python",
-        "src/train.py",
-        "data=boolode",
-        "model=rf",
-        f"seed={seed}",
-        f"data.dataset={DATASET}",
-        f"data.dataset_type={DATASET_TYPE}",
-        "+data.use_nonuniform_time=true",
-        f"+data.time_jitter={TIME_JITTER}",
-        f"+data.time_seed={seed}",
-        f"paths.output_dir={results_dir}/rf_seed{seed}",
-        "logger=csv",
-        "callbacks=none",
-        "trainer.max_epochs=1",
+        "-m",
+        "src.grn_inf",
+        "--model_type",
+        "rf",
+        "--seed",
+        str(seed),
+        "--dataset_type",
+        DATASET_TYPE,
+        "--dataset",
+        DATASET,
+        "--results_dir",
+        results_dir,
+        "--use_nonuniform_time",
+        "--time_jitter",
+        str(TIME_JITTER),
+        "--time_seed",
+        str(seed),
     ]
 
     print(f"\n{'='*60}")
-    print(f"Running GRN inference (train.py): rf, seed={seed}")
+    print(f"Running GRN inference (src/grn_inf.py): rf, seed={seed}")
     print(f"Command: {' '.join(cmd)}")
     print(f"{'='*60}\n")
 
@@ -140,33 +134,44 @@ def run_leave_one_out(model_type, seed, results_dir):
 
 
 def extract_grn_metrics_from_logs(results_dir):
-    """Extract GRN metrics from train.py CSV logs."""
+    """Extract GRN metrics from logs (noahs_final_version.py for sf2m, src/grn_inf.py for rf)."""
     all_results = []
 
     for model_type in MODEL_TYPES:
         for seed in SEEDS:
-            log_dir = os.path.join(results_dir, f"{model_type}_seed{seed}", "csv")
+            if model_type == "sf2m":
+                result_subdir = f"sf2m_seed{seed}"
+            else:  # rf
+                # src/grn_inf.py appends dataset info to the directory name
+                dataset_suffix = (
+                    f"_{DATASET}" if DATASET_TYPE == "Synthetic" and DATASET else ""
+                )
+                result_subdir = (
+                    f"{DATASET_TYPE}_{model_type}{dataset_suffix}_seed{seed}"
+                )
 
-            metrics_files = glob.glob(
-                os.path.join(log_dir, "**", "metrics.csv"), recursive=True
-            )
+            result_path = os.path.join(results_dir, result_subdir)
+            metrics_file = os.path.join(result_path, "grn_metrics.csv")
 
-            if metrics_files:
-                df = pd.read_csv(metrics_files[0])
-
-                last_row = df.iloc[-1]
-
-                result = {
-                    "model_type": model_type,
-                    "seed": seed,
-                    "jacobian_ap": last_row.get("grn/jacobian_ap", np.nan),
-                    "jacobian_auroc": last_row.get("grn/jacobian_auroc", np.nan),
-                    "graph_ap": last_row.get("grn/graph_ap", np.nan),
-                    "graph_auroc": last_row.get("grn/graph_auroc", np.nan),
-                }
-                all_results.append(result)
+            if os.path.exists(metrics_file):
+                try:
+                    df = pd.read_csv(metrics_file)
+                    row = df.iloc[0]
+                    result = {
+                        "model_type": model_type,
+                        "seed": seed,
+                        "jacobian_ap": row.get("jacobian_ap", np.nan),
+                        "jacobian_auroc": row.get("jacobian_auroc", np.nan),
+                        "graph_ap": row.get("graph_ap", np.nan),
+                        "graph_auroc": row.get("graph_auroc", np.nan),
+                    }
+                    all_results.append(result)
+                except Exception as e:
+                    print(f"Error reading metrics file {metrics_file}: {e}")
             else:
-                print(f"Warning: No metrics.csv found for {model_type} seed {seed}")
+                print(
+                    f"Warning: No grn_metrics.csv found for {model_type} seed {seed} at {metrics_file}"
+                )
 
     if all_results:
         return pd.DataFrame(all_results)

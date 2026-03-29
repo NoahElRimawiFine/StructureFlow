@@ -63,6 +63,7 @@ class SF2MLitModule(LightningModule):
         enable_epoch_end_hook: bool = True,
         use_mlp_baseline: bool = False,
         use_correction_mlp: bool = True,
+        flow_matching_only: bool = False,
         held_out_time: int = None,
         leave_ko_out_idx: int = None,
     ):
@@ -100,6 +101,7 @@ class SF2MLitModule(LightningModule):
         self.lr = lr
         self.use_mlp_baseline = use_mlp_baseline
         self.use_correction_mlp = use_correction_mlp
+        self.flow_matching_only = flow_matching_only
 
         self.save_hyperparameters()
 
@@ -155,14 +157,26 @@ class SF2MLitModule(LightningModule):
                 device=device,
             )
 
-        self.score_net = CONDMLP(
-            d=self.n_genes,
-            hidden_sizes=score_hidden,
-            time_varying=True,
-            conditional=True,
-            conditional_dim=self.n_genes,
-            device=device,
-        )
+        if flow_matching_only:
+            class _ZeroScoreModule(torch.nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    self.conditional = False
+                    self.conditional_dim = 0
+
+                def forward(self, t, x, cond=None):
+                    return torch.zeros_like(x)
+
+            self.score_net = _ZeroScoreModule()
+        else:
+            self.score_net = CONDMLP(
+                d=self.n_genes,
+                hidden_sizes=score_hidden,
+                time_varying=True,
+                conditional=True,
+                conditional_dim=self.n_genes,
+                device=device,
+            )
 
         # Create correction network only if enabled
         if self.use_correction_mlp:
@@ -342,54 +356,54 @@ class SF2MLitModule(LightningModule):
         v_input = _x.unsqueeze(1).to(self.device)
         t_input = _t.unsqueeze(1).to(self.device)
 
-        # Score net output
-        s_fit = self.score_net(
-            _t.to(self.device), _x.to(self.device), cond_expanded
-        ).squeeze(1)
-
-        sigma_value = self.sigma
-
-        # Flow net output, with or without correction
-        if self.global_step <= 500 or not self.use_correction_mlp:
-            # Warmup phase or no correction
-            v_fit = self.func_v(t_input, v_input).squeeze(1) - (
-                sigma_value**2 / 2
-            ) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
-        else:
-            # Full training phase with correction
-            v_fit = self.func_v(t_input, v_input).squeeze(1) + self.v_correction(
-                _t.to(self.device), _x.to(self.device)
-            )
-            v_fit = v_fit - (sigma_value**2 / 2) * self.score_net(
-                _t.to(self.device), _x.to(self.device), cond_expanded
-            )
-
-        L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
-
-        L_flow = torch.mean((_t_orig * (1 - _t_orig)) * (v_fit * _dt - _u) ** 2)
         L_reg = self.func_v.l2_reg() + self.func_v.fc1_reg()
 
-        # Only apply correction regularization if we're using the correction network
-        if self.use_correction_mlp:
-            L_reg_correction = self.mlp_l2_reg(self.v_correction)
-        else:
+        if self.flow_matching_only:
+            v_fit = self.func_v(t_input, v_input).squeeze(1)
+            L_flow = torch.mean((_t_orig * (1 - _t_orig)) * (v_fit * _dt - _u) ** 2)
+            L_score = torch.tensor(0.0, device=self.device)
             L_reg_correction = torch.tensor(0.0, device=self.device)
-
-        # Loss combination logic
-        if self.global_step < 100:
-            # Train only score initially
-            L = self.alpha * L_score
-        elif self.global_step <= 500 or not self.use_correction_mlp:
-            # Mix score + flow + small reg (or no correction case)
-            L = self.alpha * L_score + (1 - self.alpha) * L_flow + self.reg * L_reg
+            L = L_flow + self.reg * L_reg
         else:
-            # Full combined loss with correction reg
-            L = (
-                self.alpha * L_score
-                + (1 - self.alpha) * L_flow
-                + self.reg * L_reg
-                + self.correction_reg_strength * L_reg_correction
-            )
+            sigma_value = self.sigma
+
+            # Score net output
+            s_fit = self.score_net(
+                _t.to(self.device), _x.to(self.device), cond_expanded
+            ).squeeze(1)
+
+            # Flow net output, with or without correction
+            if self.global_step <= 500 or not self.use_correction_mlp:
+                v_fit = self.func_v(t_input, v_input).squeeze(1) - (
+                    sigma_value**2 / 2
+                ) * self.score_net(_t.to(self.device), _x.to(self.device), cond_expanded)
+            else:
+                v_fit = self.func_v(t_input, v_input).squeeze(1) + self.v_correction(
+                    _t.to(self.device), _x.to(self.device)
+                )
+                v_fit = v_fit - (sigma_value**2 / 2) * self.score_net(
+                    _t.to(self.device), _x.to(self.device), cond_expanded
+                )
+
+            L_score = torch.mean((_t_orig * (1 - _t_orig)) * (s_fit - _s) ** 2)
+            L_flow = torch.mean((_t_orig * (1 - _t_orig)) * (v_fit * _dt - _u) ** 2)
+
+            if self.use_correction_mlp:
+                L_reg_correction = self.mlp_l2_reg(self.v_correction)
+            else:
+                L_reg_correction = torch.tensor(0.0, device=self.device)
+
+            if self.global_step < 100:
+                L = self.alpha * L_score
+            elif self.global_step <= 500 or not self.use_correction_mlp:
+                L = self.alpha * L_score + (1 - self.alpha) * L_flow + self.reg * L_reg
+            else:
+                L = (
+                    self.alpha * L_score
+                    + (1 - self.alpha) * L_flow
+                    + self.reg * L_reg
+                    + self.correction_reg_strength * L_reg_correction
+                )
 
         if self.global_step % 100 == 0:
             print(
@@ -722,13 +736,12 @@ class SF2MLitModule(LightningModule):
 
     def configure_optimizers(self):
         """Pass model parameters to optimizer."""
-        params_to_optimize = list(self.func_v.parameters()) + list(
-            self.score_net.parameters()
-        )
+        params_to_optimize = list(self.func_v.parameters())
 
-        # Only include correction network parameters if we're using it
-        if self.use_correction_mlp:
-            params_to_optimize += list(self.v_correction.parameters())
+        if not self.flow_matching_only:
+            params_to_optimize += list(self.score_net.parameters())
+            if self.use_correction_mlp:
+                params_to_optimize += list(self.v_correction.parameters())
 
         optimizer = torch.optim.AdamW(
             params_to_optimize,

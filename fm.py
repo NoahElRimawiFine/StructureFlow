@@ -177,43 +177,85 @@ class BridgeMatcher:
 
 class EntropicOTFM:
     def __init__(
-        self, x, x_pca, t_idx, dt, sigma, T, dim, tau = 1.0, alpha=0.4, 
-        model="eot", device="cpu", held_out_time=None, normalize_C=False, lamda=None,
+        self,
+        x,
+        x_pca,
+        t_idx,
+        dt,
+        sigma,
+        T,
+        dim,
+        tau=1.0,
+        alpha=0.4,
+        model="eot",
+        device="cpu",
+        held_out_time=None,
+        normalize_C=False,
+        lamda=None,
+        dt_values=None,
     ):
         def entropic_ot_plan(x0, x1, eps, normalize_C, lamda):
             C = pot.utils.euclidean_distances(x0, x1, squared=True) / 2
             C_mean = C.mean().item()
-            p, q = torch.full((x0.shape[0],), 1.0 / x0.shape[0], dtype=x0.dtype, device=x0.device), \
-                     torch.full((x1.shape[0],), 1.0 / x1.shape[0], dtype=x1.dtype, device=x1.device)
+            p, q = torch.full(
+                (x0.shape[0],), 1.0 / x0.shape[0], dtype=x0.dtype, device=x0.device
+            ), torch.full(
+                (x1.shape[0],), 1.0 / x1.shape[0], dtype=x1.dtype, device=x1.device
+            )
             if lamda is None:
-                return pot.bregman.sinkhorn(p.double(), q.double(), C.double(), reg=eps, numItermax=10000).float()
+                return pot.bregman.sinkhorn(
+                    p.double(), q.double(), C.double(), reg=eps, numItermax=10000
+                ).float()
             else:
-                return pot.unbalanced.sinkhorn_stabilized_unbalanced(p.double(), q.double(), C.double(), eps, lamda * C_mean, numItermax=10000).float()
-        
+                return pot.unbalanced.sinkhorn_stabilized_unbalanced(
+                    p.double(),
+                    q.double(),
+                    C.double(),
+                    eps,
+                    lamda * C_mean,
+                    numItermax=10000,
+                ).float()
+
         def plan_uot(x0, x1, eps, normalize_C, tau):
             C = pot.utils.euclidean_distances(x0, x1, squared=True) / 2
 
             if normalize_C:
                 C = C / C.max()
-            a = torch.full((x0.shape[0],), 1.0 / x0.shape[0], dtype=x0.dtype, device=x0.device)
-            b = torch.full((x1.shape[0],), 1.0 / x1.shape[0], dtype=x1.dtype, device=x1.device)
+            a = torch.full(
+                (x0.shape[0],), 1.0 / x0.shape[0], dtype=x0.dtype, device=x0.device
+            )
+            b = torch.full(
+                (x1.shape[0],), 1.0 / x1.shape[0], dtype=x1.dtype, device=x1.device
+            )
             try:
-                T = pot.unbalanced.sinkhorn_unbalanced(a, b, C, reg=eps, reg_m=tau, numItermax=5000)
+                T = pot.unbalanced.sinkhorn_unbalanced(
+                    a, b, C, reg=eps, reg_m=tau, numItermax=5000
+                )
             except AttributeError:
-                T = pot.unbalanced.sinkhorn_knopp_unbalanced(a, b, C, reg=eps, reg_m=tau, numItermax=5000)
+                T = pot.unbalanced.sinkhorn_knopp_unbalanced(
+                    a, b, C, reg=eps, reg_m=tau, numItermax=5000
+                )
             return T
-        
-        def compute_graph_distances(data, n_neighbors=5, mode="distance", metric="correlation"):
-            """
-            
-            """
-            graph=kneighbors_graph(data, n_neighbors=n_neighbors, mode=mode, metric=metric, include_self=True)
-            shortestPath=dijkstra(csgraph= csr_matrix(graph), directed=False, return_predecessors=False)
-            max_dist=np.nanmax(shortestPath[shortestPath != np.inf])
+
+        def compute_graph_distances(
+            data, n_neighbors=5, mode="distance", metric="correlation"
+        ):
+            """ """
+            graph = kneighbors_graph(
+                data,
+                n_neighbors=n_neighbors,
+                mode=mode,
+                metric=metric,
+                include_self=True,
+            )
+            shortestPath = dijkstra(
+                csgraph=csr_matrix(graph), directed=False, return_predecessors=False
+            )
+            max_dist = np.nanmax(shortestPath[shortestPath != np.inf])
             shortestPath[shortestPath > max_dist] = max_dist
 
             return np.asarray(shortestPath)
-        
+
         def plan_fgw(Xt, Xt1, Xpca_t, Xpca_t1, eps, alpha):
             from ot.gromov import entropic_fused_gromov_wasserstein
 
@@ -256,10 +298,11 @@ class EntropicOTFM:
         self.alpha = alpha
         self.x_pca = x_pca
         self.neighbors = None
+        self.dt_values = dt_values if dt_values is not None else np.ones(T - 1) * dt
 
-        
         # construct EOT plans
         for i in range(self.T - 1):
+            dt_i = self.dt_values[i] if i < len(self.dt_values) else self.dt
             if self.held_out_time is not None and (
                 i == self.held_out_time or i + 1 == self.held_out_time
             ):
@@ -267,15 +310,20 @@ class EntropicOTFM:
 
                 # Create a bridge over the held-out time if it's the first encounter
                 if i == self.held_out_time and not self.has_bridge_over_held_out:
+                    dt_bridge = (
+                        self.dt_values[i - 1] + self.dt_values[i]
+                        if i > 0 and i < len(self.dt_values)
+                        else 2 * self.dt
+                    )
                     self.bridge_over_held_out = entropic_ot_plan(
                         self.x[self.t_idx == i - 1, :],
                         self.x[self.t_idx == i + 1, :],
-                        2 * self.dt * self.sigma**2,
+                        dt_bridge * self.sigma**2,
                         self.normalize_C,
                     )
                     self.has_bridge_over_held_out = True
             else:
-                if model == 'eot':
+                if model == "eot":
                     x0 = self.x[self.t_idx == i, :]
                     x1 = self.x[self.t_idx == i + 1, :]
                     print(x0.shape, x1.shape)
@@ -287,14 +335,10 @@ class EntropicOTFM:
                         )
                     self.Ts.append(
                         entropic_ot_plan(
-                            x0,
-                            x1,
-                            self.dt * self.sigma**2,
-                            self.normalize_C,
-                            self.lamda
+                            x0, x1, dt_i * self.sigma**2, self.normalize_C, self.lamda
                         )
                     )
-                elif model =='uot':
+                elif model == "uot":
                     x0 = self.x[self.t_idx == i, :]
                     x1 = self.x[self.t_idx == i + 1, :]
                     if x0.shape[0] == 0 or x1.shape[0] == 0:
@@ -307,7 +351,7 @@ class EntropicOTFM:
                         plan_uot(
                             x0,
                             x1,
-                            self.dt * self.sigma**2,
+                            dt_i * self.sigma**2,
                             self.normalize_C,
                             self.tau,
                         )
@@ -327,12 +371,10 @@ class EntropicOTFM:
                             x1,
                             self.x_pca[self.t_idx == i, :],
                             self.x_pca[self.t_idx == i + 1, :],
-                            self.dt * self.sigma**2,
+                            dt_i * self.sigma**2,
                             self.alpha,
                         )
                     )
-                    
-
 
         # Uncomment the following lines if you want to use the MM Sinkhorn method instead
         # eps = 2 * self.dt * self.sigma**2
@@ -345,11 +387,17 @@ class EntropicOTFM:
         _t_orig = []
         _s = []
         _u = []
+        _dt = []
         i = 0
         while i < self.T - 1:
+            dt_i = self.dt_values[i] if i < len(self.dt_values) else self.dt
             if skip_time is not None and (i == skip_time or i + 1 == skip_time):
                 if i == skip_time and self.has_bridge_over_held_out:
-                    # Use the bridge spanning the held-out timepoint
+                    dt_bridge = (
+                        self.dt_values[i - 1] + self.dt_values[i]
+                        if i > 0 and i < len(self.dt_values)
+                        else 2 * self.dt
+                    )
                     with torch.no_grad():
                         x0, x1 = self.bm.sample_plan(
                             self.x[self.t_idx == i - 1, :],
@@ -359,15 +407,14 @@ class EntropicOTFM:
                         )
                     ts = torch.rand_like(x0[:, :1])
                     _, _, x, s, u = self.bm.sample_bridge_and_flow(
-                        x0, x1, ts, (2 * self.sigma**2 * self.dt) ** 0.5
+                        x0, x1, ts, (self.sigma**2 * dt_bridge) ** 0.5
                     )
                     _x.append(x)
                     _s.append(s)
-                    _t.append(
-                        (i - 1 + ts * 2) * self.dt
-                    )  # Scale ts to span 2 timesteps
+                    _t.append((i - 1 + ts * 2) * self.dt)
                     _t_orig.append(ts)
                     _u.append(u)
+                    _dt.append(torch.full_like(ts, dt_bridge))
                     i += 1
                 else:
                     i += 1
@@ -381,13 +428,14 @@ class EntropicOTFM:
                     )
                 ts = torch.rand_like(x0[:, :1])
                 _, _, x, s, u = self.bm.sample_bridge_and_flow(
-                    x0, x1, ts, (self.sigma**2 * self.dt) ** 0.5
+                    x0, x1, ts, (self.sigma**2 * dt_i) ** 0.5
                 )
                 _x.append(x)
                 _s.append(s)
                 _t.append((i + ts) * self.dt)
                 _t_orig.append(ts)
                 _u.append(u)
+                _dt.append(torch.full_like(ts, dt_i))
                 i += 1
         return (
             torch.vstack(_x),
@@ -395,29 +443,24 @@ class EntropicOTFM:
             torch.vstack(_u),
             torch.vstack(_t),
             torch.vstack(_t_orig),
+            torch.vstack(_dt),
         )
-    
 
-def build_mm_sinkhorn(x,                
-                      t_idx,            
-                      T,                
-                      eps,              
-                      max_iter=400,
-                      device="cpu"):
-    
+
+def build_mm_sinkhorn(x, t_idx, T, eps, max_iter=400, device="cpu"):
+
     # split cloud per snapshot + alpha_i initialization
-    clouds  = [x[t_idx == i].to(device) for i in range(T)]
-    weights = [torch.ones(c.shape[0], device=device) / c.shape[0]
-           for c in clouds]
+    clouds = [x[t_idx == i].to(device) for i in range(T)]
+    weights = [torch.ones(c.shape[0], device=device) / c.shape[0] for c in clouds]
     total_N = sum(c.shape[0] for c in clouds)
     for i in range(T):
-        weights[i] *= clouds[i].shape[0] / total_N 
+        weights[i] *= clouds[i].shape[0] / total_N
     # Initialize alphas
-    alphas  = [torch.zeros(c.shape[0], device=device) for c in clouds]
+    alphas = [torch.zeros(c.shape[0], device=device) for c in clouds]
     kernels = [
-        torch.exp(-torch.cdist(clouds[i], clouds[i+1])**2 / (2*eps))
-        for i in range(T-1)
-    ]                                          
+        torch.exp(-torch.cdist(clouds[i], clouds[i + 1]) ** 2 / (2 * eps))
+        for i in range(T - 1)
+    ]
 
     # IPFP loop
     for _ in range(max_iter):
@@ -425,27 +468,32 @@ def build_mm_sinkhorn(x,
         for i in range(T):
             qi = torch.zeros_like(alphas[i])
             if i > 0:
-                qi += (kernels[i-1] * torch.exp(
-                       alphas[i-1][:,None] + alphas[i][None,:])).sum(0)
-            if i < T-1:
-                qi += (kernels[i] * torch.exp(
-                       alphas[i][:,None] + alphas[i+1][None,:])).sum(1)
-            pi = weights[i] 
+                qi += (
+                    kernels[i - 1]
+                    * torch.exp(alphas[i - 1][:, None] + alphas[i][None, :])
+                ).sum(0)
+            if i < T - 1:
+                qi += (
+                    kernels[i] * torch.exp(alphas[i][:, None] + alphas[i + 1][None, :])
+                ).sum(1)
+            pi = weights[i]
 
             max_err = max(max_err, (qi - pi).abs().max())
             print(f"max marginal error at slice {i}: {max_err:.2e}")
 
-            alphas[i] += eps * (torch.log(pi+1e-12) - torch.log(qi+1e-12))
+            alphas[i] += eps * (torch.log(pi + 1e-12) - torch.log(qi + 1e-12))
 
     # build pairwise couplings that that share alpha_i
     plans = []
-    for i in range(T-1):
-        log_pi = (alphas[i][:,None] + alphas[i+1][None,:]
-                  - torch.cdist(clouds[i], clouds[i+1])**2 / (2*eps))
+    for i in range(T - 1):
+        log_pi = (
+            alphas[i][:, None]
+            + alphas[i + 1][None, :]
+            - torch.cdist(clouds[i], clouds[i + 1]) ** 2 / (2 * eps)
+        )
         Pi = torch.exp(log_pi)
-        plans.append(Pi / Pi.sum())                   
+        plans.append(Pi / Pi.sum())
     return plans
-
 
 
 class OTPlanSampler:
