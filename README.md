@@ -6,28 +6,11 @@
 <a href="https://pytorchlightning.ai/"><img alt="Lightning" src="https://img.shields.io/badge/-Lightning-792ee5?logo=pytorchlightning&logoColor=white"></a>
 <a href="https://hydra.cc/"><img alt="Config: Hydra" src="https://img.shields.io/badge/Config-Hydra-89b8cd"></a>
 <a href="https://github.com/ashleve/lightning-hydra-template"><img alt="Template" src="https://img.shields.io/badge/-Lightning--Hydra--Template-017F2F?style=flat&logo=github&labelColor=gray"></a><br>
-[![Paper](http://img.shields.io/badge/paper-arxiv.2510.16656-B31B1B.svg)](https://arxiv.org/abs/2510.16656)
 <!-- [![Conference](http://img.shields.io/badge/AnyConference-year-4b44ce.svg)](https://papers.nips.cc/paper/2020) -->
-
 </div>
 
 ## Description
 StructureFlow is a simulation-free framework for jointly learning structure and stochastic population dynamics of complex dynamical systems from noisy and partial measurements. Our method builds upon advances in score and flow matching and entropy regularized optimal transport, and frames the joint inference task as a multi-marginal schr\"odinger Bridge problem. StructureFlow learns a probability flow ODE that models continuous population evolution while directly encoding the directional dependencies among system variables. There are four key components: (1) the Neural Graphical Model (NGM) which models the autonomous drift and captures (stationary) system structure, (2) a time-dependent score function that captures the time-dependent stochastic dynamics, (3) an interventional model to capture conditional dynamics, and (4) simulation-free training to avoid costly trajectory simulations and help scale to high-dimensional biological systems.
-
-If you find this code useful in your research, please cite our paper:
-
-<summary>
-N. El Rimawi-Fine, A. Stecklov, L. Nelson, M. Blanchette, A. Tong, S. Y. Zhang, L. Atanackovic. "Simulation-free Structure Learning for Stochastic Dynamics." <em> arXiv preprint arXiv:2510.16656</em>, 2025.
-</summary>
-
-```bibtex
-@article{rimawi2025simulation,
-  title={Simulation-free Structure Learning for Stochastic Dynamics},
-  author={Rimawi-Fine, Noah El and Stecklov, Adam and Nelson, Lucas and Blanchette, Mathieu and Tong, Alexander and Zhang, Stephen Y and Atanackovic, Lazar},
-  journal={arXiv preprint arXiv:2510.16656},
-  year={2025}
-}
-```
 
 ## Installation
 
@@ -35,7 +18,6 @@ N. El Rimawi-Fine, A. Stecklov, L. Nelson, M. Blanchette, A. Tong, S. Y. Zhang, 
 
 ```bash
 # clone project
-git clone https://github.com/NoahElRimawiFine/StructureFlow.git
 cd StructureFlow
 
 # [OPTIONAL] create conda environment
@@ -53,7 +35,6 @@ pip install -r requirements.txt
 
 ```bash
 # clone project
-git clone https://github.com/NoahElRimawiFine/StructureFlow.git
 cd StructureFlow
 
 # create conda environment and install dependencies
